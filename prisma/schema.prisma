@@ -1,0 +1,171 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  SHOPKEEPER
+  SECONDARY_ADMIN
+  ACCOUNTS
+  CUSTOMER
+}
+
+enum UnitType {
+  G
+  KG
+  ML
+  LITER
+  BOX
+  CAN
+  KATTA
+  NOS
+}
+
+enum OrderStatus {
+  ORDER_ACCEPTED
+  PACKING_IN_PROGRESS
+  READY_FOR_DELIVERY
+  ON_THE_WAY
+  DELIVERED
+  CANCELLED
+}
+
+enum PaymentMethod {
+  COD
+  ADVANCE_ONLINE
+}
+
+enum PaymentStatus {
+  PENDING
+  RECEIVED
+  FAILED
+  REFUNDED
+}
+
+model User {
+  id             String    @id @default(cuid())
+  phone          String    @unique
+  name           String?
+  role           Role      @default(CUSTOMER)
+  referralCode   String    @unique
+  referredById   String?
+  referredBy     User?     @relation("Referrals", fields: [referredById], references: [id])
+  referrals      User[]    @relation("Referrals")
+  walletBalance  Decimal   @default(0.0)
+  codOrderCount  Int       @default(0)
+  addresses      Address[]
+  orders         Order[]
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+}
+
+model Address {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  fullAddress String
+  landmark    String?
+  pincode     String
+  isDefault   Boolean  @default(false)
+  orders      Order[]
+}
+
+model Category {
+  id        String    @id @default(cuid())
+  name      String    @unique
+  imageUrl  String?
+  products  Product[]
+}
+
+model Product {
+  id                 String           @id @default(cuid())
+  name               String
+  brand              String
+  description        String?
+  categoryId         String
+  category           Category         @relation(fields: [categoryId], references: [id])
+  imageUrl           String?
+  isDiscountExcluded Boolean          @default(false)
+  variants           ProductVariant[]
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+}
+
+model ProductVariant {
+  id               String        @id @default(cuid())
+  productId        String
+  product          Product       @relation(fields: [productId], references: [id], onDelete: Cascade)
+  unit             UnitType
+  packSize         Float
+  packLabel        String?
+  mrp              Decimal
+  baseSellingPrice Decimal
+  stockQuantity    Int           @default(0)
+  maxOrderLimit    Int           @default(10)
+  tieredPrices     TieredPrice[]
+  orderItems       OrderItem[]
+}
+
+model TieredPrice {
+  id               String         @id @default(cuid())
+  productVariantId String
+  productVariant   ProductVariant @relation(fields: [productVariantId], references: [id], onDelete: Cascade)
+  minQty           Int
+  maxQty           Int
+  unitPrice        Decimal
+}
+
+model Order {
+  id                String        @id @default(cuid())
+  orderNumber       String        @unique
+  userId            String
+  user              User          @relation(fields: [userId], references: [id])
+  addressId         String
+  address           Address       @relation(fields: [addressId], references: [id])
+  status            OrderStatus   @default(ORDER_ACCEPTED)
+  paymentMethod     PaymentMethod
+  paymentStatus     PaymentStatus @default(PENDING)
+  deliveryDate      DateTime
+  subtotal          Decimal
+  discountAmount    Decimal       @default(0.0)
+  deliveryFee       Decimal       @default(0.0)
+  codCharge         Decimal       @default(0.0)
+  finalAmount       Decimal
+  razorpayOrderId   String?
+  razorpayPaymentId String?
+  items             OrderItem[]
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+}
+
+model OrderItem {
+  id               String         @id @default(cuid())
+  orderId          String
+  order            Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productVariantId String
+  productVariant   ProductVariant @relation(fields: [productVariantId], references: [id])
+  quantity         Int
+  unitPrice        Decimal
+  totalPrice       Decimal
+}
+
+model SystemSetting {
+  id                        String   @id @default("global_settings")
+  appName                   String   @default("Om Distributors")
+  logoUrl                   String?
+  primaryColorHex           String   @default("#0F2C59")
+  secondaryColorHex         String   @default("#D4AF37")
+  accentColorHex            String   @default("#FF6B00")
+  advancePaymentDiscountPct Decimal  @default(3.0)
+  codBaseCharge             Decimal  @default(30.0)
+  freeShippingMinAmount     Decimal  @default(500.0)
+  baseDeliveryFee           Decimal  @default(40.0)
+  referralRewardAmount      Decimal  @default(50.0)
+  updatedAt                 DateTime @updatedAt
+}

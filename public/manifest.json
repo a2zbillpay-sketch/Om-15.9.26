@@ -1,0 +1,26 @@
+{
+  "id": "/",
+  "name": "Om Distributors Grocery & Wholesale",
+  "short_name": "Om Distributors",
+  "description": "Your Trusted Grocery Partner for Wholesale & Retail Necessities",
+  "start_url": "/?utm_source=pwa",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0F2C59",
+  "theme_color": "#0F2C59",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/icons/icon-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
