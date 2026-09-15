@@ -1,6 +1,5 @@
 import React, { useState, useMemo } from 'react';
 import {
-  Sparkles,
   ShieldCheck,
   Truck,
   RotateCcw,
@@ -12,6 +11,7 @@ import {
 import { useApp } from '../context/AppContext';
 import { ProductCard } from './ProductCard';
 import { PWAInstallButton } from './PWAInstallButton';
+import { BrandLogo } from './BrandLogo';
 
 interface CustomerStoreProps {
   searchQuery: string;
@@ -49,12 +49,14 @@ export const CustomerStore: React.FC<CustomerStoreProps> = ({
       <section className="bg-gradient-to-r from-[#0F2C59] via-[#163a6e] to-[#0F2C59] text-white py-8 px-4 sm:px-6 relative overflow-hidden border-b border-[#D4AF37]/30">
         <div className="max-w-7xl mx-auto relative z-10 flex flex-col md:flex-row items-center justify-between gap-6">
           <div className="max-w-2xl text-center md:text-left space-y-3">
-            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#FF6B00]/90 text-white font-black text-xs uppercase tracking-wider shadow-sm">
-              <Sparkles size={14} className="text-[#D4AF37]" />
-              <span>DIRECT DISTRIBUTOR PRICING</span>
+            <div className="flex flex-wrap items-center gap-3 justify-center md:justify-start">
+              <BrandLogo size="lg" />
+              <div>
+                <div className="text-xs text-amber-200 font-semibold tracking-wide uppercase">MULTI SERVICE PROVIDER • We meet your needs.</div>
+              </div>
             </div>
             <h1 className="text-2xl sm:text-4xl font-black tracking-tight text-white leading-tight">
-              Wholesale Groceries & Staples at <span className="text-[#D4AF37]">Mandi Rates</span>
+              Where Savings Meet <span className="text-[#D4AF37]">Your Kitchen</span>
             </h1>
             <p className="text-xs sm:text-sm text-gray-200 leading-relaxed font-medium">
               Supplying retail households, caterers & kirana stores across Navi Mumbai with bulk quantity tier discounts and doorstep delivery.

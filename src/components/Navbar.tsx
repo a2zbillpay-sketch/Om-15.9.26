@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   ShoppingBag,
   Store,
@@ -8,10 +8,13 @@ import {
   ShieldCheck,
   Search,
   User as UserIcon,
+  Upload,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { Role } from '../types';
 import { PWAInstallButton } from './PWAInstallButton';
+import { BrandLogo } from './BrandLogo';
+import { LogoUploadModal } from './LogoUploadModal';
 
 interface NavbarProps {
   searchQuery: string;
@@ -40,6 +43,9 @@ export const Navbar: React.FC<NavbarProps> = ({
     orders,
     setIsAuthModalOpen,
   } = useApp();
+
+  const [isLogoModalOpen, setIsLogoModalOpen] = useState(false);
+  const isShopkeeper = activeRole !== Role.CUSTOMER;
 
   const totalCartCount = cart.reduce((acc, i) => acc + i.quantity, 0);
 
@@ -103,9 +109,18 @@ export const Navbar: React.FC<NavbarProps> = ({
       {/* Main Navigation Bar */}
       <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
         {/* Brand Logo */}
-        <div className="flex items-center gap-3 shrink-0">
-          <div className="w-10 h-10 rounded-xl bg-[#0F2C59] border-2 border-[#D4AF37] flex items-center justify-center shadow-md">
-            <span className="text-[#D4AF37] font-black text-sm tracking-wider">OM</span>
+        <div
+          onClick={() => isShopkeeper && setIsLogoModalOpen(true)}
+          className={`flex items-center gap-3 shrink-0 ${isShopkeeper ? 'cursor-pointer group' : ''}`}
+          title={isShopkeeper ? 'Click to upload or change store logo as-is' : undefined}
+        >
+          <div className="relative">
+            <BrandLogo size="md" />
+            {isShopkeeper && (
+              <span className="absolute -bottom-1 -right-1 bg-[#D4AF37] text-[#0F2C59] p-0.5 rounded-full shadow border border-white opacity-80 group-hover:opacity-100 transition-opacity">
+                <Upload size={10} />
+              </span>
+            )}
           </div>
           <div className="hidden sm:block">
             <div className="font-black text-base tracking-wide text-[#D4AF37] flex items-center gap-1.5 leading-none">
@@ -232,6 +247,11 @@ export const Navbar: React.FC<NavbarProps> = ({
           </button>
         </div>
       </div>
+
+      <LogoUploadModal
+        isOpen={isLogoModalOpen}
+        onClose={() => setIsLogoModalOpen(false)}
+      />
     </header>
   );
 };

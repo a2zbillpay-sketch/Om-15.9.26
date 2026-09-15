@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0F2C59" />
+      <stop offset="50%" stop-color="#163A6E" />
+      <stop offset="100%" stop-color="#091A36" />
+    </linearGradient>
+    <linearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFF0A5" />
+      <stop offset="35%" stop-color="#D4AF37" />
+      <stop offset="70%" stop-color="#AA820A" />
+      <stop offset="100%" stop-color="#E8C85B" />
+    </linearGradient>
+    <linearGradient id="saffronGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#FF6B00" />
+      <stop offset="100%" stop-color="#FFA439" />
+    </linearGradient>
+    <filter id="goldShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#000000" flood-opacity="0.5"/>
+    </filter>
+  </defs>
+
+  <!-- Rounded App Background with Gold Trim -->
+  <rect width="512" height="512" rx="96" fill="url(#bgGrad)"/>
+  <rect x="12" y="12" width="488" height="488" rx="84" fill="none" stroke="url(#goldGrad)" stroke-width="6" opacity="0.85"/>
+  <rect x="24" y="24" width="464" height="464" rx="72" fill="none" stroke="url(#goldGrad)" stroke-width="1.5" stroke-dasharray="8 6" opacity="0.4"/>
+
+  <!-- Center Decorative Shield Badge -->
+  <g filter="url(#goldShadow)">
+    <circle cx="256" cy="184" r="108" fill="#0A1D3B" stroke="url(#goldGrad)" stroke-width="6"/>
+    <circle cx="256" cy="184" r="98" fill="none" stroke="url(#goldGrad)" stroke-width="1.5" opacity="0.6"/>
+
+    <!-- Sacred ॐ OM Symbol in Lustrous Gold -->
+    <path d="M232 128 C232 118 242 110 254 110 C267 110 276 119 276 131 C276 142 268 152 256 156 C272 160 284 172 284 189 C284 210 266 226 242 226 C221 226 206 214 202 198 L220 193 C223 203 231 210 242 210 C253 210 263 201 263 189 C263 177 252 168 240 168 L232 168 L232 153 L241 153 C251 153 259 145 259 135 C259 126 252 122 245 122 C238 122 233 126 232 131 Z" fill="url(#goldGrad)"/>
+    <path d="M280 165 C295 165 310 178 310 196 C310 216 294 230 272 232 L269 216 C284 214 294 206 294 196 C294 186 285 178 274 178 Z" fill="url(#goldGrad)"/>
+    <path d="M236 100 C246 95 264 95 274 100 C268 103 260 104 255 104 C250 104 242 103 236 100 Z" fill="url(#goldGrad)"/>
+    <circle cx="255" cy="88" r="5" fill="url(#goldGrad)"/>
+  </g>
+
+  <!-- Typography: OM DISTRIBUTORS -->
+  <g text-anchor="middle">
+    <text x="256" y="342" font-family="system-ui, -apple-system, sans-serif" font-weight="900" font-size="44" fill="url(#goldGrad)" letter-spacing="3" filter="url(#goldShadow)">
+      OM DISTRIBUTORS
+    </text>
+
+    <!-- Subtitle Banner -->
+    <rect x="86" y="366" width="340" height="34" rx="17" fill="url(#saffronGrad)" />
+    <text x="256" y="389" font-family="system-ui, -apple-system, sans-serif" font-weight="800" font-size="16" fill="#FFFFFF" letter-spacing="2">
+      MULTI SERVICE PROVIDER
+    </text>
+
+    <!-- Tagline -->
+    <text x="256" y="434" font-family="system-ui, -apple-system, sans-serif" font-weight="600" font-size="20" fill="#E2E8F0" letter-spacing="1">
+      We meet your needs.
+    </text>
+
+    <!-- Quality Flourish -->
+    <text x="256" y="468" font-family="system-ui, -apple-system, sans-serif" font-weight="600" font-size="13" fill="#D4AF37" letter-spacing="3">
+      ★ WHOLESALE &amp; RETAIL GROCERIES ★
+    </text>
+  </g>
+</svg>

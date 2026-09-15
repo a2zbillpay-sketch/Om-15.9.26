@@ -14,7 +14,7 @@ import {
 export const INITIAL_SETTINGS: SystemSetting = {
   id: 'global_settings',
   appName: 'Om Distributors',
-  logoUrl: '/icons/icon-192x192.png',
+  logoUrl: '/logo.jpg',
   primaryColorHex: '#0F2C59',
   secondaryColorHex: '#D4AF37',
   accentColorHex: '#FF6B00',

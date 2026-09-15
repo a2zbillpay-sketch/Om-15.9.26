@@ -17,6 +17,7 @@ import { ReferralWalletModal } from './components/ReferralWalletModal';
 import { AddressSelectorModal } from './components/AddressSelectorModal';
 import { EntryLoginPage } from './components/EntryLoginPage';
 import { OfflineIndicator } from './components/OfflineIndicator';
+import { BrandLogo } from './components/BrandLogo';
 import { ShieldCheck, Phone, MapPin, Mail, Award } from 'lucide-react';
 
 const MainLayout: React.FC = () => {
@@ -70,11 +71,12 @@ const MainLayout: React.FC = () => {
       <footer className="bg-[#0b2245] text-white border-t-2 border-[#D4AF37]/40 py-10 px-4 sm:px-6">
         <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-4 gap-8 text-xs">
           <div>
-            <div className="flex items-center gap-2 mb-2">
-              <div className="w-7 h-7 rounded bg-[#D4AF37] text-[#0F2C59] font-black flex items-center justify-center text-xs">
-                OM
+            <div className="flex items-center gap-2.5 mb-2.5">
+              <BrandLogo size="xs" />
+              <div>
+                <h3 className="font-extrabold text-sm text-[#D4AF37] leading-tight">{settings.appName}</h3>
+                <span className="text-[10px] text-gray-300">Multi Service Provider</span>
               </div>
-              <h3 className="font-extrabold text-sm text-[#D4AF37]">{settings.appName}</h3>
             </div>
             <p className="text-gray-300 leading-relaxed text-[11px]">
               Direct wholesale distributor supplying retail kirana stores, catering businesses, and residential societies with premium daily staples, grains, and dry fruits.

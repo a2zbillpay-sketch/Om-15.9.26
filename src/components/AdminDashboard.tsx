@@ -14,10 +14,12 @@ import {
   Filter,
   DollarSign,
   AlertCircle,
+  Upload,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { OrderStatus, PaymentMethod, Product, UnitType } from '../types';
 import { AdminSettingsControl } from './AdminSettingsControl';
+import { LogoUploadModal } from './LogoUploadModal';
 
 export const AdminDashboard: React.FC = () => {
   const {
@@ -34,6 +36,7 @@ export const AdminDashboard: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'ORDERS' | 'INVENTORY' | 'SETTINGS'>('ORDERS');
   const [orderFilter, setOrderFilter] = useState<string>('ALL');
   const [inventorySearch, setInventorySearch] = useState<string>('');
+  const [isLogoModalOpen, setIsLogoModalOpen] = useState(false);
 
   // Add product modal state
   const [isAddProductModalOpen, setIsAddProductModalOpen] = useState(false);
@@ -135,35 +138,46 @@ export const AdminDashboard: React.FC = () => {
             </p>
           </div>
 
-          {/* Tab Selector */}
-          <div className="flex bg-[#0a1e3d] p-1 rounded-xl border border-white/10 text-xs font-bold">
+          {/* Tab Selector & Logo Quick Action */}
+          <div className="flex flex-wrap items-center gap-2">
             <button
-              onClick={() => setActiveTab('ORDERS')}
-              className={`px-3.5 py-1.5 rounded-lg flex items-center gap-1.5 transition ${
-                activeTab === 'ORDERS' ? 'bg-[#FF6B00] text-white shadow' : 'text-gray-300 hover:text-white'
-              }`}
+              onClick={() => setIsLogoModalOpen(true)}
+              className="px-3 py-1.5 rounded-xl flex items-center gap-1.5 transition bg-[#D4AF37]/20 hover:bg-[#D4AF37]/30 text-[#D4AF37] border border-[#D4AF37]/40 text-xs font-black shadow-sm"
+              title="Upload your authentic logo file without alterations"
             >
-              <Package size={14} />
-              <span>Orders ({orders.length})</span>
+              <Upload size={13} />
+              <span>Upload Logo As-Is</span>
             </button>
-            <button
-              onClick={() => setActiveTab('INVENTORY')}
-              className={`px-3.5 py-1.5 rounded-lg flex items-center gap-1.5 transition ${
-                activeTab === 'INVENTORY' ? 'bg-[#FF6B00] text-white shadow' : 'text-gray-300 hover:text-white'
-              }`}
-            >
-              <Layers size={14} />
-              <span>Inventory & Catalog</span>
-            </button>
-            <button
-              onClick={() => setActiveTab('SETTINGS')}
-              className={`px-3.5 py-1.5 rounded-lg flex items-center gap-1.5 transition ${
-                activeTab === 'SETTINGS' ? 'bg-[#D4AF37] text-[#0F2C59] shadow font-black' : 'text-gray-300 hover:text-white'
-              }`}
-            >
-              <Settings size={14} />
-              <span>Engine Settings</span>
-            </button>
+
+            <div className="flex bg-[#0a1e3d] p-1 rounded-xl border border-white/10 text-xs font-bold">
+              <button
+                onClick={() => setActiveTab('ORDERS')}
+                className={`px-3.5 py-1.5 rounded-lg flex items-center gap-1.5 transition ${
+                  activeTab === 'ORDERS' ? 'bg-[#FF6B00] text-white shadow' : 'text-gray-300 hover:text-white'
+                }`}
+              >
+                <Package size={14} />
+                <span>Orders ({orders.length})</span>
+              </button>
+              <button
+                onClick={() => setActiveTab('INVENTORY')}
+                className={`px-3.5 py-1.5 rounded-lg flex items-center gap-1.5 transition ${
+                  activeTab === 'INVENTORY' ? 'bg-[#FF6B00] text-white shadow' : 'text-gray-300 hover:text-white'
+                }`}
+              >
+                <Layers size={14} />
+                <span>Inventory & Catalog</span>
+              </button>
+              <button
+                onClick={() => setActiveTab('SETTINGS')}
+                className={`px-3.5 py-1.5 rounded-lg flex items-center gap-1.5 transition ${
+                  activeTab === 'SETTINGS' ? 'bg-[#D4AF37] text-[#0F2C59] shadow font-black' : 'text-gray-300 hover:text-white'
+                }`}
+              >
+                <Settings size={14} />
+                <span>Engine Settings</span>
+              </button>
+            </div>
           </div>
         </div>
 
@@ -563,6 +577,11 @@ export const AdminDashboard: React.FC = () => {
           </div>
         </div>
       )}
+
+      <LogoUploadModal
+        isOpen={isLogoModalOpen}
+        onClose={() => setIsLogoModalOpen(false)}
+      />
     </div>
   );
 };

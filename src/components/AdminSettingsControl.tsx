@@ -1,7 +1,9 @@
-import React, { useState } from 'react';
-import { Save, Check, RotateCcw } from 'lucide-react';
+import React, { useState, useRef } from 'react';
+import { Save, Check, RotateCcw, Upload, Image as ImageIcon } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { INITIAL_SETTINGS } from '../data/seedData';
+import { BrandLogo } from './BrandLogo';
+import { LogoUploadModal } from './LogoUploadModal';
 
 export const AdminSettingsControl: React.FC = () => {
   const { settings, updateSettings } = useApp();
@@ -18,6 +20,28 @@ export const AdminSettingsControl: React.FC = () => {
   });
 
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const [isLogoModalOpen, setIsLogoModalOpen] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleDirectFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const dataUrl = event.target?.result as string;
+        if (dataUrl) {
+          updateSettings({ logoUrl: dataUrl });
+          setSavedSuccess(true);
+          setTimeout(() => setSavedSuccess(false), 3000);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleResetLogo = () => {
+    updateSettings({ logoUrl: '' });
+  };
 
   const handleSave = () => {
     updateSettings(formData);
@@ -78,7 +102,77 @@ export const AdminSettingsControl: React.FC = () => {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* Visual Customization */}
         <div className="space-y-4 bg-gray-50 p-5 rounded-xl border border-gray-200">
-          <h2 className="text-xs font-bold text-[#0F2C59] uppercase tracking-wider">Branding & Themes</h2>
+          <div className="flex items-center justify-between">
+            <h2 className="text-xs font-bold text-[#0F2C59] uppercase tracking-wider">Branding & Logo</h2>
+            <button
+              type="button"
+              onClick={() => setIsLogoModalOpen(true)}
+              className="text-xs font-bold text-[#0F2C59] hover:text-[#163a6e] inline-flex items-center gap-1 hover:underline"
+            >
+              <Upload size={12} />
+              <span>Full Uploader</span>
+            </button>
+          </div>
+
+          {/* Logo preview & Direct Upload Card */}
+          <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm space-y-3">
+            <div className="flex items-center gap-3.5">
+              <BrandLogo size="lg" />
+              <div className="flex-1 min-w-0">
+                <div className="font-extrabold text-xs text-gray-900 truncate">
+                  Official Om Distributors Logo (Original File)
+                </div>
+                <div className="text-[11px] text-gray-500">
+                  SAVE_20260828_130926.jpg • Displayed as-is without alterations
+                </div>
+                <span className="inline-block mt-1 text-[10px] font-semibold px-2 py-0.5 rounded bg-emerald-100 text-emerald-800">
+                  ✓ Official Image Logo Active
+                </span>
+              </div>
+            </div>
+
+            {/* Direct Upload / Choose file action */}
+            <div className="pt-2 border-t border-gray-100 flex flex-wrap items-center gap-2">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/png, image/jpeg, image/jpg, image/webp, image/svg+xml"
+                onChange={handleDirectFileUpload}
+                className="hidden"
+              />
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#0F2C59] hover:bg-[#163a6e] text-white rounded-lg text-xs font-bold transition shadow-sm"
+              >
+                <Upload size={13} className="text-[#D4AF37]" />
+                <span>Upload Logo As-Is</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setIsLogoModalOpen(true)}
+                className="inline-flex items-center gap-1 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-xs font-medium transition"
+              >
+                <ImageIcon size={13} />
+                <span>Drag & Drop / Link</span>
+              </button>
+
+              {settings.logoUrl && (
+                <button
+                  type="button"
+                  onClick={handleResetLogo}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs text-red-600 hover:bg-red-50 rounded-lg font-medium transition ml-auto"
+                >
+                  <RotateCcw size={12} />
+                  <span>Reset</span>
+                </button>
+              )}
+            </div>
+            <p className="text-[10px] text-gray-400">
+              Upload your original image file (e.g. <span className="font-mono text-gray-600 font-semibold">SAVE_20260828_130926.jpg</span>) without any alteration.
+            </p>
+          </div>
 
           <div>
             <label className="text-xs font-bold text-gray-700 block mb-1">Store Name</label>
@@ -132,9 +226,12 @@ export const AdminSettingsControl: React.FC = () => {
           {/* Theme preview swatch */}
           <div className="p-3 rounded-lg border border-gray-200 mt-2" style={{ backgroundColor: formData.primaryColorHex }}>
             <div className="flex items-center justify-between text-white">
-              <span className="font-extrabold text-sm" style={{ color: formData.secondaryColorHex }}>
-                {formData.appName}
-              </span>
+              <div className="flex items-center gap-2">
+                <BrandLogo size="xs" />
+                <span className="font-extrabold text-sm" style={{ color: formData.secondaryColorHex }}>
+                  {formData.appName}
+                </span>
+              </div>
               <span className="text-[10px] px-2 py-0.5 rounded font-bold" style={{ backgroundColor: formData.accentColorHex }}>
                 Preview Badge
               </span>
@@ -242,6 +339,11 @@ export const AdminSettingsControl: React.FC = () => {
           </div>
         </div>
       </div>
+
+      <LogoUploadModal
+        isOpen={isLogoModalOpen}
+        onClose={() => setIsLogoModalOpen(false)}
+      />
     </div>
   );
 };

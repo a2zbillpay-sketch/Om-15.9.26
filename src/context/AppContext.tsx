@@ -70,7 +70,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Load state from localStorage or seed
   const [settings, setSettings] = useState<SystemSetting>(() => {
     const saved = localStorage.getItem('om_settings');
-    return saved ? JSON.parse(saved) : INITIAL_SETTINGS;
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (!parsed.logoUrl || parsed.logoUrl.trim() === '' || parsed.logoUrl === '/icons/icon-192x192.png') {
+          parsed.logoUrl = '/logo.jpg';
+        }
+        return parsed;
+      } catch {
+        return INITIAL_SETTINGS;
+      }
+    }
+    return INITIAL_SETTINGS;
   });
 
   const [categories] = useState<Category[]>(INITIAL_CATEGORIES);

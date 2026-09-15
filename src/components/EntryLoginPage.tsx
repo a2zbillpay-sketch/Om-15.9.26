@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Store, ShoppingBag, ShieldCheck, ArrowLeft, LogIn, Eye, EyeOff } from 'lucide-react';
 import { Role } from '../types';
 import { useApp } from '../context/AppContext';
+import { BrandLogo } from './BrandLogo';
 
 interface EntryLoginPageProps {
   isOpen: boolean;
@@ -87,13 +88,11 @@ export const EntryLoginPage: React.FC<EntryLoginPageProps> = ({
           ✕
         </button>
 
-        {/* Brand Header */}
-        <div className="text-center mb-6">
-          <div className="w-16 h-16 bg-[#0F2C59] rounded-full mx-auto flex items-center justify-center mb-2 shadow-lg border-2 border-[#D4AF37]">
-            <span className="text-2xl font-extrabold text-[#D4AF37] tracking-wider">OM</span>
-          </div>
+        {/* Brand Header with Official Logo */}
+        <div className="text-center mb-5 flex flex-col items-center">
+          <BrandLogo size="xl" className="mb-2" />
           <h1 className="text-xl font-extrabold text-[#0F2C59] tracking-wide">OM DISTRIBUTORS</h1>
-          <p className="text-xs text-gray-600 font-medium">Your Trusted Grocery Partner for Wholesale & Retail</p>
+          <p className="text-xs text-gray-600 font-medium">Multi Service Provider • We meet your needs.</p>
         </div>
 
         {!selectedRole ? (
