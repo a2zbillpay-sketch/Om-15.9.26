@@ -59,7 +59,7 @@ export const CustomerStore: React.FC<CustomerStoreProps> = ({
               Where Savings Meet <span className="text-[#D4AF37]">Your Kitchen</span>
             </h1>
             <p className="text-xs sm:text-sm text-gray-200 leading-relaxed font-medium">
-              Supplying retail households, caterers & kirana stores across Navi Mumbai with bulk quantity tier discounts and doorstep delivery.
+              We provide home delivery of groceries and essential items only within Nashik city.
             </p>
 
             {/* Value Highlights */}

@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import {
   ShoppingBag,
-  Store,
   MapPin,
   Wallet,
   Clock,
@@ -36,12 +35,12 @@ export const Navbar: React.FC<NavbarProps> = ({
   const {
     currentUser,
     activeRole,
-    setActiveRole,
     cart,
     checkoutBreakdown,
     settings,
     orders,
     setIsAuthModalOpen,
+    isAuthModalOpen,
   } = useApp();
 
   const [isLogoModalOpen, setIsLogoModalOpen] = useState(false);
@@ -71,38 +70,9 @@ export const Navbar: React.FC<NavbarProps> = ({
           </span>
         </div>
 
-        {/* Portal Role Switcher */}
-        <div className="flex items-center gap-2 shrink-0">
-          <span className="text-gray-300 text-[10px] hidden md:inline">Current View:</span>
-          <div className="inline-flex bg-black/40 p-0.5 rounded-lg border border-[#D4AF37]/40">
-            <button
-              id="switch-to-customer-mode-btn"
-              onClick={() => setActiveRole(Role.CUSTOMER)}
-              className={`px-2.5 py-0.5 rounded text-[11px] font-bold flex items-center gap-1 transition ${
-                activeRole === Role.CUSTOMER
-                  ? 'bg-[#FF6B00] text-white shadow-sm'
-                  : 'text-gray-300 hover:text-white'
-              }`}
-            >
-              <ShoppingBag size={12} />
-              <span>Customer Store</span>
-            </button>
-
-            <button
-              id="switch-to-shopkeeper-mode-btn"
-              onClick={() => setActiveRole(Role.SHOPKEEPER)}
-              className={`px-2.5 py-0.5 rounded text-[11px] font-bold flex items-center gap-1 transition ${
-                activeRole === Role.SHOPKEEPER ||
-                activeRole === Role.SECONDARY_ADMIN ||
-                activeRole === Role.ACCOUNTS
-                  ? 'bg-[#D4AF37] text-[#0F2C59] shadow-sm'
-                  : 'text-gray-300 hover:text-white'
-              }`}
-            >
-              <Store size={12} />
-              <span>Shopkeeper Admin</span>
-            </button>
-          </div>
+        <div className="text-[10px] text-gray-300 font-medium hidden md:flex items-center gap-1.5 shrink-0">
+          <span className="text-[#D4AF37]">★</span>
+          <span>Direct Wholesale & Retail Supplies</span>
         </div>
       </div>
 
@@ -149,26 +119,28 @@ export const Navbar: React.FC<NavbarProps> = ({
           </button>
         )}
 
-        {/* Search Bar */}
-        <div className="flex-1 max-w-xl relative">
-          <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" />
-          <input
-            id="product-search-input"
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search Basmati Rice, Toor Dal, Atta, Cooking Oil, Spices..."
-            className="w-full pl-9 pr-4 py-2 bg-white text-gray-900 rounded-xl text-xs font-medium outline-none focus:ring-2 focus:ring-[#D4AF37] shadow-inner placeholder:text-gray-400"
-          />
-          {searchQuery && (
-            <button
-              onClick={() => setSearchQuery('')}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-700 text-xs font-bold"
-            >
-              ✕
-            </button>
-          )}
-        </div>
+        {/* Search Bar - Displayed on customer store, removed from login/admin portal */}
+        {activeRole === Role.CUSTOMER && !isAuthModalOpen && (
+          <div className="flex-1 max-w-xl relative">
+            <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input
+              id="product-search-input"
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search Basmati Rice, Toor Dal, Atta, Cooking Oil, Spices..."
+              className="w-full pl-9 pr-4 py-2 bg-white text-gray-900 rounded-xl text-xs font-medium outline-none focus:ring-2 focus:ring-[#D4AF37] shadow-inner placeholder:text-gray-400"
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery('')}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-700 text-xs font-bold"
+              >
+                ✕
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Right Actions */}
         <div className="flex items-center gap-2 shrink-0">

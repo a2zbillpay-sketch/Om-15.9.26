@@ -21,9 +21,10 @@ import {
   Info,
   Sparkles,
   Check,
+  ShoppingBag,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { OrderStatus, PaymentMethod, Product, ProductVariant, TieredPrice, UnitType } from '../types';
+import { OrderStatus, PaymentMethod, Product, ProductVariant, TieredPrice, UnitType, Role } from '../types';
 import { AdminSettingsControl } from './AdminSettingsControl';
 import { LogoUploadModal } from './LogoUploadModal';
 import { EditProductModal } from './EditProductModal';
@@ -83,6 +84,7 @@ export const AdminDashboard: React.FC = () => {
     updateProduct,
     deleteProduct,
     settings,
+    setActiveRole,
   } = useApp();
 
   const [activeTab, setActiveTab] = useState<'ORDERS' | 'INVENTORY' | 'SETTINGS'>('ORDERS');
@@ -383,6 +385,15 @@ export const AdminDashboard: React.FC = () => {
 
           {/* Tab Selector & Logo Quick Action */}
           <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => setActiveRole(Role.CUSTOMER)}
+              className="px-3 py-1.5 rounded-xl flex items-center gap-1.5 transition bg-white/10 hover:bg-white/20 text-white border border-white/20 text-xs font-bold shadow-sm"
+              title="Return to customer store view"
+            >
+              <ShoppingBag size={13} className="text-[#FF6B00]" />
+              <span>Back to Store</span>
+            </button>
+
             <button
               onClick={() => setIsLogoModalOpen(true)}
               className="px-3 py-1.5 rounded-xl flex items-center gap-1.5 transition bg-[#D4AF37]/20 hover:bg-[#D4AF37]/30 text-[#D4AF37] border border-[#D4AF37]/40 text-xs font-black shadow-sm"
