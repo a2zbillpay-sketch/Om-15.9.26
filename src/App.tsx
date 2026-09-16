@@ -21,7 +21,7 @@ import { BrandLogo } from './components/BrandLogo';
 import { ShieldCheck, Phone, MapPin, Mail, Award } from 'lucide-react';
 
 const MainLayout: React.FC = () => {
-  const { activeRole, isAuthModalOpen, setIsAuthModalOpen, orders, settings } = useApp();
+  const { activeRole, setActiveRole, isAuthModalOpen, setIsAuthModalOpen, orders, settings } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [isCartOpen, setIsCartOpen] = useState(false);
@@ -74,7 +74,20 @@ const MainLayout: React.FC = () => {
             <div className="flex items-center gap-2.5 mb-2.5">
               <BrandLogo size="xs" />
               <div>
-                <h3 className="font-extrabold text-sm text-[#D4AF37] leading-tight">{settings.appName}</h3>
+                <h3
+                  onClick={() => setActiveRole(Role.SHOPKEEPER)}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      setActiveRole(Role.SHOPKEEPER);
+                    }
+                  }}
+                  title="Shopkeeper Login / Portal"
+                  className="font-extrabold text-sm text-[#D4AF37] leading-tight cursor-pointer hover:opacity-90 select-none"
+                >
+                  {settings.appName}
+                </h3>
                 <span className="text-[10px] text-gray-300">Multi Service Provider</span>
               </div>
             </div>

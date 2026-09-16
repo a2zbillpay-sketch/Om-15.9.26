@@ -16,14 +16,62 @@ import {
   DollarSign,
   AlertCircle,
   Upload,
+  Copy,
+  X,
+  Info,
+  Sparkles,
+  Check,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { OrderStatus, PaymentMethod, Product, ProductVariant, UnitType } from '../types';
+import { OrderStatus, PaymentMethod, Product, ProductVariant, TieredPrice, UnitType } from '../types';
 import { AdminSettingsControl } from './AdminSettingsControl';
 import { LogoUploadModal } from './LogoUploadModal';
 import { EditProductModal } from './EditProductModal';
 import { AddVariantModal } from './AddVariantModal';
 import { formatVariantPack } from '../utils/variantFormatter';
+
+export interface VariantFormRow {
+  id: string;
+  packSize: string;
+  unit: UnitType | '';
+  packLabel: string;
+  mrp: string;
+  baseSellingPrice: string;
+  stockQuantity: string;
+  maxOrderLimit: string;
+  wholesaleMinQty: string;
+  wholesaleMaxQty: string;
+  wholesalePrice: string;
+}
+
+const COMMON_PACK_PRESETS: { label: string; size: string; unit: UnitType }[] = [
+  { label: '250 G', size: '250', unit: UnitType.G },
+  { label: '500 G', size: '500', unit: UnitType.G },
+  { label: '1 KG', size: '1', unit: UnitType.KG },
+  { label: '2 KG', size: '2', unit: UnitType.KG },
+  { label: '5 KG', size: '5', unit: UnitType.KG },
+  { label: '10 KG', size: '10', unit: UnitType.KG },
+  { label: '25 KG Katta', size: '25', unit: UnitType.KATTA },
+  { label: '50 KG Katta', size: '50', unit: UnitType.KATTA },
+  { label: '1 Liter', size: '1', unit: UnitType.LITER },
+  { label: '5 L Can', size: '5', unit: UnitType.CAN },
+  { label: '1 Box / Ctn', size: '1', unit: UnitType.BOX },
+  { label: '1 Unit (NOS)', size: '1', unit: UnitType.NOS },
+];
+
+const createBlankVariantRow = (customSize = '', customUnit: UnitType | '' = ''): VariantFormRow => ({
+  id: `var-new-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+  packSize: customSize,
+  unit: customUnit,
+  packLabel: customSize && customUnit ? `${customSize} ${customUnit}` : '',
+  mrp: '',
+  baseSellingPrice: '',
+  stockQuantity: '',
+  maxOrderLimit: '',
+  wholesaleMinQty: '',
+  wholesaleMaxQty: '',
+  wholesalePrice: '',
+});
 
 export const AdminDashboard: React.FC = () => {
   const {
@@ -60,24 +108,111 @@ export const AdminDashboard: React.FC = () => {
       variants: [...target.variants, newVariant],
     });
   };
+
+  // Main product form state - starts completely BLANK without hardcoded defaults
   const [newProductData, setNewProductData] = useState({
     name: '',
     brand: '',
     description: '',
-    categoryId: categories[0]?.id || 'cat-1',
-    imageUrl: 'https://images.unsplash.com/photo-1586201375761-83865001e31c?auto=format&fit=crop&w=500&q=80',
+    categoryId: '',
+    imageUrl: '',
     isDiscountExcluded: false,
-    variantUnit: UnitType.KG,
-    variantPackSize: 1,
-    variantPackLabel: '1 KG Pack',
-    variantMrp: 100,
-    variantBasePrice: 85,
-    variantStock: 100,
-    variantMaxLimit: 20,
-    tierMin: 5,
-    tierMax: 20,
-    tierPrice: 78,
   });
+
+  // Multiple variants state for the new product - always starts with a 100% BLANK row
+  const [variantRows, setVariantRows] = useState<VariantFormRow[]>([createBlankVariantRow()]);
+  const [formValidationError, setFormValidationError] = useState<string | null>(null);
+
+  const handleOpenAddProductModal = () => {
+    setNewProductData({
+      name: '',
+      brand: '',
+      description: '',
+      categoryId: categories[0]?.id || '',
+      imageUrl: '',
+      isDiscountExcluded: false,
+    });
+    // Table always opens completely blank with 0 pre-filled values
+    setVariantRows([createBlankVariantRow()]);
+    setFormValidationError(null);
+    setIsAddProductModalOpen(true);
+  };
+
+  const handleCloseAddProductModal = () => {
+    setNewProductData({
+      name: '',
+      brand: '',
+      description: '',
+      categoryId: '',
+      imageUrl: '',
+      isDiscountExcluded: false,
+    });
+    setVariantRows([createBlankVariantRow()]);
+    setFormValidationError(null);
+    setIsAddProductModalOpen(false);
+  };
+
+  // Option 1: Add a completely blank variant row
+  const handleAddBlankVariantRow = () => {
+    setVariantRows((prev) => [...prev, createBlankVariantRow()]);
+  };
+
+  // Option 2: Add via Quick Preset (pack size & unit pre-filled, all prices blank for shopkeeper)
+  const handleAddPresetVariantRow = (size: string, unit: UnitType) => {
+    setVariantRows((prev) => [...prev, createBlankVariantRow(size, unit)]);
+  };
+
+  // Option 3: Duplicate an existing variant row
+  const handleDuplicateVariantRow = (index: number) => {
+    const target = variantRows[index];
+    if (!target) return;
+    const duplicated: VariantFormRow = {
+      ...target,
+      id: `var-new-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+    };
+    setVariantRows((prev) => {
+      const next = [...prev];
+      next.splice(index + 1, 0, duplicated);
+      return next;
+    });
+  };
+
+  // Option 4: Remove a variant row
+  const handleRemoveVariantRow = (index: number) => {
+    setVariantRows((prev) => {
+      const next = prev.filter((_, i) => i !== index);
+      // Keep at least one blank row
+      if (next.length === 0) {
+        return [createBlankVariantRow()];
+      }
+      return next;
+    });
+  };
+
+  // Update a specific cell in a variant row
+  const handleUpdateVariantRow = (
+    index: number,
+    field: keyof VariantFormRow,
+    value: string
+  ) => {
+    setVariantRows((prev) => {
+      const next = [...prev];
+      const current = next[index];
+      const updated = { ...current, [field]: value };
+
+      // Auto-update pack label hint if user hasn't explicitly customized it
+      if (field === 'packSize' || field === 'unit') {
+        const size = field === 'packSize' ? value : current.packSize;
+        const u = field === 'unit' ? value : current.unit;
+        if (!current.packLabel || current.packLabel === `${current.packSize} ${current.unit}`.trim()) {
+          updated.packLabel = size && u ? `${size} ${u}` : '';
+        }
+      }
+
+      next[index] = updated;
+      return next;
+    });
+  };
 
   // KPI Calculations
   const totalRevenue = orders
@@ -103,40 +238,128 @@ export const AdminDashboard: React.FC = () => {
 
   const handleCreateProduct = (e: React.FormEvent) => {
     e.preventDefault();
-    const variantId = `var-${Date.now()}`;
+    setFormValidationError(null);
+
+    const trimmedName = newProductData.name.trim();
+    if (!trimmedName) {
+      setFormValidationError('Please enter a Product Name.');
+      return;
+    }
+
+    if (variantRows.length === 0) {
+      setFormValidationError('Please add at least one Pack Variant.');
+      return;
+    }
+
+    // Validate each variant row strictly without substituting any default values
+    for (let i = 0; i < variantRows.length; i++) {
+      const row = variantRows[i];
+      const rowNum = i + 1;
+
+      if (!row.packSize || isNaN(Number(row.packSize)) || Number(row.packSize) <= 0) {
+        setFormValidationError(`Variant #${rowNum}: Please enter a valid positive Pack Size (e.g. 1, 500, 25).`);
+        return;
+      }
+
+      if (!row.unit) {
+        setFormValidationError(`Variant #${rowNum}: Please select a Unit (e.g. KG, G, LITER, BOX, KATTA).`);
+        return;
+      }
+
+      if (!row.mrp || isNaN(Number(row.mrp)) || Number(row.mrp) <= 0) {
+        setFormValidationError(`Variant #${rowNum}: Please enter MRP in ₹.`);
+        return;
+      }
+
+      if (!row.baseSellingPrice || isNaN(Number(row.baseSellingPrice)) || Number(row.baseSellingPrice) <= 0) {
+        setFormValidationError(`Variant #${rowNum}: Please enter Base Selling Price in ₹.`);
+        return;
+      }
+
+      if (Number(row.baseSellingPrice) > Number(row.mrp)) {
+        setFormValidationError(`Variant #${rowNum}: Base Selling Price (₹${row.baseSellingPrice}) cannot exceed MRP (₹${row.mrp}).`);
+        return;
+      }
+
+      // Wholesale validation if fields are provided
+      const hasWholesaleMin = Boolean(row.wholesaleMinQty && Number(row.wholesaleMinQty) > 0);
+      const hasWholesalePrice = Boolean(row.wholesalePrice && Number(row.wholesalePrice) > 0);
+
+      if (hasWholesalePrice && !hasWholesaleMin) {
+        setFormValidationError(`Variant #${rowNum}: Please enter Wholesale Minimum Quantity for bulk pricing.`);
+        return;
+      }
+
+      if (hasWholesaleMin && !hasWholesalePrice) {
+        setFormValidationError(`Variant #${rowNum}: Please enter Wholesale Price for bulk quantity.`);
+        return;
+      }
+
+      if (hasWholesaleMin && hasWholesalePrice) {
+        if (Number(row.wholesalePrice) > Number(row.baseSellingPrice)) {
+          setFormValidationError(`Variant #${rowNum}: Wholesale Price (₹${row.wholesalePrice}) cannot exceed Base Selling Price (₹${row.baseSellingPrice}).`);
+          return;
+        }
+        if (row.wholesaleMaxQty && Number(row.wholesaleMaxQty) <= Number(row.wholesaleMinQty)) {
+          setFormValidationError(`Variant #${rowNum}: Wholesale Maximum Quantity must be greater than Minimum Quantity.`);
+          return;
+        }
+      }
+    }
+
+    // All valid! Construct product with variants
+    const productId = `prod-${Date.now()}`;
+    const constructedVariants: ProductVariant[] = variantRows.map((row, idx) => {
+      const variantId = `var-${productId}-${idx}-${Date.now()}`;
+      const pSize = Number(row.packSize);
+      const u = row.unit as UnitType;
+      const pLabel = formatVariantPack({
+        packLabel: row.packLabel.trim() || undefined,
+        packSize: pSize,
+        unit: u,
+      });
+
+      const tieredPrices: TieredPrice[] =
+        row.wholesaleMinQty && row.wholesalePrice && Number(row.wholesalePrice) > 0
+          ? [
+              {
+                id: `tp-${Date.now()}-${idx}`,
+                variantId,
+                minQty: Number(row.wholesaleMinQty),
+                maxQty: row.wholesaleMaxQty ? Number(row.wholesaleMaxQty) : 9999,
+                unitPrice: Number(row.wholesalePrice),
+              },
+            ]
+          : [];
+
+      return {
+        id: variantId,
+        productId: '',
+        unit: u,
+        packSize: pSize,
+        packLabel: pLabel,
+        mrp: Number(row.mrp),
+        baseSellingPrice: Number(row.baseSellingPrice),
+        stockQuantity: row.stockQuantity ? Number(row.stockQuantity) : 0,
+        maxOrderLimit: row.maxOrderLimit ? Number(row.maxOrderLimit) : 12,
+        tieredPrices,
+      };
+    });
+
     const product = {
-      name: newProductData.name,
-      brand: newProductData.brand || 'Om Special',
-      description: newProductData.description,
-      categoryId: newProductData.categoryId,
-      imageUrl: newProductData.imageUrl,
+      name: trimmedName,
+      brand: newProductData.brand.trim() || 'Om Premium',
+      description: newProductData.description.trim(),
+      categoryId: newProductData.categoryId || categories[0]?.id || 'cat-1',
+      imageUrl:
+        newProductData.imageUrl.trim() ||
+        'https://images.unsplash.com/photo-1586201375761-83865001e31c?auto=format&fit=crop&w=500&q=80',
       isDiscountExcluded: newProductData.isDiscountExcluded,
-      variants: [
-        {
-          id: variantId,
-          productId: '',
-          unit: newProductData.variantUnit,
-          packSize: Number(newProductData.variantPackSize),
-          packLabel: newProductData.variantPackLabel,
-          mrp: Number(newProductData.variantMrp),
-          baseSellingPrice: Number(newProductData.variantBasePrice),
-          stockQuantity: Number(newProductData.variantStock),
-          maxOrderLimit: Number(newProductData.variantMaxLimit),
-          tieredPrices: [
-            {
-              id: `tp-${Date.now()}`,
-              variantId,
-              minQty: Number(newProductData.tierMin),
-              maxQty: Number(newProductData.tierMax),
-              unitPrice: Number(newProductData.tierPrice),
-            },
-          ],
-        },
-      ],
+      variants: constructedVariants,
     };
 
     addProduct(product);
-    setIsAddProductModalOpen(false);
+    handleCloseAddProductModal();
   };
 
   return (
@@ -374,7 +597,7 @@ export const AdminDashboard: React.FC = () => {
 
               <button
                 id="open-add-product-btn"
-                onClick={() => setIsAddProductModalOpen(true)}
+                onClick={handleOpenAddProductModal}
                 className="bg-[#0F2C59] hover:bg-[#153e7d] text-white px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow transition"
               >
                 <Plus size={14} className="text-[#D4AF37]" />
@@ -478,150 +701,402 @@ export const AdminDashboard: React.FC = () => {
 
       {/* Add Product Modal */}
       {isAddProductModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white w-full max-w-lg rounded-2xl p-6 shadow-2xl max-h-[90vh] overflow-y-auto border-t-4 border-[#0F2C59]">
-            <h3 className="font-extrabold text-base text-[#0F2C59] mb-4">Add New Wholesale / Retail Item</h3>
-            <form onSubmit={handleCreateProduct} className="space-y-3 text-xs">
-              <div>
-                <label className="font-bold text-gray-700 block mb-1">Product Name</label>
-                <input
-                  required
-                  type="text"
-                  placeholder="e.g. Kolam Steam Rice"
-                  value={newProductData.name}
-                  onChange={(e) => setNewProductData({ ...newProductData, name: e.target.value })}
-                  className="w-full p-2 border rounded-lg"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="font-bold text-gray-700 block mb-1">Brand</label>
-                  <input
-                    required
-                    type="text"
-                    placeholder="e.g. Om Premium"
-                    value={newProductData.brand}
-                    onChange={(e) => setNewProductData({ ...newProductData, brand: e.target.value })}
-                    className="w-full p-2 border rounded-lg"
-                  />
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 overflow-y-auto">
+          <div className="bg-white w-full max-w-5xl rounded-2xl shadow-2xl overflow-hidden border border-gray-300 my-auto max-h-[92vh] flex flex-col">
+            {/* Modal Header */}
+            <div className="bg-[#0F2C59] text-white p-4 sm:p-5 flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-[#D4AF37]/20 border border-[#D4AF37]/40 flex items-center justify-center text-[#D4AF37]">
+                  <Package size={20} />
                 </div>
                 <div>
-                  <label className="font-bold text-gray-700 block mb-1">Category</label>
-                  <select
-                    value={newProductData.categoryId}
-                    onChange={(e) => setNewProductData({ ...newProductData, categoryId: e.target.value })}
-                    className="w-full p-2 border rounded-lg"
+                  <h3 className="font-black text-base sm:text-lg text-white leading-tight">
+                    Add New Wholesale / Retail Product
+                  </h3>
+                  <p className="text-[11px] text-gray-300 mt-0.5">
+                    Configure master details and add single or multiple pack size variants with wholesale volume slabs.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleCloseAddProductModal}
+                className="text-gray-300 hover:text-white p-1.5 rounded-lg hover:bg-white/10 transition"
+                aria-label="Close"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Modal Scrollable Form Body */}
+            <form onSubmit={handleCreateProduct} className="p-4 sm:p-6 overflow-y-auto space-y-6 flex-1 text-xs">
+              {/* Validation Error Banner */}
+              {formValidationError && (
+                <div className="p-3.5 bg-red-50 border-2 border-red-300 text-red-900 rounded-xl flex items-center gap-2.5 font-bold shadow-sm">
+                  <AlertCircle size={18} className="text-red-600 shrink-0" />
+                  <span>{formValidationError}</span>
+                </div>
+              )}
+
+              {/* Section 1: Basic Product Information */}
+              <div className="bg-gray-50/80 p-4 rounded-xl border border-gray-200 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="font-extrabold text-[#0F2C59] uppercase tracking-wider text-[11px] flex items-center gap-1.5">
+                    <Info size={14} className="text-[#FF6B00]" />
+                    1. Basic Product Details
+                  </span>
+                  <span className="text-[10px] text-gray-500 font-medium">* Required fields</span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="font-bold text-gray-700 block mb-1">
+                      Product Name <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      id="new-product-name-input"
+                      placeholder="e.g. Kolam Steam Rice / Tata Salt"
+                      value={newProductData.name}
+                      onChange={(e) => setNewProductData({ ...newProductData, name: e.target.value })}
+                      className="w-full p-2.5 border border-gray-300 rounded-xl outline-none focus:border-[#0F2C59] focus:ring-1 focus:ring-[#0F2C59] font-bold text-gray-900 bg-white"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="font-bold text-gray-700 block mb-1">Brand Name</label>
+                    <input
+                      type="text"
+                      id="new-product-brand-input"
+                      placeholder="e.g. Om Premium / Tata / Fortune"
+                      value={newProductData.brand}
+                      onChange={(e) => setNewProductData({ ...newProductData, brand: e.target.value })}
+                      className="w-full p-2.5 border border-gray-300 rounded-xl outline-none focus:border-[#0F2C59] focus:ring-1 focus:ring-[#0F2C59] text-gray-900 bg-white"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="font-bold text-gray-700 block mb-1">Category</label>
+                    <select
+                      id="new-product-category-select"
+                      value={newProductData.categoryId}
+                      onChange={(e) => setNewProductData({ ...newProductData, categoryId: e.target.value })}
+                      className="w-full p-2.5 border border-gray-300 rounded-xl outline-none focus:border-[#0F2C59] focus:ring-1 focus:ring-[#0F2C59] font-medium text-gray-900 bg-white"
+                    >
+                      <option value="">-- Select Category --</option>
+                      {categories.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
+                  <div className="sm:col-span-2">
+                    <label className="font-bold text-gray-700 block mb-1">Image URL (Optional)</label>
+                    <input
+                      type="text"
+                      id="new-product-image-input"
+                      placeholder="https://... (or leave blank for automatic category default)"
+                      value={newProductData.imageUrl}
+                      onChange={(e) => setNewProductData({ ...newProductData, imageUrl: e.target.value })}
+                      className="w-full p-2.5 border border-gray-300 rounded-xl outline-none text-gray-800 bg-white"
+                    />
+                  </div>
+
+                  <div className="flex items-center pt-5">
+                    <label className="flex items-center gap-2 cursor-pointer font-bold text-gray-700 select-none">
+                      <input
+                        type="checkbox"
+                        checked={newProductData.isDiscountExcluded}
+                        onChange={(e) =>
+                          setNewProductData({ ...newProductData, isDiscountExcluded: e.target.checked })
+                        }
+                        className="w-4 h-4 rounded text-[#0F2C59]"
+                      />
+                      <span>Price Regulated / Discount Excluded</span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              {/* Section 2: Multiple Pack Variants & Wholesale Slabs Table */}
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-200 pb-2.5">
+                  <div>
+                    <h4 className="font-extrabold text-[#0F2C59] text-sm flex items-center gap-1.5">
+                      <Layers size={16} className="text-[#FF6B00]" />
+                      2. Pack Variants & Wholesale Pricing Table
+                      <span className="bg-[#0F2C59] text-white px-2 py-0.5 rounded-full text-[10px] ml-1">
+                        {variantRows.length} {variantRows.length === 1 ? 'Variant' : 'Variants'}
+                      </span>
+                    </h4>
+                    <p className="text-[11px] text-gray-500 mt-0.5">
+                      All fields open completely blank. Add multiple sizes (e.g. 500 G, 1 KG, 25 KG) for this single product.
+                    </p>
+                  </div>
+
+                  {/* Primary Option: Add Blank Variant */}
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      id="add-blank-variant-row-btn"
+                      onClick={handleAddBlankVariantRow}
+                      className="bg-[#FF6B00] hover:bg-[#e05e00] text-white px-3.5 py-1.5 rounded-xl font-bold text-xs flex items-center gap-1.5 shadow-sm transition"
+                    >
+                      <Plus size={15} />
+                      <span>+ Add Pack Variant</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Multiple Options: Quick Preset Chips Toolbar */}
+                <div className="bg-amber-50/70 border border-amber-200/80 rounded-xl p-2.5 flex flex-wrap items-center gap-1.5">
+                  <span className="text-[11px] font-black text-amber-900 flex items-center gap-1 mr-1">
+                    <Sparkles size={13} className="text-[#FF6B00]" />
+                    Quick Add Common Pack Sizes:
+                  </span>
+                  {COMMON_PACK_PRESETS.map((preset) => (
+                    <button
+                      key={preset.label}
+                      type="button"
+                      onClick={() => handleAddPresetVariantRow(preset.size, preset.unit)}
+                      className="bg-white hover:bg-amber-100/80 text-amber-950 border border-amber-300/80 hover:border-amber-400 px-2 py-1 rounded-lg text-[11px] font-bold shadow-xs transition active:scale-95 flex items-center gap-1"
+                      title={`Add ${preset.label} variant row`}
+                    >
+                      <Plus size={11} className="text-amber-700" />
+                      <span>{preset.label}</span>
+                    </button>
+                  ))}
+                </div>
+
+                {/* The Variants Table */}
+                <div className="border border-gray-200 rounded-xl overflow-hidden shadow-xs bg-white">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse min-w-[920px]">
+                      <thead>
+                        <tr className="bg-[#0F2C59] text-white text-[10.5px] uppercase tracking-wider">
+                          <th className="p-2.5 text-center w-8">#</th>
+                          <th className="p-2.5 w-24">Pack Size *</th>
+                          <th className="p-2.5 w-28">Unit *</th>
+                          <th className="p-2.5 w-24">MRP (₹) *</th>
+                          <th className="p-2.5 w-28">Selling Price (₹) *</th>
+                          <th className="p-2.5 w-20">Stock Qty</th>
+                          <th className="p-2.5 w-24 bg-[#0b2245]">Wholesale Min Qty</th>
+                          <th className="p-2.5 w-24 bg-[#0b2245]">Wholesale Max Qty</th>
+                          <th className="p-2.5 w-28 bg-[#0b2245]">Wholesale Price (₹)</th>
+                          <th className="p-2.5 w-32">Pack Label (Optional)</th>
+                          <th className="p-2.5 text-center w-20">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-200">
+                        {variantRows.map((row, idx) => (
+                          <tr key={row.id} className="hover:bg-blue-50/30 transition">
+                            {/* Row Index */}
+                            <td className="p-2.5 text-center font-bold text-gray-500 font-mono text-[11px]">
+                              {idx + 1}
+                            </td>
+
+                            {/* Pack Size Input */}
+                            <td className="p-2">
+                              <input
+                                type="number"
+                                step="any"
+                                min="0.01"
+                                placeholder="e.g. 1"
+                                value={row.packSize}
+                                onChange={(e) => handleUpdateVariantRow(idx, 'packSize', e.target.value)}
+                                className="w-full p-1.5 border border-gray-300 rounded-lg text-xs font-bold text-gray-900 outline-none focus:border-[#0F2C59]"
+                              />
+                            </td>
+
+                            {/* Unit Select */}
+                            <td className="p-2">
+                              <select
+                                value={row.unit}
+                                onChange={(e) =>
+                                  handleUpdateVariantRow(idx, 'unit', e.target.value as UnitType | '')
+                                }
+                                className="w-full p-1.5 border border-gray-300 rounded-lg text-xs font-bold text-gray-900 outline-none bg-white focus:border-[#0F2C59]"
+                              >
+                                <option value="">Select Unit</option>
+                                {Object.values(UnitType).map((u) => (
+                                  <option key={u} value={u}>
+                                    {u}
+                                  </option>
+                                ))}
+                              </select>
+                            </td>
+
+                            {/* MRP Input */}
+                            <td className="p-2">
+                              <input
+                                type="number"
+                                step="any"
+                                min="0"
+                                placeholder="MRP ₹"
+                                value={row.mrp}
+                                onChange={(e) => handleUpdateVariantRow(idx, 'mrp', e.target.value)}
+                                className="w-full p-1.5 border border-gray-300 rounded-lg text-xs font-bold text-gray-900 outline-none focus:border-[#0F2C59]"
+                              />
+                            </td>
+
+                            {/* Selling Price Input */}
+                            <td className="p-2">
+                              <input
+                                type="number"
+                                step="any"
+                                min="0"
+                                placeholder="Retail ₹"
+                                value={row.baseSellingPrice}
+                                onChange={(e) =>
+                                  handleUpdateVariantRow(idx, 'baseSellingPrice', e.target.value)
+                                }
+                                className="w-full p-1.5 border border-emerald-400 bg-emerald-50/40 rounded-lg text-xs font-bold text-emerald-950 outline-none focus:border-emerald-600"
+                              />
+                            </td>
+
+                            {/* Stock Qty */}
+                            <td className="p-2">
+                              <input
+                                type="number"
+                                min="0"
+                                placeholder="Stock"
+                                value={row.stockQuantity}
+                                onChange={(e) =>
+                                  handleUpdateVariantRow(idx, 'stockQuantity', e.target.value)
+                                }
+                                className="w-full p-1.5 border border-gray-300 rounded-lg text-xs text-gray-900 outline-none focus:border-[#0F2C59]"
+                              />
+                            </td>
+
+                            {/* Wholesale Min Qty */}
+                            <td className="p-2 bg-amber-50/30">
+                              <input
+                                type="number"
+                                min="2"
+                                placeholder="Min Qty"
+                                value={row.wholesaleMinQty}
+                                onChange={(e) =>
+                                  handleUpdateVariantRow(idx, 'wholesaleMinQty', e.target.value)
+                                }
+                                className="w-full p-1.5 border border-amber-300 rounded-lg text-xs text-amber-950 outline-none focus:border-amber-500 bg-white"
+                              />
+                            </td>
+
+                            {/* Wholesale Max Qty */}
+                            <td className="p-2 bg-amber-50/30">
+                              <input
+                                type="number"
+                                min="2"
+                                placeholder="Max Qty"
+                                value={row.wholesaleMaxQty}
+                                onChange={(e) =>
+                                  handleUpdateVariantRow(idx, 'wholesaleMaxQty', e.target.value)
+                                }
+                                className="w-full p-1.5 border border-amber-300 rounded-lg text-xs text-amber-950 outline-none focus:border-amber-500 bg-white"
+                              />
+                            </td>
+
+                            {/* Wholesale Price */}
+                            <td className="p-2 bg-amber-50/30">
+                              <input
+                                type="number"
+                                step="any"
+                                min="0"
+                                placeholder="Wholesale ₹"
+                                value={row.wholesalePrice}
+                                onChange={(e) =>
+                                  handleUpdateVariantRow(idx, 'wholesalePrice', e.target.value)
+                                }
+                                className="w-full p-1.5 border border-amber-400 rounded-lg text-xs font-bold text-amber-950 outline-none focus:border-amber-600 bg-amber-50/70"
+                              />
+                            </td>
+
+                            {/* Pack Label */}
+                            <td className="p-2">
+                              <input
+                                type="text"
+                                placeholder="e.g. 1 KG Pouch"
+                                value={row.packLabel}
+                                onChange={(e) => handleUpdateVariantRow(idx, 'packLabel', e.target.value)}
+                                className="w-full p-1.5 border border-gray-300 rounded-lg text-xs text-gray-800 outline-none focus:border-[#0F2C59]"
+                              />
+                            </td>
+
+                            {/* Actions: Duplicate & Delete */}
+                            <td className="p-2 text-center">
+                              <div className="flex items-center justify-center gap-1">
+                                <button
+                                  type="button"
+                                  title="Duplicate this pack variant row"
+                                  onClick={() => handleDuplicateVariantRow(idx)}
+                                  className="p-1.5 text-blue-600 hover:bg-blue-100 rounded-lg transition"
+                                >
+                                  <Copy size={14} />
+                                </button>
+                                <button
+                                  type="button"
+                                  title="Delete this variant row"
+                                  disabled={variantRows.length <= 1}
+                                  onClick={() => handleRemoveVariantRow(idx)}
+                                  className={`p-1.5 rounded-lg transition ${
+                                    variantRows.length <= 1
+                                      ? 'text-gray-300 cursor-not-allowed'
+                                      : 'text-red-500 hover:bg-red-100'
+                                  }`}
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between text-[11px] text-gray-500 px-1">
+                  <span>
+                    💡 <strong>Multiple Options:</strong> Click <em>'+ Add Pack Variant'</em> to add another blank row, click any <em>Quick Preset</em> chip above (e.g. + 500 G, + 1 KG), or click the <Copy size={11} className="inline mx-0.5 text-blue-600" /> icon to duplicate any row.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleAddBlankVariantRow}
+                    className="font-bold text-[#0F2C59] hover:underline flex items-center gap-1 mt-1 sm:mt-0"
                   >
-                    {categories.map((c) => (
-                      <option key={c.id} value={c.id}>{c.name}</option>
-                    ))}
-                  </select>
+                    <Plus size={13} />
+                    <span>+ Add Another Variant Row</span>
+                  </button>
                 </div>
               </div>
 
-              <div className="grid grid-cols-3 gap-2">
-                <div>
-                  <label className="font-bold text-gray-700 block mb-1">Pack Size</label>
-                  <input
-                    type="number"
-                    value={newProductData.variantPackSize}
-                    onChange={(e) => setNewProductData({ ...newProductData, variantPackSize: Number(e.target.value) })}
-                    className="w-full p-2 border rounded-lg"
-                  />
+              {/* Modal Footer Controls */}
+              <div className="flex flex-col sm:flex-row justify-between items-center gap-3 pt-4 border-t border-gray-200 shrink-0">
+                <div className="text-[11px] text-gray-500 font-medium">
+                  {variantRows.length} pack variant(s) ready to create.
                 </div>
-                <div>
-                  <label className="font-bold text-gray-700 block mb-1">Unit</label>
-                  <select
-                    value={newProductData.variantUnit}
-                    onChange={(e) => setNewProductData({ ...newProductData, variantUnit: e.target.value as UnitType })}
-                    className="w-full p-2 border rounded-lg"
+
+                <div className="flex items-center gap-2.5 w-full sm:w-auto justify-end">
+                  <button
+                    type="button"
+                    onClick={handleCloseAddProductModal}
+                    className="px-4 py-2 border border-gray-300 text-gray-700 hover:bg-gray-100 rounded-xl font-bold text-xs transition"
                   >
-                    {Object.values(UnitType).map((u) => (
-                      <option key={u} value={u}>{u}</option>
-                    ))}
-                  </select>
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    id="submit-create-product-btn"
+                    className="px-5 py-2 bg-[#0F2C59] hover:bg-[#153e7d] text-white font-extrabold rounded-xl text-xs shadow-md transition flex items-center gap-2"
+                  >
+                    <Check size={16} className="text-[#D4AF37]" />
+                    <span>Save & Create Product ({variantRows.length} Variants)</span>
+                  </button>
                 </div>
-                <div>
-                  <label className="font-bold text-gray-700 block mb-1">Stock Qty</label>
-                  <input
-                    type="number"
-                    value={newProductData.variantStock}
-                    onChange={(e) => setNewProductData({ ...newProductData, variantStock: Number(e.target.value) })}
-                    className="w-full p-2 border rounded-lg"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="font-bold text-gray-700 block mb-1">MRP (₹)</label>
-                  <input
-                    type="number"
-                    value={newProductData.variantMrp}
-                    onChange={(e) => setNewProductData({ ...newProductData, variantMrp: Number(e.target.value) })}
-                    className="w-full p-2 border rounded-lg"
-                  />
-                </div>
-                <div>
-                  <label className="font-bold text-gray-700 block mb-1">Base Selling Price (₹)</label>
-                  <input
-                    type="number"
-                    value={newProductData.variantBasePrice}
-                    onChange={(e) => setNewProductData({ ...newProductData, variantBasePrice: Number(e.target.value) })}
-                    className="w-full p-2 border rounded-lg"
-                  />
-                </div>
-              </div>
-
-              {/* Wholesale Slab Setting */}
-              <div className="bg-amber-50 p-3 rounded-xl border border-amber-200">
-                <div className="font-bold text-amber-900 mb-1">Wholesale Volume Slab:</div>
-                <div className="grid grid-cols-3 gap-2">
-                  <div>
-                    <span className="text-[10px] text-gray-600 block">Min Qty</span>
-                    <input
-                      type="number"
-                      value={newProductData.tierMin}
-                      onChange={(e) => setNewProductData({ ...newProductData, tierMin: Number(e.target.value) })}
-                      className="w-full p-1.5 border rounded"
-                    />
-                  </div>
-                  <div>
-                    <span className="text-[10px] text-gray-600 block">Max Qty</span>
-                    <input
-                      type="number"
-                      value={newProductData.tierMax}
-                      onChange={(e) => setNewProductData({ ...newProductData, tierMax: Number(e.target.value) })}
-                      className="w-full p-1.5 border rounded"
-                    />
-                  </div>
-                  <div>
-                    <span className="text-[10px] text-gray-600 block">Slab Price (₹)</span>
-                    <input
-                      type="number"
-                      value={newProductData.tierPrice}
-                      onChange={(e) => setNewProductData({ ...newProductData, tierPrice: Number(e.target.value) })}
-                      className="w-full p-1.5 border rounded"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex justify-end gap-2 pt-3">
-                <button
-                  type="button"
-                  onClick={() => setIsAddProductModalOpen(false)}
-                  className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="px-4 py-2 bg-[#0F2C59] text-white font-bold rounded-lg"
-                >
-                  Create Product
-                </button>
               </div>
             </form>
           </div>

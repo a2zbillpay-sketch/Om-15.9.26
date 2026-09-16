@@ -27,81 +27,122 @@ export const AddVariantModal: React.FC<AddVariantModalProps> = ({
   onClose,
   onAddVariant,
 }) => {
-  const [unit, setUnit] = useState<UnitType>(UnitType.G);
-  const [packSize, setPackSize] = useState<number | string>('500');
-  const [packLabel, setPackLabel] = useState('500 G');
+  const [unit, setUnit] = useState<UnitType | ''>('');
+  const [packSize, setPackSize] = useState<string>('');
+  const [packLabel, setPackLabel] = useState('');
   const [isCustomLabel, setIsCustomLabel] = useState(false);
 
-  const [mrp, setMrp] = useState<number | string>('100');
-  const [baseSellingPrice, setBaseSellingPrice] = useState<number | string>('85');
-  const [stockQuantity, setStockQuantity] = useState<number | string>('100');
-  const [maxOrderLimit, setMaxOrderLimit] = useState<number | string>('12');
+  const [mrp, setMrp] = useState<string>('');
+  const [baseSellingPrice, setBaseSellingPrice] = useState<string>('');
+  const [stockQuantity, setStockQuantity] = useState<string>('');
+  const [maxOrderLimit, setMaxOrderLimit] = useState<string>('');
 
   // Wholesale bulk slab
   const [enableTierSlab, setEnableTierSlab] = useState(false);
-  const [tierMinQty, setTierMinQty] = useState<number | string>('5');
-  const [tierUnitPrice, setTierUnitPrice] = useState<number | string>('80');
+  const [tierMinQty, setTierMinQty] = useState<string>('');
+  const [tierUnitPrice, setTierUnitPrice] = useState<string>('');
 
+  const [validationError, setValidationError] = useState<string | null>(null);
   const [savedSuccess, setSavedSuccess] = useState(false);
 
   useEffect(() => {
     if (product && isOpen) {
-      // Default initial state
-      setUnit(UnitType.G);
-      setPackSize('500');
-      setPackLabel('500 G');
+      // Always open completely blank without pre-filling any default numbers or units
+      setUnit('');
+      setPackSize('');
+      setPackLabel('');
       setIsCustomLabel(false);
-      setMrp('100');
-      setBaseSellingPrice('85');
-      setStockQuantity('100');
-      setMaxOrderLimit('12');
+      setMrp('');
+      setBaseSellingPrice('');
+      setStockQuantity('');
+      setMaxOrderLimit('');
       setEnableTierSlab(false);
-      setTierMinQty('5');
-      setTierUnitPrice('80');
+      setTierMinQty('');
+      setTierUnitPrice('');
+      setValidationError(null);
       setSavedSuccess(false);
     }
   }, [product, isOpen]);
 
   // Compute live formatted preview label
   const livePreviewLabel = useMemo(() => {
-    const numericSize = Number(packSize) || 1;
+    if (!packSize && !unit && !packLabel) {
+      return '(Enter size & select unit)';
+    }
+    const numericSize = Number(packSize) || 0;
     return formatVariantPack({
       packLabel: packLabel.trim() || undefined,
       packSize: numericSize,
-      unit,
+      unit: unit || '',
     });
   }, [packLabel, packSize, unit]);
 
   if (!isOpen || !product) return null;
 
-  const handleUnitChange = (newUnit: UnitType) => {
+  const handleUnitChange = (newUnit: UnitType | '') => {
     setUnit(newUnit);
-    // If user hasn't manually entered a custom package label, automatically sync default
     if (!isCustomLabel) {
-      const opt = UNIT_OPTIONS.find((o) => o.value === newUnit);
-      const newSize = opt ? opt.defaultSize : 1;
-      setPackSize(String(newSize));
-      setPackLabel(`${newSize} ${newUnit}`);
+      setPackLabel(packSize && newUnit ? `${packSize} ${newUnit}` : '');
     }
   };
 
   const handleSizeChange = (val: string) => {
     setPackSize(val);
     if (!isCustomLabel) {
-      setPackLabel(val ? `${val} ${unit}` : '');
+      setPackLabel(val && unit ? `${val} ${unit}` : val);
     }
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    setValidationError(null);
 
-    const finalPackSize = Number(packSize) || 1;
-    const finalMrp = Number(mrp) || 0;
-    const finalSellingPrice = Number(baseSellingPrice) || 0;
-    const finalStock = Number(stockQuantity) || 0;
-    const finalMaxLimit = Number(maxOrderLimit) || 10;
+    if (!unit) {
+      setValidationError('Please select a Unit for this pack variant.');
+      return;
+    }
 
-    // Use formatVariantPack to guarantee that the unit (e.g. "G", "KG") is ALWAYS preserved and visible
+    if (!packSize || isNaN(Number(packSize)) || Number(packSize) <= 0) {
+      setValidationError('Please enter a valid numeric Pack Size (e.g. 500, 1, 25).');
+      return;
+    }
+
+    if (!mrp || isNaN(Number(mrp)) || Number(mrp) <= 0) {
+      setValidationError('Please enter a valid MRP in ₹.');
+      return;
+    }
+
+    if (!baseSellingPrice || isNaN(Number(baseSellingPrice)) || Number(baseSellingPrice) <= 0) {
+      setValidationError('Please enter a valid Base Selling Price in ₹.');
+      return;
+    }
+
+    if (Number(baseSellingPrice) > Number(mrp)) {
+      setValidationError(`Base Selling Price (₹${baseSellingPrice}) cannot exceed MRP (₹${mrp}).`);
+      return;
+    }
+
+    if (enableTierSlab) {
+      if (!tierMinQty || Number(tierMinQty) <= 1) {
+        setValidationError('Please specify Wholesale Min Quantity (minimum 2 or more).');
+        return;
+      }
+      if (!tierUnitPrice || Number(tierUnitPrice) <= 0) {
+        setValidationError('Please specify Wholesale Slab Unit Price in ₹.');
+        return;
+      }
+      if (Number(tierUnitPrice) > Number(baseSellingPrice)) {
+        setValidationError(`Wholesale Slab Price (₹${tierUnitPrice}) cannot exceed Base Selling Price (₹${baseSellingPrice}).`);
+        return;
+      }
+    }
+
+    const finalPackSize = Number(packSize);
+    const finalMrp = Number(mrp);
+    const finalSellingPrice = Number(baseSellingPrice);
+    const finalStock = stockQuantity ? Number(stockQuantity) : 0;
+    const finalMaxLimit = maxOrderLimit ? Number(maxOrderLimit) : 12;
+
     const finalLabel = formatVariantPack({
       packLabel: packLabel.trim() || undefined,
       packSize: finalPackSize,
@@ -192,6 +233,13 @@ export const AddVariantModal: React.FC<AddVariantModalProps> = ({
 
         {/* Form Body */}
         <form onSubmit={handleSubmit} className="p-4 sm:p-6 overflow-y-auto space-y-4 text-xs">
+          {validationError && (
+            <div className="p-3 bg-red-50 border border-red-300 text-red-800 rounded-xl flex items-center gap-2 font-bold animate-shake">
+              <AlertCircle size={16} className="text-red-600 shrink-0" />
+              <span>{validationError}</span>
+            </div>
+          )}
+
           {savedSuccess && (
             <div className="p-3 bg-emerald-50 border border-emerald-300 text-emerald-800 rounded-xl flex items-center gap-2 font-bold">
               <Check size={16} className="text-emerald-600" />
@@ -208,9 +256,10 @@ export const AddVariantModal: React.FC<AddVariantModalProps> = ({
               <select
                 id="variant-unit-select"
                 value={unit}
-                onChange={(e) => handleUnitChange(e.target.value as UnitType)}
+                onChange={(e) => handleUnitChange(e.target.value as UnitType | '')}
                 className="w-full p-2.5 border border-gray-300 rounded-xl text-gray-900 focus:border-[#0F2C59] focus:ring-1 focus:ring-[#0F2C59] outline-none bg-white font-bold"
               >
+                <option value="">-- Select Unit (Blank) --</option>
                 {UNIT_OPTIONS.map((opt) => (
                   <option key={opt.value} value={opt.value}>
                     {opt.label}
