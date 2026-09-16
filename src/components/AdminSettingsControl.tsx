@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { Save, Check, RotateCcw, Upload, Image as ImageIcon } from 'lucide-react';
+import { Save, Check, RotateCcw, Upload, Image as ImageIcon, Edit3, Lock } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { INITIAL_SETTINGS } from '../data/seedData';
 import { BrandLogo } from './BrandLogo';
@@ -21,7 +21,36 @@ export const AdminSettingsControl: React.FC = () => {
 
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [isLogoModalOpen, setIsLogoModalOpen] = useState(false);
+  const [isEditingPricing, setIsEditingPricing] = useState(false);
+  const [pricingSavedSuccess, setPricingSavedSuccess] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleSavePricingEngine = () => {
+    updateSettings({
+      advancePaymentDiscountPct: formData.advancePaymentDiscountPct,
+      codBaseCharge: formData.codBaseCharge,
+      freeShippingMinAmount: formData.freeShippingMinAmount,
+      baseDeliveryFee: formData.baseDeliveryFee,
+      referralRewardAmount: formData.referralRewardAmount,
+    });
+    setPricingSavedSuccess(true);
+    setTimeout(() => {
+      setPricingSavedSuccess(false);
+      setIsEditingPricing(false);
+    }, 600);
+  };
+
+  const handleCancelPricingEdit = () => {
+    setFormData((prev) => ({
+      ...prev,
+      advancePaymentDiscountPct: settings.advancePaymentDiscountPct,
+      codBaseCharge: settings.codBaseCharge,
+      freeShippingMinAmount: settings.freeShippingMinAmount,
+      baseDeliveryFee: settings.baseDeliveryFee,
+      referralRewardAmount: settings.referralRewardAmount,
+    }));
+    setIsEditingPricing(false);
+  };
 
   const handleDirectFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -241,7 +270,52 @@ export const AdminSettingsControl: React.FC = () => {
 
         {/* Dynamic Financial Engine Configuration */}
         <div className="space-y-4 bg-gray-50 p-5 rounded-xl border border-gray-200">
-          <h2 className="text-xs font-bold text-[#0F2C59] uppercase tracking-wider">Checkout Pricing Engine</h2>
+          <div className="flex items-center justify-between gap-2 pb-2 border-b border-gray-200">
+            <div className="flex items-center gap-2">
+              <h2 className="text-xs font-bold text-[#0F2C59] uppercase tracking-wider">Checkout Pricing Engine</h2>
+              {!isEditingPricing ? (
+                <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded bg-gray-200 text-gray-700">
+                  <Lock size={10} />
+                  <span>Saved</span>
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded bg-amber-100 text-amber-800 animate-pulse">
+                  <span>Editing</span>
+                </span>
+              )}
+            </div>
+
+            {isEditingPricing ? (
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleCancelPricingEdit}
+                  className="px-2.5 py-1 text-xs text-gray-500 hover:text-gray-700 font-medium rounded transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  id="save-pricing-engine-btn"
+                  onClick={handleSavePricingEngine}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-[#0F2C59] hover:bg-[#153e7d] text-[#D4AF37] font-bold text-xs rounded-lg shadow-sm transition"
+                >
+                  {pricingSavedSuccess ? <Check size={14} className="text-emerald-400" /> : <Save size={14} />}
+                  <span>{pricingSavedSuccess ? 'Saved!' : 'Save'}</span>
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                id="edit-pricing-engine-btn"
+                onClick={() => setIsEditingPricing(true)}
+                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-white hover:bg-gray-100 text-[#0F2C59] border border-gray-300 font-bold text-xs rounded-lg shadow-sm transition hover:border-gray-400"
+              >
+                <Edit3 size={13} className="text-[#0F2C59]" />
+                <span>Edit</span>
+              </button>
+            )}
+          </div>
 
           <div>
             <label className="text-xs font-bold text-gray-700 block mb-1">
@@ -252,6 +326,7 @@ export const AdminSettingsControl: React.FC = () => {
               step="0.5"
               min="0"
               max="25"
+              disabled={!isEditingPricing}
               value={formData.advancePaymentDiscountPct}
               onChange={(e) =>
                 setFormData({
@@ -259,7 +334,11 @@ export const AdminSettingsControl: React.FC = () => {
                   advancePaymentDiscountPct: parseFloat(e.target.value) || 0,
                 })
               }
-              className="w-full p-2.5 text-xs border border-gray-300 rounded-lg bg-white focus:ring-2 focus:ring-[#0F2C59] outline-none"
+              className={`w-full p-2.5 text-xs border rounded-lg transition ${
+                !isEditingPricing
+                  ? 'bg-gray-100/80 text-gray-700 border-gray-200 cursor-not-allowed select-none'
+                  : 'bg-white text-gray-900 border-gray-300 focus:ring-2 focus:ring-[#0F2C59] outline-none shadow-sm'
+              }`}
             />
             <span className="text-[10px] text-gray-500 mt-0.5 block">
               Applied automatically to non-excluded grocery items when paying via UPI/Online.
@@ -271,11 +350,16 @@ export const AdminSettingsControl: React.FC = () => {
             <input
               type="number"
               min="0"
+              disabled={!isEditingPricing}
               value={formData.codBaseCharge}
               onChange={(e) =>
                 setFormData({ ...formData, codBaseCharge: parseFloat(e.target.value) || 0 })
               }
-              className="w-full p-2.5 text-xs border border-gray-300 rounded-lg bg-white focus:ring-2 focus:ring-[#0F2C59] outline-none"
+              className={`w-full p-2.5 text-xs border rounded-lg transition ${
+                !isEditingPricing
+                  ? 'bg-gray-100/80 text-gray-700 border-gray-200 cursor-not-allowed select-none'
+                  : 'bg-white text-gray-900 border-gray-300 focus:ring-2 focus:ring-[#0F2C59] outline-none shadow-sm'
+              }`}
             />
             <span className="text-[10px] text-gray-500 mt-0.5 block">
               First 3 COD orders are always free for any customer.
@@ -290,6 +374,7 @@ export const AdminSettingsControl: React.FC = () => {
               <input
                 type="number"
                 min="0"
+                disabled={!isEditingPricing}
                 value={formData.freeShippingMinAmount}
                 onChange={(e) =>
                   setFormData({
@@ -297,7 +382,11 @@ export const AdminSettingsControl: React.FC = () => {
                     freeShippingMinAmount: parseFloat(e.target.value) || 0,
                   })
                 }
-                className="w-full p-2.5 text-xs border border-gray-300 rounded-lg bg-white focus:ring-2 focus:ring-[#0F2C59] outline-none"
+                className={`w-full p-2.5 text-xs border rounded-lg transition ${
+                  !isEditingPricing
+                    ? 'bg-gray-100/80 text-gray-700 border-gray-200 cursor-not-allowed select-none'
+                    : 'bg-white text-gray-900 border-gray-300 focus:ring-2 focus:ring-[#0F2C59] outline-none shadow-sm'
+                }`}
               />
             </div>
             <div>
@@ -307,6 +396,7 @@ export const AdminSettingsControl: React.FC = () => {
               <input
                 type="number"
                 min="0"
+                disabled={!isEditingPricing}
                 value={formData.baseDeliveryFee}
                 onChange={(e) =>
                   setFormData({
@@ -314,7 +404,11 @@ export const AdminSettingsControl: React.FC = () => {
                     baseDeliveryFee: parseFloat(e.target.value) || 0,
                   })
                 }
-                className="w-full p-2.5 text-xs border border-gray-300 rounded-lg bg-white focus:ring-2 focus:ring-[#0F2C59] outline-none"
+                className={`w-full p-2.5 text-xs border rounded-lg transition ${
+                  !isEditingPricing
+                    ? 'bg-gray-100/80 text-gray-700 border-gray-200 cursor-not-allowed select-none'
+                    : 'bg-white text-gray-900 border-gray-300 focus:ring-2 focus:ring-[#0F2C59] outline-none shadow-sm'
+                }`}
               />
             </div>
           </div>
@@ -324,6 +418,7 @@ export const AdminSettingsControl: React.FC = () => {
             <input
               type="number"
               min="0"
+              disabled={!isEditingPricing}
               value={formData.referralRewardAmount}
               onChange={(e) =>
                 setFormData({
@@ -331,12 +426,39 @@ export const AdminSettingsControl: React.FC = () => {
                   referralRewardAmount: parseFloat(e.target.value) || 0,
                 })
               }
-              className="w-full p-2.5 text-xs border border-gray-300 rounded-lg bg-white focus:ring-2 focus:ring-[#0F2C59] outline-none"
+              className={`w-full p-2.5 text-xs border rounded-lg transition ${
+                !isEditingPricing
+                  ? 'bg-gray-100/80 text-gray-700 border-gray-200 cursor-not-allowed select-none'
+                  : 'bg-white text-gray-900 border-gray-300 focus:ring-2 focus:ring-[#0F2C59] outline-none shadow-sm'
+              }`}
             />
             <span className="text-[10px] text-gray-500 mt-0.5 block">
               Credited directly to customer wallet upon referred friend’s first completed order.
             </span>
           </div>
+
+          {isEditingPricing && (
+            <div className="pt-3 border-t border-gray-200 flex items-center justify-between">
+              <span className="text-[11px] text-gray-500 font-medium">Click Save to persist changes to the engine</span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleCancelPricingEdit}
+                  className="px-3 py-1.5 text-xs text-gray-500 hover:text-gray-700 font-medium rounded transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSavePricingEngine}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-[#0F2C59] hover:bg-[#153e7d] text-[#D4AF37] font-bold text-xs rounded-lg shadow-sm transition"
+                >
+                  {pricingSavedSuccess ? <Check size={14} className="text-emerald-400" /> : <Save size={14} />}
+                  <span>{pricingSavedSuccess ? 'Saved!' : 'Save Pricing'}</span>
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 

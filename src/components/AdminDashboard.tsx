@@ -9,6 +9,7 @@ import {
   Truck,
   Plus,
   Edit2,
+  Edit3,
   Trash2,
   Search,
   Filter,
@@ -17,9 +18,12 @@ import {
   Upload,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { OrderStatus, PaymentMethod, Product, UnitType } from '../types';
+import { OrderStatus, PaymentMethod, Product, ProductVariant, UnitType } from '../types';
 import { AdminSettingsControl } from './AdminSettingsControl';
 import { LogoUploadModal } from './LogoUploadModal';
+import { EditProductModal } from './EditProductModal';
+import { AddVariantModal } from './AddVariantModal';
+import { formatVariantPack } from '../utils/variantFormatter';
 
 export const AdminDashboard: React.FC = () => {
   const {
@@ -40,6 +44,22 @@ export const AdminDashboard: React.FC = () => {
 
   // Add product modal state
   const [isAddProductModalOpen, setIsAddProductModalOpen] = useState(false);
+  // Edit individual product state
+  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  // Add variant to individual product state
+  const [addingVariantProduct, setAddingVariantProduct] = useState<Product | null>(null);
+
+  const handleSaveEditProduct = (productId: string, updates: Partial<Product>) => {
+    updateProduct(productId, updates);
+  };
+
+  const handleAddVariantToProduct = (productId: string, newVariant: ProductVariant) => {
+    const target = products.find((p) => p.id === productId);
+    if (!target) return;
+    updateProduct(productId, {
+      variants: [...target.variants, newVariant],
+    });
+  };
   const [newProductData, setNewProductData] = useState({
     name: '',
     brand: '',
@@ -374,8 +394,38 @@ export const AdminDashboard: React.FC = () => {
                       />
                       <div className="flex-1 min-w-0">
                         <div className="text-[10px] font-bold text-[#FF6B00] uppercase truncate">{p.brand}</div>
-                        <h4 className="text-xs font-bold text-gray-900 line-clamp-1">{p.name}</h4>
-                        <div className="text-[10px] text-gray-500 mt-0.5">
+                        
+                        {/* Item Name and Action Buttons */}
+                        <div className="mt-0.5">
+                          <h4 className="text-sm font-extrabold text-gray-900 line-clamp-1">{p.name}</h4>
+                          
+                          {/* Two action buttons in front of every individual item */}
+                          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                            <button
+                              type="button"
+                              id={`item-edit-btn-${p.id}`}
+                              onClick={() => setEditingProduct(p)}
+                              className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-white hover:bg-gray-100 text-[#0F2C59] border border-[#0F2C59]/30 hover:border-[#0F2C59] text-xs font-bold rounded-lg shadow-2xs transition active:scale-95 cursor-pointer touch-manipulation"
+                              title={`Edit ${p.name}`}
+                            >
+                              <Edit3 size={13} className="text-[#0F2C59]" />
+                              <span>Edit</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              id={`item-add-variant-btn-${p.id}`}
+                              onClick={() => setAddingVariantProduct(p)}
+                              className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-[#0F2C59] hover:bg-[#163a6e] text-white text-xs font-bold rounded-lg shadow-2xs transition active:scale-95 cursor-pointer touch-manipulation"
+                              title={`+ Add Variant for ${p.name}`}
+                            >
+                              <Plus size={13} className="text-[#D4AF37]" />
+                              <span>+ Add Variant</span>
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="text-[10px] text-gray-500 mt-1.5 font-medium">
                           {p.variants.length} Pack Sizes / Variants
                         </div>
                       </div>
@@ -385,7 +435,7 @@ export const AdminDashboard: React.FC = () => {
                       {p.variants.map((v) => (
                         <div key={v.id} className="bg-gray-50 p-2 rounded-lg border border-gray-200 text-xs">
                           <div className="flex justify-between items-center font-bold">
-                            <span>{v.packLabel}</span>
+                            <span>{formatVariantPack(v)}</span>
                             <span className="text-[#0F2C59]">₹{v.baseSellingPrice} (MRP ₹{v.mrp})</span>
                           </div>
                           <div className="flex justify-between items-center text-[10px] text-gray-500 mt-1">
@@ -581,6 +631,22 @@ export const AdminDashboard: React.FC = () => {
       <LogoUploadModal
         isOpen={isLogoModalOpen}
         onClose={() => setIsLogoModalOpen(false)}
+      />
+
+      {/* Edit Individual Item Modal */}
+      <EditProductModal
+        product={editingProduct}
+        isOpen={Boolean(editingProduct)}
+        onClose={() => setEditingProduct(null)}
+        onSave={handleSaveEditProduct}
+      />
+
+      {/* Add Variant to Specific Item Modal */}
+      <AddVariantModal
+        product={addingVariantProduct}
+        isOpen={Boolean(addingVariantProduct)}
+        onClose={() => setAddingVariantProduct(null)}
+        onAddVariant={handleAddVariantToProduct}
       />
     </div>
   );

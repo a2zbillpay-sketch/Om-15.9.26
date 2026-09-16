@@ -20,6 +20,7 @@ import {
   INITIAL_USERS,
   INITIAL_ORDERS,
 } from '../data/seedData';
+import { formatVariantPack } from '../utils/variantFormatter';
 import {
   calculateCheckoutTotals,
   canCancelOrder,
@@ -88,7 +89,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const [products, setProducts] = useState<Product[]>(() => {
     const saved = localStorage.getItem('om_products');
-    return saved ? JSON.parse(saved) : INITIAL_PRODUCTS;
+    if (!saved) return INITIAL_PRODUCTS;
+    try {
+      const parsed: Product[] = JSON.parse(saved);
+      const existingIds = new Set(parsed.map((p) => p.id));
+      const missing = INITIAL_PRODUCTS.filter((p) => !existingIds.has(p.id));
+      const normalized = parsed.map((p) => {
+        let name = p.name;
+        let brand = p.brand;
+        if (p.id === 'prod-6' && (p.name.includes('(Price Capped)') || p.name.includes('Vacuum'))) {
+          name = 'Tata Salt';
+        }
+        if (p.id === 'prod-3' && p.name.includes('Shudh Chakki')) {
+          name = 'Aashirvaad Atta';
+          brand = 'Aashirvaad';
+        }
+        const updatedVariants = (p.variants || []).map((v) => ({
+          ...v,
+          packLabel: formatVariantPack(v),
+        }));
+        return { ...p, name, brand, variants: updatedVariants };
+      });
+      return [...normalized, ...missing];
+    } catch {
+      return INITIAL_PRODUCTS;
+    }
   });
 
   const [users, setUsers] = useState<User[]>(() => {

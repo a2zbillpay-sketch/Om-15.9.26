@@ -89,10 +89,11 @@ export const CustomerStore: React.FC<CustomerStoreProps> = ({
             <div className="space-y-2">
               <PWAInstallButton variant="prominent" />
               <button
+                type="button"
                 onClick={onOpenWallet}
-                className="w-full text-xs font-bold text-amber-200 hover:text-white underline py-1"
+                className="w-full text-xs font-black text-[#FFE600] hover:text-yellow-300 underline py-1 tracking-wide transition-colors"
               >
-                Earn ₹{settings.referralRewardAmount} by referring a neighbor →
+                Earn ₹21 by referring friends →
               </button>
             </div>
           </div>

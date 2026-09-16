@@ -3,6 +3,7 @@ import { Plus, Minus, Check, Layers, AlertCircle, Sparkles } from 'lucide-react'
 import { Product, ProductVariant } from '../types';
 import { useApp } from '../context/AppContext';
 import { getActiveUnitPrice } from '../lib/engine/checkout-calculator';
+import { formatVariantPack } from '../utils/variantFormatter';
 
 interface ProductCardProps {
   product: Product;
@@ -110,7 +111,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
                         : 'bg-gray-50 text-gray-700 border-gray-200 hover:bg-gray-100'
                     }`}
                   >
-                    {v.packLabel || `${v.packSize} ${v.unit}`}
+                    {formatVariantPack(v)}
                   </button>
                 ))}
               </div>
@@ -155,7 +156,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
             )}
           </div>
           <div className="text-[10px] text-gray-500 font-medium">
-            Per {currentVariant.packLabel || `${currentVariant.packSize} ${currentVariant.unit}`}
+            Per {formatVariantPack(currentVariant)}
           </div>
         </div>
 

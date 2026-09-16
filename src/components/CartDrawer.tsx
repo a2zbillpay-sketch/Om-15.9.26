@@ -2,6 +2,7 @@ import React from 'react';
 import { X, Trash2, Plus, Minus, ArrowRight, ShieldCheck, Truck, Sparkles } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { getActiveUnitPrice } from '../lib/engine/checkout-calculator';
+import { formatVariantPack } from '../utils/variantFormatter';
 
 interface CartDrawerProps {
   isOpen: boolean;
@@ -123,7 +124,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                       {item.product.name}
                     </h4>
                     <p className="text-[11px] text-gray-500">
-                      {item.variant.packLabel || `${item.variant.packSize} ${item.variant.unit}`}
+                      {formatVariantPack(item.variant)}
                     </p>
 
                     <div className="flex items-center gap-2 mt-1">
