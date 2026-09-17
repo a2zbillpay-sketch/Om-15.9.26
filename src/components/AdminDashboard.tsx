@@ -132,13 +132,14 @@ export const AdminDashboard: React.FC = () => {
   // Multiple variants state for the new product - always starts with a 100% BLANK row
   const [variantRows, setVariantRows] = useState<VariantFormRow[]>([createBlankVariantRow()]);
   const [formValidationError, setFormValidationError] = useState<string | null>(null);
+  const [isSubmittingProduct, setIsSubmittingProduct] = useState(false);
 
   const handleOpenAddProductModal = () => {
     setNewProductData({
       name: '',
       brand: '',
       description: '',
-      categoryId: categories[0]?.id || '',
+      categoryId: '',
       imageUrl: '',
       isDiscountExcluded: false,
     });
@@ -259,13 +260,24 @@ export const AdminDashboard: React.FC = () => {
       c.phone.includes(customerSearch)
   );
 
-  const handleCreateProduct = (e: React.FormEvent) => {
+  const handleCreateProduct = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormValidationError(null);
 
     const trimmedName = newProductData.name.trim();
     if (!trimmedName) {
-      setFormValidationError('Please enter a Product Name.');
+      setFormValidationError('Please enter product name.');
+      return;
+    }
+
+    const trimmedBrand = newProductData.brand.trim();
+    if (!trimmedBrand) {
+      setFormValidationError('Please enter brand name.');
+      return;
+    }
+
+    if (!newProductData.categoryId) {
+      setFormValidationError('Please select a category.');
       return;
     }
 
@@ -280,22 +292,22 @@ export const AdminDashboard: React.FC = () => {
       const rowNum = i + 1;
 
       if (!row.packSize || isNaN(Number(row.packSize)) || Number(row.packSize) <= 0) {
-        setFormValidationError(`Variant #${rowNum}: Please enter a valid positive Pack Size (e.g. 1, 500, 25).`);
+        setFormValidationError(`Variant #${rowNum}: Please enter pack size.`);
         return;
       }
 
       if (!row.unit) {
-        setFormValidationError(`Variant #${rowNum}: Please select a Unit (e.g. KG, G, LITER, BOX, KATTA).`);
+        setFormValidationError(`Variant #${rowNum}: Please select unit.`);
         return;
       }
 
       if (!row.mrp || isNaN(Number(row.mrp)) || Number(row.mrp) <= 0) {
-        setFormValidationError(`Variant #${rowNum}: Please enter MRP in ₹.`);
+        setFormValidationError(`Variant #${rowNum}: Please enter MRP.`);
         return;
       }
 
       if (!row.baseSellingPrice || isNaN(Number(row.baseSellingPrice)) || Number(row.baseSellingPrice) <= 0) {
-        setFormValidationError(`Variant #${rowNum}: Please enter Base Selling Price in ₹.`);
+        setFormValidationError(`Variant #${rowNum}: Please enter selling price.`);
         return;
       }
 
@@ -371,18 +383,27 @@ export const AdminDashboard: React.FC = () => {
 
     const product = {
       name: trimmedName,
-      brand: newProductData.brand.trim() || 'Om Premium',
+      brand: trimmedBrand,
       description: newProductData.description.trim(),
-      categoryId: newProductData.categoryId || categories[0]?.id || 'cat-1',
-      imageUrl:
-        newProductData.imageUrl.trim() ||
-        'https://images.unsplash.com/photo-1586201375761-83865001e31c?auto=format&fit=crop&w=500&q=80',
+      categoryId: newProductData.categoryId,
+      imageUrl: newProductData.imageUrl.trim() || undefined,
       isDiscountExcluded: newProductData.isDiscountExcluded,
       variants: constructedVariants,
     };
 
-    addProduct(product);
-    handleCloseAddProductModal();
+    setIsSubmittingProduct(true);
+    try {
+      const result = await addProduct(product);
+      if (!result.success) {
+        setFormValidationError(result.error || 'Failed to save product to central database.');
+        return;
+      }
+      handleCloseAddProductModal();
+    } catch (err: any) {
+      setFormValidationError(err?.message || 'An unexpected error occurred while saving.');
+    } finally {
+      setIsSubmittingProduct(false);
+    }
   };
 
   return (
@@ -677,11 +698,17 @@ export const AdminDashboard: React.FC = () => {
                 <div key={p.id} className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm flex flex-col justify-between">
                   <div>
                     <div className="flex gap-3">
-                      <img
-                        src={p.imageUrl}
-                        alt={p.name}
-                        className="w-16 h-16 rounded-lg object-cover border shrink-0"
-                      />
+                      {p.imageUrl && p.imageUrl.trim() ? (
+                        <img
+                          src={p.imageUrl}
+                          alt={p.name}
+                          className="w-16 h-16 rounded-lg object-cover border shrink-0"
+                        />
+                      ) : (
+                        <div className="w-16 h-16 rounded-lg bg-gray-100 border border-gray-200 shrink-0 flex items-center justify-center text-gray-400">
+                          <Package size={24} />
+                        </div>
+                      )}
                       <div className="flex-1 min-w-0">
                         <div className="text-[10px] font-bold text-[#FF6B00] uppercase truncate">{p.brand}</div>
                         
@@ -1246,10 +1273,11 @@ export const AdminDashboard: React.FC = () => {
                   <button
                     type="submit"
                     id="submit-create-product-btn"
-                    className="px-5 py-2 bg-[#0F2C59] hover:bg-[#153e7d] text-white font-extrabold rounded-xl text-xs shadow-md transition flex items-center gap-2"
+                    disabled={isSubmittingProduct}
+                    className="px-5 py-2 bg-[#0F2C59] hover:bg-[#153e7d] text-white font-extrabold rounded-xl text-xs shadow-md transition flex items-center gap-2 disabled:opacity-50"
                   >
                     <Check size={16} className="text-[#D4AF37]" />
-                    <span>Save & Create Product ({variantRows.length} Variants)</span>
+                    <span>{isSubmittingProduct ? 'Saving to Database...' : `Save & Create Product (${variantRows.length} Variants)`}</span>
                   </button>
                 </div>
               </div>

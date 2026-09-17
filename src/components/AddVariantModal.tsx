@@ -10,15 +10,15 @@ interface AddVariantModalProps {
   onAddVariant: (productId: string, newVariant: ProductVariant) => void;
 }
 
-const UNIT_OPTIONS: { value: UnitType; label: string; defaultSize: number }[] = [
-  { value: UnitType.G, label: 'G (Grams - e.g. 500 G, 250 G, 100 G)', defaultSize: 500 },
-  { value: UnitType.KG, label: 'KG (Kilograms - e.g. 1 KG, 5 KG, 10 KG)', defaultSize: 1 },
-  { value: UnitType.ML, label: 'ML (Milliliters - e.g. 200 ML, 500 ML)', defaultSize: 500 },
-  { value: UnitType.LITER, label: 'LITER (Liters - e.g. 1 LITER, 5 LITER)', defaultSize: 1 },
-  { value: UnitType.BOX, label: 'BOX (Box / Pack)', defaultSize: 1 },
-  { value: UnitType.CAN, label: 'CAN (Can / Tin / Pipa)', defaultSize: 1 },
-  { value: UnitType.KATTA, label: 'KATTA (Bori / Sack - Wholesale)', defaultSize: 25 },
-  { value: UnitType.NOS, label: 'NOS (Pieces / Units)', defaultSize: 1 },
+const UNIT_OPTIONS: { value: UnitType; label: string }[] = [
+  { value: UnitType.G, label: 'G (Grams - e.g. 500 G, 250 G, 100 G)' },
+  { value: UnitType.KG, label: 'KG (Kilograms - e.g. 1 KG, 5 KG, 10 KG)' },
+  { value: UnitType.ML, label: 'ML (Milliliters - e.g. 200 ML, 500 ML)' },
+  { value: UnitType.LITER, label: 'LITER (Liters - e.g. 1 LITER, 5 LITER)' },
+  { value: UnitType.BOX, label: 'BOX (Box / Pack)' },
+  { value: UnitType.CAN, label: 'CAN (Can / Tin / Pipa)' },
+  { value: UnitType.KATTA, label: 'KATTA (Bori / Sack - Wholesale)' },
+  { value: UnitType.NOS, label: 'NOS (Pieces / Units)' },
 ];
 
 export const AddVariantModal: React.FC<AddVariantModalProps> = ({

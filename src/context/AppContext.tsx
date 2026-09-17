@@ -36,6 +36,9 @@ import {
   updateOrderStatusInSupabase,
   saveCustomerProfileToSupabase,
   fetchCustomerProfileFromSupabase,
+  saveProductToSupabase,
+  fetchProductsFromSupabase,
+  deleteProductFromSupabase,
 } from '../lib/supabase';
 
 export type CustomerFlowStep = 'AUTH' | 'PROFILE' | 'SHOP';
@@ -76,7 +79,7 @@ interface AppContextType {
   updateSettings: (newSettings: Partial<SystemSetting>) => void;
   categories: Category[];
   products: Product[];
-  addProduct: (product: Omit<Product, 'id' | 'createdAt'>) => void;
+  addProduct: (product: Omit<Product, 'id' | 'createdAt'>) => Promise<{ success: boolean; error?: string }>;
   updateProduct: (id: string, updates: Partial<Product>) => void;
   deleteProduct: (id: string) => void;
   cart: CartItem[];
@@ -103,6 +106,7 @@ interface AppContextType {
   logout: () => void;
   isSupabaseConfigured: boolean;
   refreshOrders: () => Promise<void>;
+  refreshProducts: () => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -288,11 +292,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  // Synchronize central product catalog with Supabase
+  const refreshProducts = async () => {
+    if (!isSupabaseConfigured) return;
+    try {
+      const dbProducts = await fetchProductsFromSupabase();
+      // If Supabase is temporarily unavailable (returns null), do not overwrite central catalog
+      if (dbProducts !== null) {
+        const dbIds = new Set(dbProducts.map((p) => p.id));
+        const remainingInitials = INITIAL_PRODUCTS.filter((p) => !dbIds.has(p.id));
+        const merged = [...dbProducts, ...remainingInitials];
+        setProducts(merged);
+      }
+    } catch (err) {
+      console.warn('Error refreshing products from Supabase:', err);
+    }
+  };
+
   useEffect(() => {
     if (isSupabaseConfigured) {
       refreshOrders();
     }
   }, [currentUser.id, currentUser.phone, activeRole]);
+
+  useEffect(() => {
+    if (isSupabaseConfigured) {
+      refreshProducts();
+    }
+  }, [isSupabaseConfigured]);
 
   const setActiveRole = (role: Role) => {
     setActiveRoleState(role);
@@ -315,21 +342,64 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }));
   };
 
-  const addProduct = (newProd: Omit<Product, 'id' | 'createdAt'>) => {
+  const addProduct = async (
+    newProd: Omit<Product, 'id' | 'createdAt'>
+  ): Promise<{ success: boolean; error?: string }> => {
+    // 1. Validate the product data
+    if (!newProd.name || !newProd.name.trim()) {
+      return { success: false, error: 'Product name is required.' };
+    }
+    if (!newProd.brand || !newProd.brand.trim()) {
+      return { success: false, error: 'Brand is required.' };
+    }
+    if (!newProd.variants || newProd.variants.length === 0) {
+      return { success: false, error: 'At least one variant is required.' };
+    }
+
     const id = `prod-${Date.now()}`;
     const product: Product = {
       ...newProd,
       id,
       createdAt: new Date().toISOString(),
+      variants: (newProd.variants || []).map((v, idx) => ({
+        ...v,
+        id: v.id || `var-${id}-${idx + 1}`,
+        productId: id,
+      })),
     };
+
+    // 2. Save product to Supabase and WAIT for operation to complete
+    if (isSupabaseConfigured) {
+      const saveResult = await saveProductToSupabase(product);
+      if (!saveResult.success) {
+        // Do NOT update React state or localStorage on failure
+        return {
+          success: false,
+          error: saveResult.error || 'Failed to save product to central database.',
+        };
+      }
+    }
+
+    // 3. Only after successful Supabase persistence:
+    // Update React product state (which subsequently updates localStorage cache)
     setProducts((prev) => [product, ...prev]);
+    return { success: true };
   };
 
-  const updateProduct = (id: string, updates: Partial<Product>) => {
-    setProducts((prev) => prev.map((p) => (p.id === id ? { ...p, ...updates } : p)));
+  const updateProduct = async (id: string, updates: Partial<Product>) => {
+    const current = products.find((p) => p.id === id);
+    if (!current) return;
+    const updated = { ...current, ...updates };
+    if (isSupabaseConfigured) {
+      await saveProductToSupabase(updated);
+    }
+    setProducts((prev) => prev.map((p) => (p.id === id ? updated : p)));
   };
 
-  const deleteProduct = (id: string) => {
+  const deleteProduct = async (id: string) => {
+    if (isSupabaseConfigured) {
+      await deleteProductFromSupabase(id);
+    }
     setProducts((prev) => prev.filter((p) => p.id !== id));
   };
 
@@ -751,6 +821,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       fetchCustomerOrdersFromSupabase(finalUser.id, cleanPhone).then((dbOrders) => {
         if (dbOrders) setOrders(dbOrders);
       });
+      refreshProducts();
     }
 
     return finalUser;
@@ -763,6 +834,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setSelectedAddressId(null);
     setCustomerFlowStep('AUTH');
     setIsAuthModalOpen(false);
+    refreshProducts();
   };
 
   return (
@@ -803,6 +875,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         logout,
         isSupabaseConfigured,
         refreshOrders,
+        refreshProducts,
       }}
     >
       {children}

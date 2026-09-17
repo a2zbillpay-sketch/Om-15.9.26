@@ -1,5 +1,5 @@
 import React from 'react';
-import { X, Trash2, Plus, Minus, ArrowRight, ShieldCheck, Truck, Sparkles } from 'lucide-react';
+import { X, Trash2, Plus, Minus, ArrowRight, ShieldCheck, Truck, Sparkles, Package } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { getActiveUnitPrice } from '../lib/engine/checkout-calculator';
 import { formatVariantPack } from '../utils/variantFormatter';
@@ -113,11 +113,17 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
 
               return (
                 <div key={item.variantId} className="pt-3 first:pt-0 flex gap-3 items-center">
-                  <img
-                    src={item.product.imageUrl}
-                    alt={item.product.name}
-                    className="w-16 h-16 rounded-xl object-cover border border-gray-200 shrink-0"
-                  />
+                  {item.product.imageUrl && item.product.imageUrl.trim() ? (
+                    <img
+                      src={item.product.imageUrl}
+                      alt={item.product.name}
+                      className="w-16 h-16 rounded-xl object-cover border border-gray-200 shrink-0"
+                    />
+                  ) : (
+                    <div className="w-16 h-16 rounded-xl bg-gray-100 border border-gray-200 shrink-0 flex items-center justify-center text-gray-400">
+                      <Package size={22} className="stroke-[1.5]" />
+                    </div>
+                  )}
 
                   <div className="flex-1 min-w-0">
                     <h4 className="text-xs font-bold text-gray-900 truncate">

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Plus, Minus, Check, Layers, AlertCircle, Sparkles } from 'lucide-react';
+import { Plus, Minus, Check, Layers, AlertCircle, Sparkles, Package } from 'lucide-react';
 import { Product, ProductVariant } from '../types';
 import { useApp } from '../context/AppContext';
 import { getActiveUnitPrice } from '../lib/engine/checkout-calculator';
@@ -57,13 +57,20 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
     >
       <div>
         {/* Product Image & Badges */}
-        <div className="relative h-44 bg-gray-100 overflow-hidden">
-          <img
-            src={product.imageUrl || 'https://images.unsplash.com/photo-1586201375761-83865001e31c?auto=format&fit=crop&w=500&q=80'}
-            alt={product.name}
-            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-            loading="lazy"
-          />
+        <div className="relative h-44 bg-gray-100 overflow-hidden flex items-center justify-center">
+          {product.imageUrl && product.imageUrl.trim() ? (
+            <img
+              src={product.imageUrl}
+              alt={product.name}
+              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+              loading="lazy"
+            />
+          ) : (
+            <div className="w-full h-full flex flex-col items-center justify-center text-gray-400 bg-gray-50/80">
+              <Package size={36} className="text-gray-300 stroke-[1.5]" />
+              <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mt-1.5">{product.brand}</span>
+            </div>
+          )}
 
           {/* Discount Badge */}
           {discountPercent > 0 && (
