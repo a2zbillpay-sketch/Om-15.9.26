@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo, useCallback } from 'react';
 import {
   User,
   Role,
@@ -107,6 +107,9 @@ interface AppContextType {
   isSupabaseConfigured: boolean;
   refreshOrders: () => Promise<void>;
   refreshProducts: () => Promise<void>;
+  isAdminSessionValid: boolean;
+  checkAdminSession: () => Promise<boolean>;
+  logoutAdminSession: () => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -320,6 +323,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       refreshProducts();
     }
   }, [isSupabaseConfigured]);
+
+  const [isAdminSessionValid, setIsAdminSessionValid] = useState<boolean>(false);
+
+  const checkAdminSession = useCallback(async (): Promise<boolean> => {
+    try {
+      const res = await fetch('/api/auth/me', { method: 'GET' });
+      if (!res.ok) {
+        setIsAdminSessionValid(false);
+        return false;
+      }
+      const data = await res.json().catch(() => ({}));
+      const isValid = Boolean(data?.authenticated && data?.role === 'SHOPKEEPER');
+      setIsAdminSessionValid(isValid);
+      return isValid;
+    } catch {
+      setIsAdminSessionValid(false);
+      return false;
+    }
+  }, []);
+
+  const logoutAdminSession = useCallback(async () => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+    } catch {
+      // ignore network errors
+    } finally {
+      setIsAdminSessionValid(false);
+      setActiveRoleState(Role.CUSTOMER);
+      localStorage.removeItem('om_customer_session');
+    }
+  }, []);
 
   const setActiveRole = (role: Role) => {
     setActiveRoleState(role);
@@ -876,6 +910,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isSupabaseConfigured,
         refreshOrders,
         refreshProducts,
+        isAdminSessionValid,
+        checkAdminSession,
+        logoutAdminSession,
       }}
     >
       {children}

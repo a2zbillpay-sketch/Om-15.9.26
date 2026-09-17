@@ -44,6 +44,7 @@ export const Navbar: React.FC<NavbarProps> = ({
     settings,
     orders,
     logout,
+    logoutAdminSession,
     setIsAuthModalOpen,
     isAuthModalOpen,
   } = useApp();
@@ -246,7 +247,10 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <span>Admin Verified</span>
               </span>
               <button
-                onClick={logout}
+                onClick={() => {
+                  logoutAdminSession();
+                  logout();
+                }}
                 className="flex items-center gap-1 bg-white/10 hover:bg-white/20 text-gray-300 hover:text-white p-2 rounded-lg text-xs transition border border-white/10"
                 title="Logout / Exit Admin"
               >

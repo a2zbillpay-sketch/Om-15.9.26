@@ -37,7 +37,7 @@ export const EntryLoginPage: React.FC<EntryLoginPageProps> = ({
 
   if (!isOpen) return null;
 
-  const handleLogin = (e?: React.FormEvent) => {
+  const handleLogin = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     setError('');
 
@@ -46,13 +46,32 @@ export const EntryLoginPage: React.FC<EntryLoginPageProps> = ({
         setError('Please enter your admin password');
         return;
       }
-      loginWithPhone(
-        phone.trim() || '9876543210',
-        Role.SHOPKEEPER,
-        name.trim() || 'Om Prakash Sharma'
-      );
-      onClose();
-      return;
+
+      try {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: password.trim() }),
+        });
+
+        const data = await res.json().catch(() => ({}));
+
+        if (!res.ok || !data.authenticated) {
+          setError(data.error || 'Invalid credentials');
+          return;
+        }
+
+        loginWithPhone(
+          phone.trim() || '9876543210',
+          Role.SHOPKEEPER,
+          name.trim() || 'Om Prakash Sharma'
+        );
+        onClose();
+        return;
+      } catch {
+        setError('Authentication service unavailable. Please check your connection.');
+        return;
+      }
     }
 
     const cleanPhone = phone.replace(/\D/g, '');

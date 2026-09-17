@@ -44,7 +44,7 @@ export const CustomerAuthPage: React.FC<CustomerAuthPageProps> = ({ onSuccess })
     }
   };
 
-  const handleAdminLogin = (e: React.FormEvent) => {
+  const handleAdminLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
 
@@ -53,10 +53,30 @@ export const CustomerAuthPage: React.FC<CustomerAuthPageProps> = ({ onSuccess })
       return;
     }
 
-    // Direct shopkeeper login
-    loginWithPhone('9876543210', Role.SHOPKEEPER, 'Om Prakash Sharma');
-    setActiveRole(Role.SHOPKEEPER);
-    if (onSuccess) onSuccess();
+    setIsLoading(true);
+
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: adminPassword.trim() }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok || !data.authenticated) {
+        setError(data.error || 'Invalid credentials');
+        return;
+      }
+
+      loginWithPhone('9876543210', Role.SHOPKEEPER, 'Om Prakash Sharma');
+      setActiveRole(Role.SHOPKEEPER);
+      if (onSuccess) onSuccess();
+    } catch {
+      setError('Authentication service unavailable. Please check your connection.');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -260,7 +280,7 @@ export const CustomerAuthPage: React.FC<CustomerAuthPageProps> = ({ onSuccess })
                     required
                     value={adminPassword}
                     onChange={(e) => setAdminPassword(e.target.value)}
-                    placeholder="Enter password (e.g. admin123 or direct access)"
+                    placeholder="Enter admin password"
                     className="w-full pl-9 pr-3.5 py-2.5 border border-gray-300 rounded-xl text-sm font-semibold text-gray-800 focus:ring-2 focus:ring-[#0F2C59] outline-none"
                   />
                 </div>

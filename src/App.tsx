@@ -21,6 +21,7 @@ import { BrandLogo } from './components/BrandLogo';
 import { CustomerAuthPage } from './components/CustomerAuthPage';
 import { CustomerProfilePage } from './components/CustomerProfilePage';
 import { StorePolicyModal, PolicyType } from './components/StorePolicyModal';
+import { AdminLoginModal } from './components/AdminLoginModal';
 import { ShieldCheck, Phone, MapPin, Mail, Award } from 'lucide-react';
 
 const MainLayout: React.FC = () => {
@@ -34,9 +35,12 @@ const MainLayout: React.FC = () => {
     setIsAuthModalOpen,
     orders,
     settings,
+    isAdminSessionValid,
+    checkAdminSession,
   } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
+  const [isAdminLoginModalOpen, setIsAdminLoginModalOpen] = useState(false);
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
   const [isOrdersDrawerOpen, setIsOrdersDrawerOpen] = useState(false);
@@ -44,6 +48,15 @@ const MainLayout: React.FC = () => {
   const [isAddressModalOpen, setIsAddressModalOpen] = useState(false);
   const [selectedTrackingOrder, setSelectedTrackingOrder] = useState<Order | null>(null);
   const [activePolicy, setActivePolicy] = useState<PolicyType | null>(null);
+
+  const handleShopkeeperClick = async () => {
+    const isValid = isAdminSessionValid || (await checkAdminSession());
+    if (!isValid) {
+      setIsAdminLoginModalOpen(true);
+      return;
+    }
+    setActiveRole(Role.SHOPKEEPER);
+  };
 
   const handleOrderSuccess = (orderId: string) => {
     setIsCheckoutOpen(false);
@@ -105,12 +118,12 @@ const MainLayout: React.FC = () => {
               <BrandLogo size="xs" />
               <div>
                 <h3
-                  onClick={() => setActiveRole(Role.SHOPKEEPER)}
+                  onClick={handleShopkeeperClick}
                   role="button"
                   tabIndex={0}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' || e.key === ' ') {
-                      setActiveRole(Role.SHOPKEEPER);
+                      handleShopkeeperClick();
                     }
                   }}
                   title="Shopkeeper Login / Portal"
@@ -241,6 +254,15 @@ const MainLayout: React.FC = () => {
         isOpen={isAuthModalOpen}
         onClose={() => setIsAuthModalOpen(false)}
         defaultRole={activeRole}
+      />
+
+      <AdminLoginModal
+        isOpen={isAdminLoginModalOpen}
+        onClose={() => setIsAdminLoginModalOpen(false)}
+        onSuccess={() => {
+          setIsAdminLoginModalOpen(false);
+          setActiveRole(Role.SHOPKEEPER);
+        }}
       />
 
       {/* Offline Service Worker Indicator */}
