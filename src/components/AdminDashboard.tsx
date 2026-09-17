@@ -22,6 +22,9 @@ import {
   Sparkles,
   Check,
   ShoppingBag,
+  Users,
+  RefreshCw,
+  Database,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { OrderStatus, PaymentMethod, Product, ProductVariant, TieredPrice, UnitType, Role } from '../types';
@@ -85,11 +88,16 @@ export const AdminDashboard: React.FC = () => {
     deleteProduct,
     settings,
     setActiveRole,
+    users,
+    isSupabaseConfigured,
+    refreshOrders,
   } = useApp();
 
-  const [activeTab, setActiveTab] = useState<'ORDERS' | 'INVENTORY' | 'SETTINGS'>('ORDERS');
+  const [activeTab, setActiveTab] = useState<'ORDERS' | 'INVENTORY' | 'SETTINGS' | 'CUSTOMERS'>('ORDERS');
   const [orderFilter, setOrderFilter] = useState<string>('ALL');
   const [inventorySearch, setInventorySearch] = useState<string>('');
+  const [customerSearch, setCustomerSearch] = useState<string>('');
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [isLogoModalOpen, setIsLogoModalOpen] = useState(false);
 
   // Add product modal state
@@ -227,6 +235,13 @@ export const AdminDashboard: React.FC = () => {
 
   const deliveredCount = orders.filter((o) => o.status === OrderStatus.DELIVERED).length;
 
+  const customerUsers = users.filter((u) => u.role === Role.CUSTOMER);
+
+  const lowStockCount = products.reduce(
+    (acc, p) => acc + p.variants.filter((v) => v.stockQuantity <= 10).length,
+    0
+  );
+
   const filteredOrders = orders.filter((o) => {
     if (orderFilter === 'ALL') return true;
     return o.status === orderFilter;
@@ -236,6 +251,12 @@ export const AdminDashboard: React.FC = () => {
     (p) =>
       p.name.toLowerCase().includes(inventorySearch.toLowerCase()) ||
       p.brand.toLowerCase().includes(inventorySearch.toLowerCase())
+  );
+
+  const filteredCustomers = customerUsers.filter(
+    (c) =>
+      c.name.toLowerCase().includes(customerSearch.toLowerCase()) ||
+      c.phone.includes(customerSearch)
   );
 
   const handleCreateProduct = (e: React.FormEvent) => {
@@ -403,10 +424,10 @@ export const AdminDashboard: React.FC = () => {
               <span>Upload Logo As-Is</span>
             </button>
 
-            <div className="flex bg-[#0a1e3d] p-1 rounded-xl border border-white/10 text-xs font-bold">
+            <div className="flex flex-wrap items-center bg-[#0a1e3d] p-1 rounded-xl border border-white/10 text-xs font-bold gap-1">
               <button
                 onClick={() => setActiveTab('ORDERS')}
-                className={`px-3.5 py-1.5 rounded-lg flex items-center gap-1.5 transition ${
+                className={`px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition ${
                   activeTab === 'ORDERS' ? 'bg-[#FF6B00] text-white shadow' : 'text-gray-300 hover:text-white'
                 }`}
               >
@@ -415,53 +436,88 @@ export const AdminDashboard: React.FC = () => {
               </button>
               <button
                 onClick={() => setActiveTab('INVENTORY')}
-                className={`px-3.5 py-1.5 rounded-lg flex items-center gap-1.5 transition ${
+                className={`px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition ${
                   activeTab === 'INVENTORY' ? 'bg-[#FF6B00] text-white shadow' : 'text-gray-300 hover:text-white'
                 }`}
               >
                 <Layers size={14} />
-                <span>Inventory & Catalog</span>
+                <span>Inventory</span>
+              </button>
+              <button
+                onClick={() => setActiveTab('CUSTOMERS')}
+                className={`px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition ${
+                  activeTab === 'CUSTOMERS' ? 'bg-[#FF6B00] text-white shadow' : 'text-gray-300 hover:text-white'
+                }`}
+              >
+                <Users size={14} />
+                <span>Customers ({customerUsers.length})</span>
               </button>
               <button
                 onClick={() => setActiveTab('SETTINGS')}
-                className={`px-3.5 py-1.5 rounded-lg flex items-center gap-1.5 transition ${
+                className={`px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition ${
                   activeTab === 'SETTINGS' ? 'bg-[#D4AF37] text-[#0F2C59] shadow font-black' : 'text-gray-300 hover:text-white'
                 }`}
               >
                 <Settings size={14} />
-                <span>Engine Settings</span>
+                <span>Settings</span>
+              </button>
+              <button
+                onClick={async () => {
+                  setIsRefreshing(true);
+                  await refreshOrders();
+                  setTimeout(() => setIsRefreshing(false), 500);
+                }}
+                className="px-2.5 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white transition flex items-center gap-1 text-[11px]"
+                title="Synchronize Orders with Cloud"
+              >
+                <RefreshCw size={13} className={isRefreshing ? 'animate-spin text-[#D4AF37]' : ''} />
+                <span className="hidden sm:inline">Sync</span>
               </button>
             </div>
           </div>
         </div>
 
-        {/* Top KPI Cards */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
-            <div className="text-[11px] font-bold text-gray-500 uppercase">Gross Order Sales</div>
-            <div className="text-2xl font-black text-[#0F2C59] mt-1">₹{totalRevenue.toLocaleString('en-IN')}</div>
-            <div className="text-[10px] text-emerald-600 font-bold mt-1 flex items-center gap-1">
-              <TrendingUp size={12} />
-              <span>Combined Advance & COD</span>
+        {/* Top KPI Cards - 6 Key Health Metrics */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+          <div className="bg-white p-3.5 rounded-xl border border-gray-200 shadow-xs">
+            <div className="text-[10px] font-bold text-gray-500 uppercase truncate">Gross Sales</div>
+            <div className="text-xl font-black text-[#0F2C59] mt-1">₹{totalRevenue.toLocaleString('en-IN')}</div>
+            <div className="text-[9px] text-emerald-600 font-bold mt-1 flex items-center gap-0.5 truncate">
+              <TrendingUp size={10} />
+              <span>All Active</span>
             </div>
           </div>
 
-          <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
-            <div className="text-[11px] font-bold text-gray-500 uppercase">Pending In Packing</div>
-            <div className="text-2xl font-black text-[#FF6B00] mt-1">{pendingOrdersCount}</div>
-            <div className="text-[10px] text-gray-500 mt-1">Awaiting fulfillment queue</div>
+          <div className="bg-white p-3.5 rounded-xl border border-gray-200 shadow-xs">
+            <div className="text-[10px] font-bold text-gray-500 uppercase truncate">Pending Packing</div>
+            <div className="text-xl font-black text-[#FF6B00] mt-1">{pendingOrdersCount}</div>
+            <div className="text-[9px] text-gray-500 mt-1 truncate">In fulfillment queue</div>
           </div>
 
-          <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
-            <div className="text-[11px] font-bold text-gray-500 uppercase">Delivered Orders</div>
-            <div className="text-2xl font-black text-emerald-700 mt-1">{deliveredCount}</div>
-            <div className="text-[10px] text-gray-500 mt-1">Completed fulfillments</div>
+          <div className="bg-white p-3.5 rounded-xl border border-gray-200 shadow-xs">
+            <div className="text-[10px] font-bold text-gray-500 uppercase truncate">Delivered Orders</div>
+            <div className="text-xl font-black text-emerald-700 mt-1">{deliveredCount}</div>
+            <div className="text-[9px] text-gray-500 mt-1 truncate">Completed</div>
           </div>
 
-          <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
-            <div className="text-[11px] font-bold text-gray-500 uppercase">Catalog Products</div>
-            <div className="text-2xl font-black text-purple-700 mt-1">{products.length}</div>
-            <div className="text-[10px] text-gray-500 mt-1">Across 15 grocery categories</div>
+          <div className="bg-white p-3.5 rounded-xl border border-gray-200 shadow-xs">
+            <div className="text-[10px] font-bold text-gray-500 uppercase truncate">Catalog Products</div>
+            <div className="text-xl font-black text-purple-700 mt-1">{products.length}</div>
+            <div className="text-[9px] text-gray-500 mt-1 truncate">Across {categories.length} categories</div>
+          </div>
+
+          <div className="bg-white p-3.5 rounded-xl border border-gray-200 shadow-xs">
+            <div className="text-[10px] font-bold text-gray-500 uppercase truncate">Registered Customers</div>
+            <div className="text-xl font-black text-blue-700 mt-1">{customerUsers.length}</div>
+            <div className="text-[9px] text-gray-500 mt-1 truncate">Verified accounts</div>
+          </div>
+
+          <div className="bg-white p-3.5 rounded-xl border border-gray-200 shadow-xs">
+            <div className="text-[10px] font-bold text-gray-500 uppercase truncate">Low Stock Packs</div>
+            <div className={`text-xl font-black mt-1 ${lowStockCount > 0 ? 'text-rose-600' : 'text-gray-700'}`}>
+              {lowStockCount}
+            </div>
+            <div className="text-[9px] text-gray-500 mt-1 truncate">&le; 10 units remaining</div>
           </div>
         </div>
 
@@ -707,6 +763,94 @@ export const AdminDashboard: React.FC = () => {
         {/* TAB 3: ENGINE SETTINGS */}
         {activeTab === 'SETTINGS' && (
           <AdminSettingsControl />
+        )}
+
+        {/* TAB 4: REGISTERED CUSTOMERS */}
+        {activeTab === 'CUSTOMERS' && (
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+            <div className="p-4 sm:p-5 border-b border-gray-200 flex flex-wrap justify-between items-center gap-3">
+              <div>
+                <h2 className="text-base font-extrabold text-[#0F2C59] flex items-center gap-2">
+                  <Users size={18} className="text-[#FF6B00]" />
+                  <span>Verified Customer Directory ({customerUsers.length})</span>
+                </h2>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  Universal accounts synchronized across all browsers &amp; devices via mobile number
+                </p>
+              </div>
+
+              <div className="relative min-w-[240px]">
+                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <input
+                  type="text"
+                  placeholder="Search customer by name or phone..."
+                  value={customerSearch}
+                  onChange={(e) => setCustomerSearch(e.target.value)}
+                  className="w-full pl-9 pr-3 py-1.5 border border-gray-300 rounded-xl text-xs outline-none focus:border-[#0F2C59]"
+                />
+              </div>
+            </div>
+
+            {filteredCustomers.length === 0 ? (
+              <div className="p-8 text-center text-gray-500 text-xs">
+                No customer accounts match your search.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead>
+                    <tr className="bg-[#0F2C59] text-white uppercase text-[10px] tracking-wider">
+                      <th className="p-3">Customer</th>
+                      <th className="p-3">Primary Delivery Address</th>
+                      <th className="p-3 text-center">COD Orders</th>
+                      <th className="p-3 text-center">Store Wallet</th>
+                      <th className="p-3">Referral Code</th>
+                      <th className="p-3">Joined</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200">
+                    {filteredCustomers.map((c) => (
+                      <tr key={c.id} className="hover:bg-blue-50/30 transition">
+                        <td className="p-3">
+                          <div className="font-bold text-gray-900">{c.name}</div>
+                          <div className="font-mono text-gray-600 text-[11px] flex items-center gap-1 mt-0.5">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                            <span>+91 {c.phone}</span>
+                          </div>
+                        </td>
+                        <td className="p-3 text-gray-600 max-w-xs">
+                          {c.addresses && c.addresses.length > 0 ? (
+                            <div>
+                              <div className="font-medium text-gray-800 line-clamp-1">{c.addresses[0].fullAddress}</div>
+                              {c.addresses[0].landmark && (
+                                <div className="text-[10px] text-gray-500">Near {c.addresses[0].landmark}, {c.addresses[0].pincode}</div>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-gray-400 italic">No address on file</span>
+                          )}
+                        </td>
+                        <td className="p-3 text-center font-bold text-gray-800">
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] ${c.codOrderCount >= 3 ? 'bg-amber-100 text-amber-900' : 'bg-gray-100 text-gray-700'}`}>
+                            {c.codOrderCount || 0} / 3 free
+                          </span>
+                        </td>
+                        <td className="p-3 text-center font-bold text-emerald-700 font-mono">
+                          ₹{c.walletBalance || 0}
+                        </td>
+                        <td className="p-3 font-mono font-bold text-indigo-700 text-[11px]">
+                          {c.referralCode || 'N/A'}
+                        </td>
+                        <td className="p-3 text-gray-500 text-[11px]">
+                          {c.createdAt ? new Date(c.createdAt).toLocaleDateString('en-IN') : 'N/A'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         )}
       </div>
 

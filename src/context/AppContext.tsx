@@ -27,6 +27,36 @@ import {
   CheckoutBreakdown,
   getActiveUnitPrice,
 } from '../lib/engine/checkout-calculator';
+import {
+  isSupabaseConfigured,
+  getOrCreateCustomerByPhone,
+  fetchCustomerOrdersFromSupabase,
+  saveOrderToSupabase,
+  fetchAllOrdersForAdmin,
+  updateOrderStatusInSupabase,
+  saveCustomerProfileToSupabase,
+  fetchCustomerProfileFromSupabase,
+} from '../lib/supabase';
+
+export type CustomerFlowStep = 'AUTH' | 'PROFILE' | 'SHOP';
+
+export interface CustomerSession {
+  phone: string;
+  role: Role;
+  profileCompleted: boolean;
+}
+
+const BLANK_CUSTOMER: User = {
+  id: '',
+  name: '',
+  phone: '',
+  role: Role.CUSTOMER,
+  referralCode: '',
+  walletBalance: 0,
+  codOrderCount: 0,
+  addresses: [],
+  createdAt: '',
+};
 
 interface AppContextType {
   currentUser: User;
@@ -34,6 +64,14 @@ interface AppContextType {
   users: User[];
   activeRole: Role;
   setActiveRole: (role: Role) => void;
+  customerFlowStep: CustomerFlowStep;
+  setCustomerFlowStep: (step: CustomerFlowStep) => void;
+  saveCustomerProfile: (data: {
+    name: string;
+    fullAddress: string;
+    landmark: string;
+    pincode?: string;
+  }) => Promise<void>;
   settings: SystemSetting;
   updateSettings: (newSettings: Partial<SystemSetting>) => void;
   categories: Category[];
@@ -63,6 +101,8 @@ interface AppContextType {
   setIsAuthModalOpen: (open: boolean) => void;
   loginWithPhone: (phone: string, role: Role, name?: string) => User;
   logout: () => void;
+  isSupabaseConfigured: boolean;
+  refreshOrders: () => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -121,13 +161,69 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return saved ? JSON.parse(saved) : INITIAL_USERS;
   });
 
+  const [customerFlowStep, setCustomerFlowStep] = useState<CustomerFlowStep>(() => {
+    const savedSession = localStorage.getItem('om_customer_session');
+    if (savedSession) {
+      try {
+        const session: CustomerSession = JSON.parse(savedSession);
+        if (session.role === Role.SHOPKEEPER) return 'SHOP';
+        if (session.profileCompleted) return 'SHOP';
+        return 'PROFILE';
+      } catch {
+        return 'AUTH';
+      }
+    }
+    return 'AUTH';
+  });
+
   const [currentUser, setCurrentUser] = useState<User>(() => {
-    const saved = localStorage.getItem('om_current_user');
-    return saved ? JSON.parse(saved) : INITIAL_USERS[1]; // Default to Customer Rajesh Gupta
+    const savedSession = localStorage.getItem('om_customer_session');
+    if (savedSession) {
+      try {
+        const session: CustomerSession = JSON.parse(savedSession);
+        if (session.role === Role.SHOPKEEPER) {
+          return INITIAL_USERS[0];
+        }
+
+        // Rule 5: Never use stale cross-customer data. Fetch strictly for session.phone.
+        const phoneKey = `om_profile_${session.phone}`;
+        const savedPhoneProfile = localStorage.getItem(phoneKey);
+        if (savedPhoneProfile) {
+          return JSON.parse(savedPhoneProfile);
+        }
+
+        const match = INITIAL_USERS.find((u) => u.phone === session.phone);
+        if (match) return match;
+
+        return {
+          id: `user-${session.phone}`,
+          name: '',
+          phone: session.phone,
+          role: Role.CUSTOMER,
+          referralCode: `OM${session.phone.slice(-4)}`,
+          walletBalance: 100,
+          codOrderCount: 0,
+          addresses: [],
+          createdAt: new Date().toISOString(),
+        };
+      } catch {
+        // Fallback to blank
+      }
+    }
+    return BLANK_CUSTOMER;
   });
 
   const [activeRole, setActiveRoleState] = useState<Role>(() => {
-    return currentUser.role;
+    const savedSession = localStorage.getItem('om_customer_session');
+    if (savedSession) {
+      try {
+        const session = JSON.parse(savedSession);
+        return session.role;
+      } catch {
+        return Role.CUSTOMER;
+      }
+    }
+    return Role.CUSTOMER;
   });
 
   const [cart, setCart] = useState<CartItem[]>(() => {
@@ -171,6 +267,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     localStorage.setItem('om_orders', JSON.stringify(orders));
   }, [orders]);
+
+  // Synchronize orders with Supabase
+  const refreshOrders = async () => {
+    if (!isSupabaseConfigured) return;
+    try {
+      if (activeRole === Role.SHOPKEEPER) {
+        const adminOrders = await fetchAllOrdersForAdmin();
+        if (adminOrders && adminOrders.length > 0) {
+          setOrders(adminOrders);
+        }
+      } else {
+        const userOrders = await fetchCustomerOrdersFromSupabase(currentUser.id, currentUser.phone);
+        if (userOrders && userOrders.length > 0) {
+          setOrders(userOrders);
+        }
+      }
+    } catch (err) {
+      console.warn('Error refreshing orders from Supabase:', err);
+    }
+  };
+
+  useEffect(() => {
+    if (isSupabaseConfigured) {
+      refreshOrders();
+    }
+  }, [currentUser.id, currentUser.phone, activeRole]);
 
   const setActiveRole = (role: Role) => {
     setActiveRoleState(role);
@@ -338,6 +460,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // Update orders
     setOrders((prev) => [newOrder, ...prev]);
 
+    // Persist to Supabase if configured
+    if (isSupabaseConfigured) {
+      saveOrderToSupabase(newOrder).catch((err) => {
+        console.warn('Background Supabase order save error:', err);
+      });
+    }
+
     // Update user cod count if COD
     if (data.paymentMethod === PaymentMethod.COD) {
       setCurrentUser((prev) => ({
@@ -426,6 +555,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return o;
       })
     );
+
+    if (isSupabaseConfigured) {
+      updateOrderStatusInSupabase(orderId, newStatus).catch((err) => {
+        console.warn('Background Supabase status update error:', err);
+      });
+    }
   };
 
   // Address management
@@ -445,51 +580,189 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setUsers((prev) => prev.map((u) => (u.id === currentUser.id ? updatedUser : u)));
   };
 
-  // Auth operations
-  const loginWithPhone = (phone: string, role: Role, name?: string): User => {
-    const existing = users.find((u) => u.phone === phone);
-    if (existing) {
-      setCurrentUser(existing);
-      setActiveRoleState(existing.role);
-      setSelectedAddressId(existing.addresses[0]?.id || null);
-      setIsAuthModalOpen(false);
-      return existing;
-    }
+  // Customer profile save (Rule 1, 2, 6, 7, 8)
+  const saveCustomerProfile = async (data: {
+    name: string;
+    fullAddress: string;
+    landmark: string;
+    pincode?: string;
+  }): Promise<void> => {
+    // Sourced strictly from authenticated customer record (Rule 1 & 2)
+    const cleanPhone = currentUser.phone.replace(/\D/g, '');
+    const targetUserId = currentUser.id || `user-${cleanPhone}`;
+    const targetAddrId = currentUser.addresses[0]?.id || `addr-${targetUserId}-1`;
 
-    const newUser: User = {
-      id: `user-${Date.now()}`,
-      name: name || (role === Role.SHOPKEEPER ? 'Om Prakash Sharma' : 'Valued Customer'),
-      phone,
-      role,
-      referralCode: `OM${Math.floor(1000 + Math.random() * 9000)}`,
-      walletBalance: 100, // Welcome ₹100 bonus!
-      codOrderCount: 0,
-      addresses: [
-        {
-          id: `addr-${Date.now()}`,
-          userId: `user-${Date.now()}`,
-          fullAddress: 'Shop #12, Wholesale Market Road',
-          landmark: 'Main Chowk',
-          pincode: '400705',
-          isDefault: true,
-        },
-      ],
-      createdAt: new Date().toISOString(),
+    const updatedAddress: Address = {
+      id: targetAddrId,
+      userId: targetUserId,
+      fullAddress: data.fullAddress.trim(),
+      landmark: data.landmark.trim(),
+      pincode: data.pincode?.trim() || '422001',
+      isDefault: true,
     };
 
-    setUsers((prev) => [...prev, newUser]);
-    setCurrentUser(newUser);
-    setActiveRoleState(role);
-    setSelectedAddressId(newUser.addresses[0].id);
+    const updatedUser: User = {
+      ...currentUser,
+      id: targetUserId,
+      name: data.name.trim(),
+      phone: cleanPhone, // Guaranteed not replaced (Rule 2)
+      role: Role.CUSTOMER,
+      addresses: [updatedAddress],
+    };
+
+    // 1. Update state
+    setCurrentUser(updatedUser);
+    setSelectedAddressId(updatedAddress.id);
+    setUsers((prev) => {
+      const exists = prev.some((u) => u.phone === cleanPhone || u.id === targetUserId);
+      if (exists) {
+        return prev.map((u) => (u.phone === cleanPhone || u.id === targetUserId ? updatedUser : u));
+      }
+      return [...prev, updatedUser];
+    });
+
+    // 2. Rule 5 & 8: Save to customer-isolated localStorage key
+    localStorage.setItem(`om_profile_${cleanPhone}`, JSON.stringify(updatedUser));
+    localStorage.setItem(
+      'om_customer_session',
+      JSON.stringify({
+        phone: cleanPhone,
+        role: Role.CUSTOMER,
+        profileCompleted: true,
+      })
+    );
+
+    // 3. Rule 6: Save profile changes to Supabase
+    if (isSupabaseConfigured) {
+      try {
+        await saveCustomerProfileToSupabase(
+          targetUserId,
+          cleanPhone,
+          data.name.trim(),
+          data.fullAddress.trim(),
+          data.landmark.trim(),
+          data.pincode?.trim() || '422001'
+        );
+      } catch (err) {
+        console.error('Supabase profile save error:', err);
+      }
+    }
+
+    // 4. Rule 7: After profile completion, navigate correctly to Products/Shop page
+    setCustomerFlowStep('SHOP');
+  };
+
+  // Auth operations (Standardized Customer Flow Step 1)
+  const loginWithPhone = (phone: string, role: Role, name?: string): User => {
+    const cleanPhone = phone.replace(/\D/g, '');
+
+    if (role === Role.SHOPKEEPER) {
+      const shopkeeper = users.find((u) => u.role === Role.SHOPKEEPER) || INITIAL_USERS[0];
+      setCurrentUser(shopkeeper);
+      setActiveRoleState(Role.SHOPKEEPER);
+      setCustomerFlowStep('SHOP');
+      localStorage.setItem(
+        'om_customer_session',
+        JSON.stringify({
+          phone: cleanPhone,
+          role: Role.SHOPKEEPER,
+          profileCompleted: true,
+        })
+      );
+      setIsAuthModalOpen(false);
+      return shopkeeper;
+    }
+
+    // CUSTOMER FLOW:
+    // Rule 5: Never use stale localStorage customer data to populate another customer's profile.
+    let resolvedUser: User | null = null;
+    const phoneKey = `om_profile_${cleanPhone}`;
+    const localProfile = localStorage.getItem(phoneKey);
+    if (localProfile) {
+      try {
+        resolvedUser = JSON.parse(localProfile);
+      } catch {
+        resolvedUser = null;
+      }
+    }
+
+    // Check seed / local users array (e.g. Rajesh Gupta 9820123456)
+    if (!resolvedUser) {
+      const matchInSeed = INITIAL_USERS.find((u) => u.phone === cleanPhone);
+      if (matchInSeed) {
+        resolvedUser = matchInSeed;
+      }
+    }
+
+    let finalUser: User;
+    if (resolvedUser) {
+      // Existing customer: ensure authenticated contact number matches (Rule 1 & 2)
+      finalUser = {
+        ...resolvedUser,
+        phone: cleanPhone,
+      };
+    } else {
+      // Rule 3: For a new customer, Address and Landmark must initially be blank.
+      finalUser = {
+        id: `user-${cleanPhone}`,
+        name: name || '',
+        phone: cleanPhone,
+        role: Role.CUSTOMER,
+        referralCode: `OM${cleanPhone.length >= 4 ? cleanPhone.slice(-4) : '2026'}`,
+        walletBalance: 100, // Welcome ₹100 bonus
+        codOrderCount: 0,
+        addresses: [], // Strictly blank!
+        createdAt: new Date().toISOString(),
+      };
+    }
+
+    setCurrentUser(finalUser);
+    setActiveRoleState(Role.CUSTOMER);
+    setSelectedAddressId(finalUser.addresses[0]?.id || null);
     setIsAuthModalOpen(false);
-    return newUser;
+
+    // Persist active session (Rule 8: Refreshing the page must not lose saved profile information)
+    localStorage.setItem(
+      'om_customer_session',
+      JSON.stringify({
+        phone: cleanPhone,
+        role: Role.CUSTOMER,
+        profileCompleted: false, // Navigate to Profile step first
+      })
+    );
+
+    // Required Flow: App opens → Customer login → Customer Profile → Products/Shop
+    setCustomerFlowStep('PROFILE');
+
+    // Rule 4: When an existing customer logs in again, load their saved Name, Address and Landmark from Supabase
+    if (isSupabaseConfigured) {
+      fetchCustomerProfileFromSupabase(cleanPhone).then((remoteUser) => {
+        if (remoteUser) {
+          setCurrentUser(remoteUser);
+          localStorage.setItem(`om_profile_${cleanPhone}`, JSON.stringify(remoteUser));
+          setUsers((prev) => {
+            const exists = prev.some((u) => u.phone === cleanPhone);
+            if (exists) return prev.map((u) => (u.phone === cleanPhone ? remoteUser : u));
+            return [...prev, remoteUser];
+          });
+        }
+      });
+
+      fetchCustomerOrdersFromSupabase(finalUser.id, cleanPhone).then((dbOrders) => {
+        if (dbOrders) setOrders(dbOrders);
+      });
+    }
+
+    return finalUser;
   };
 
   const logout = () => {
-    // Revert to demo customer or shopkeeper
-    const demo = users[1] || users[0];
-    setCurrentUser(demo);
-    setActiveRoleState(demo.role);
+    localStorage.removeItem('om_customer_session');
+    setCurrentUser(BLANK_CUSTOMER);
+    setActiveRoleState(Role.CUSTOMER);
+    setSelectedAddressId(null);
+    setCustomerFlowStep('AUTH');
+    setIsAuthModalOpen(false);
   };
 
   return (
@@ -500,6 +773,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         users,
         activeRole,
         setActiveRole,
+        customerFlowStep,
+        setCustomerFlowStep,
+        saveCustomerProfile,
         settings,
         updateSettings,
         categories,
@@ -525,6 +801,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setIsAuthModalOpen,
         loginWithPhone,
         logout,
+        isSupabaseConfigured,
+        refreshOrders,
       }}
     >
       {children}

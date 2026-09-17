@@ -18,10 +18,23 @@ import { AddressSelectorModal } from './components/AddressSelectorModal';
 import { EntryLoginPage } from './components/EntryLoginPage';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { BrandLogo } from './components/BrandLogo';
+import { CustomerAuthPage } from './components/CustomerAuthPage';
+import { CustomerProfilePage } from './components/CustomerProfilePage';
+import { StorePolicyModal, PolicyType } from './components/StorePolicyModal';
 import { ShieldCheck, Phone, MapPin, Mail, Award } from 'lucide-react';
 
 const MainLayout: React.FC = () => {
-  const { activeRole, setActiveRole, isAuthModalOpen, setIsAuthModalOpen, orders, settings } = useApp();
+  const {
+    activeRole,
+    setActiveRole,
+    customerFlowStep,
+    setCustomerFlowStep,
+    currentUser,
+    isAuthModalOpen,
+    setIsAuthModalOpen,
+    orders,
+    settings,
+  } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [isCartOpen, setIsCartOpen] = useState(false);
@@ -30,6 +43,7 @@ const MainLayout: React.FC = () => {
   const [isWalletOpen, setIsWalletOpen] = useState(false);
   const [isAddressModalOpen, setIsAddressModalOpen] = useState(false);
   const [selectedTrackingOrder, setSelectedTrackingOrder] = useState<Order | null>(null);
+  const [activePolicy, setActivePolicy] = useState<PolicyType | null>(null);
 
   const handleOrderSuccess = (orderId: string) => {
     setIsCheckoutOpen(false);
@@ -39,6 +53,13 @@ const MainLayout: React.FC = () => {
       setSelectedTrackingOrder(placedOrder);
     }
   };
+
+  const hasCompleteProfile = Boolean(
+    currentUser.name &&
+    currentUser.addresses &&
+    currentUser.addresses.length > 0 &&
+    currentUser.addresses[0]?.fullAddress?.trim()
+  );
 
   return (
     <div className="min-h-screen flex flex-col bg-gray-50 text-gray-900 font-sans selection:bg-[#D4AF37] selection:text-[#0F2C59]">
@@ -50,14 +71,23 @@ const MainLayout: React.FC = () => {
         onOpenOrders={() => setIsOrdersDrawerOpen(true)}
         onOpenWallet={() => setIsWalletOpen(true)}
         onOpenAddressSelect={() => setIsAddressModalOpen(true)}
+        onOpenProfile={() => setCustomerFlowStep('PROFILE')}
       />
 
-      {/* Main View: Customer Storefront or Admin Dashboard */}
+      {/* Main View: Orchestrated Customer Flow (Auth -> Profile -> Products/Shop) or Admin */}
       <div className="flex-1">
         {activeRole === Role.SHOPKEEPER ||
         activeRole === Role.SECONDARY_ADMIN ||
         activeRole === Role.ACCOUNTS ? (
           <AdminDashboard />
+        ) : customerFlowStep === 'AUTH' ? (
+          <CustomerAuthPage onSuccess={() => setCustomerFlowStep('PROFILE')} />
+        ) : customerFlowStep === 'PROFILE' ? (
+          <CustomerProfilePage
+            onProfileSaved={() => setCustomerFlowStep('SHOP')}
+            canCancel={hasCompleteProfile}
+            onCancel={() => setCustomerFlowStep('SHOP')}
+          />
         ) : (
           <CustomerStore
             searchQuery={searchQuery}
@@ -143,14 +173,33 @@ const MainLayout: React.FC = () => {
         <div className="max-w-7xl mx-auto mt-8 pt-4 border-t border-white/10 flex flex-col sm:flex-row justify-between items-center text-[10px] text-gray-400 gap-2">
           <span>© {new Date().getFullYear()} Om Distributors. All rights reserved. Registered Wholesale Merchant.</span>
           <div className="flex gap-4">
-            <span>Wholesale Terms</span>
-            <span>Privacy Policy</span>
-            <span>Return & Refund Policy</span>
+            <button
+              onClick={() => setActivePolicy('TERMS')}
+              className="hover:text-amber-300 transition underline underline-offset-2"
+            >
+              Wholesale Terms
+            </button>
+            <button
+              onClick={() => setActivePolicy('PRIVACY')}
+              className="hover:text-amber-300 transition underline underline-offset-2"
+            >
+              Privacy Policy
+            </button>
+            <button
+              onClick={() => setActivePolicy('REFUND')}
+              className="hover:text-amber-300 transition underline underline-offset-2"
+            >
+              Return & Refund Policy
+            </button>
           </div>
         </div>
       </footer>
 
       {/* Slide-over & Modal Overlays */}
+      <StorePolicyModal
+        policyType={activePolicy}
+        onClose={() => setActivePolicy(null)}
+      />
       <CartDrawer
         isOpen={isCartOpen}
         onClose={() => setIsCartOpen(false)}

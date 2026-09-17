@@ -25,6 +25,7 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
   const [isDiscountExcluded, setIsDiscountExcluded] = useState(false);
   const [variants, setVariants] = useState<ProductVariant[]>([]);
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const [variantError, setVariantError] = useState<string | null>(null);
 
   useEffect(() => {
     if (product) {
@@ -36,6 +37,7 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
       setIsDiscountExcluded(Boolean(product.isDiscountExcluded));
       setVariants(product.variants ? JSON.parse(JSON.stringify(product.variants)) : []);
       setSavedSuccess(false);
+      setVariantError(null);
     }
   }, [product]);
 
@@ -58,9 +60,11 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
 
   const handleDeleteVariant = (index: number) => {
     if (variants.length <= 1) {
-      alert('An item must have at least one pack variant.');
+      setVariantError('An item must have at least one pack variant.');
+      setTimeout(() => setVariantError(null), 4000);
       return;
     }
+    setVariantError(null);
     setVariants((prev) => prev.filter((_, i) => i !== index));
   };
 
@@ -235,6 +239,13 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
                 Edit prices or stock directly
               </span>
             </div>
+
+            {variantError && (
+              <div className="mb-2.5 p-2.5 bg-red-50 border border-red-200 text-red-700 text-xs rounded-xl flex items-center gap-2 font-bold animate-fadeIn">
+                <AlertCircle size={14} className="shrink-0 text-red-600" />
+                <span>{variantError}</span>
+              </div>
+            )}
 
             <div className="space-y-2.5 max-h-56 overflow-y-auto pr-1">
               {variants.map((variant, idx) => (
