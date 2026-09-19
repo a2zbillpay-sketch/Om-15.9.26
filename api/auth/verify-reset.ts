@@ -1,12 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 import {
-  setAdminSessionCookie,
-  SESSION_MAX_AGE_MS,
-  AdminSession,
-  getSessionSecret,
-} from './verify.ts';
-import {
-  verifyAdminPassword,
+  verifyRecoveryCode,
+  createResetToken,
   checkRateLimit,
 } from './store.ts';
 
@@ -15,7 +10,6 @@ function readJsonBody(req: IncomingMessage): Promise<any> {
     let body = '';
     req.on('data', (chunk) => {
       body += chunk;
-      // 32 KB payload limit for auth endpoint
       if (body.length > 32 * 1024) {
         reject(new Error('Payload too large'));
       }
@@ -44,69 +38,55 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
     return;
   }
 
-  // Ensure server session signing secret is configured
-  if (!getSessionSecret()) {
-    res.statusCode = 503;
-    res.setHeader('Content-Type', 'application/json');
-    res.end(JSON.stringify({ error: 'Authentication service unavailable' }));
-    return;
-  }
-
-  // Client IP rate limiting: max 5 login attempts per 10 minutes per IP
+  // Rate limiting verification attempts per IP
   const clientIp = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || 'unknown';
-  if (!checkRateLimit(`login:${clientIp}`, 5, 10 * 60 * 1000)) {
+  if (!checkRateLimit(`verify-reset:${clientIp}`, 10, 10 * 60 * 1000)) {
     res.statusCode = 429;
     res.setHeader('Content-Type', 'application/json');
-    res.end(JSON.stringify({ error: 'Too many failed login attempts. Please try again in 10 minutes.' }));
+    res.end(
+      JSON.stringify({
+        error: 'Too many verification attempts. Please try again later.',
+      })
+    );
     return;
   }
 
   try {
     const body = await readJsonBody(req);
-    const password = body?.password;
+    const challengeId = body?.challengeId;
+    const recoveryCode = (body?.recoveryCode || body?.code || '').trim();
 
-    if (!password || typeof password !== 'string' || !password.trim()) {
+    if (!recoveryCode) {
       res.statusCode = 400;
       res.setHeader('Content-Type', 'application/json');
-      res.end(JSON.stringify({ error: 'Invalid credentials' }));
+      res.end(JSON.stringify({ error: 'Verification code or recovery key is required.' }));
       return;
     }
 
-    const isValid = verifyAdminPassword(password);
+    const result = verifyRecoveryCode(challengeId, recoveryCode.trim());
 
-    if (!isValid) {
-      res.statusCode = 401;
+    if (!result.success) {
+      res.statusCode = 400;
       res.setHeader('Content-Type', 'application/json');
-      res.end(JSON.stringify({ error: 'Invalid credentials' }));
+      res.end(JSON.stringify({ error: result.error || 'Verification failed.' }));
       return;
     }
 
-    const now = Date.now();
-    const session: AdminSession = {
-      role: 'SHOPKEEPER',
-      issuedAt: now,
-      expiresAt: now + SESSION_MAX_AGE_MS,
-    };
-
-    const cookieSet = setAdminSessionCookie(res, session);
-    if (!cookieSet) {
-      res.statusCode = 503;
-      res.setHeader('Content-Type', 'application/json');
-      res.end(JSON.stringify({ error: 'Failed to issue session' }));
-      return;
-    }
+    // Verification succeeded: Issue single-use reset token
+    const resetToken = createResetToken();
 
     res.statusCode = 200;
     res.setHeader('Content-Type', 'application/json');
     res.end(
       JSON.stringify({
-        authenticated: true,
-        role: 'SHOPKEEPER',
+        success: true,
+        resetToken,
+        message: 'Recovery verified successfully. You may now set a new password.',
       })
     );
   } catch {
     res.statusCode = 500;
     res.setHeader('Content-Type', 'application/json');
-    res.end(JSON.stringify({ error: 'Authentication failed' }));
+    res.end(JSON.stringify({ error: 'Verification service error.' }));
   }
 }

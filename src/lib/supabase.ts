@@ -1,6 +1,10 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { User, Order, Address, Role, OrderStatus, PaymentMethod, PaymentStatus, UnitType, Product, ProductVariant, TieredPrice } from '../types';
 import { INITIAL_CATEGORIES } from '../data/seedData';
+import {
+  saveProductWithCascadeSync,
+  deleteProductWithCascade,
+} from './product-service';
 
 // Retrieve credentials from Vite environment variables
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
@@ -534,141 +538,7 @@ export async function saveProductToSupabase(product: Product): Promise<SaveProdu
   if (!supabase) {
     return { success: false, error: 'Supabase is not configured or initialized.' };
   }
-
-  try {
-    // 1. Ensure category exists in categories table to satisfy Foreign Key constraints
-    if (product.categoryId) {
-      const matchedCat = INITIAL_CATEGORIES.find((c) => c.id === product.categoryId);
-      if (matchedCat) {
-        try {
-          await supabase.from('categories').upsert(
-            {
-              id: matchedCat.id,
-              name: matchedCat.name,
-              image_url: matchedCat.imageUrl || null,
-            },
-            { onConflict: 'id' }
-          );
-        } catch {
-          // If RLS prevents category upsert, continue without throwing
-        }
-      }
-    }
-
-    // 2. Prepare and upsert Product record into public.products
-    const productPayload: Record<string, any> = {
-      id: product.id,
-      name: product.name,
-      brand: product.brand,
-      description: product.description || '',
-      category_id: product.categoryId || null,
-      image_url: product.imageUrl && product.imageUrl.trim() ? product.imageUrl.trim() : null,
-      is_discount_excluded: Boolean(product.isDiscountExcluded),
-      created_at: product.createdAt || new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    };
-
-    let prodInsertResult = await supabase
-      .from('products')
-      .upsert(productPayload, { onConflict: 'id' });
-
-    // If Foreign Key violation occurs on category_id (e.g. unknown custom category), retry with category_id = null
-    if (prodInsertResult.error && (prodInsertResult.error as any).code === '23503') {
-      console.warn('Category FK not found in categories table; saving product with category_id = null');
-      productPayload.category_id = null;
-      prodInsertResult = await supabase
-        .from('products')
-        .upsert(productPayload, { onConflict: 'id' });
-    }
-
-    if (prodInsertResult.error) {
-      console.error('Failed to insert product into public.products:', prodInsertResult.error);
-      return {
-        success: false,
-        error: `Database error saving product: ${prodInsertResult.error.message || 'Check database permissions'}`,
-      };
-    }
-
-    // 3. Prepare and upsert Variants into public.product_variants
-    const variants = product.variants || [];
-    if (variants.length > 0) {
-      const variantsPayload = variants.map((v) => ({
-        id: v.id,
-        product_id: product.id,
-        unit: v.unit,
-        pack_size: Number(v.packSize),
-        pack_label: v.packLabel || `${v.packSize} ${v.unit}`,
-        mrp: Number(v.mrp),
-        base_selling_price: Number(v.baseSellingPrice),
-        stock_quantity: v.stockQuantity !== undefined && v.stockQuantity !== null ? Number(v.stockQuantity) : 0,
-        max_order_limit: v.maxOrderLimit !== undefined && v.maxOrderLimit !== null ? Number(v.maxOrderLimit) : 12,
-        created_at: new Date().toISOString(),
-      }));
-
-      const { error: varError } = await supabase
-        .from('product_variants')
-        .upsert(variantsPayload, { onConflict: 'id' });
-
-      if (varError) {
-        console.error('Failed to insert product variants into public.product_variants:', varError);
-        // Rollback: Clean up partially inserted product so partial records do not linger
-        try {
-          await supabase.from('products').delete().eq('id', product.id);
-        } catch (cleanupErr) {
-          console.error('Failed rollback for product:', cleanupErr);
-        }
-        return {
-          success: false,
-          error: `Database error saving variants: ${varError.message || 'Check permissions'}. Product insertion rolled back.`,
-        };
-      }
-
-      // 4. Prepare and upsert Tiered Prices into public.tiered_prices
-      const allTieredPrices: any[] = [];
-      for (const v of variants) {
-        if (v.tieredPrices && v.tieredPrices.length > 0) {
-          for (const tp of v.tieredPrices) {
-            allTieredPrices.push({
-              id: tp.id || `tp-${v.id}-${tp.minQty}-${Date.now()}`,
-              variant_id: v.id,
-              min_qty: Number(tp.minQty),
-              max_qty: Number(tp.maxQty) || 9999,
-              unit_price: Number(tp.unitPrice),
-            });
-          }
-        }
-      }
-
-      if (allTieredPrices.length > 0) {
-        const { error: tpError } = await supabase
-          .from('tiered_prices')
-          .upsert(allTieredPrices, { onConflict: 'id' });
-
-        if (tpError) {
-          console.error('Failed to insert tiered prices into public.tiered_prices:', tpError);
-          // Rollback variants and product
-          try {
-            await supabase.from('product_variants').delete().eq('product_id', product.id);
-            await supabase.from('products').delete().eq('id', product.id);
-          } catch (cleanupErr) {
-            console.error('Failed rollback for tiered prices:', cleanupErr);
-          }
-          return {
-            success: false,
-            error: `Database error saving wholesale slabs: ${tpError.message || 'Check permissions'}. Product insertion rolled back.`,
-          };
-        }
-      }
-    }
-
-    return { success: true, product };
-  } catch (err: any) {
-    console.error('Exception in saveProductToSupabase:', err);
-    return {
-      success: false,
-      error: `Unexpected error saving product: ${err?.message || 'Database operation failed'}`,
-    };
-  }
+  return saveProductWithCascadeSync(supabase, product);
 }
 
 /**
@@ -778,17 +648,7 @@ export async function fetchProductsFromSupabase(): Promise<Product[] | null> {
  */
 export async function deleteProductFromSupabase(productId: string): Promise<boolean> {
   if (!supabase) return false;
-
-  try {
-    const { error } = await supabase.from('products').delete().eq('id', productId);
-    if (error) {
-      console.error('Failed to delete product from Supabase:', error);
-      return false;
-    }
-    return true;
-  } catch (err) {
-    console.error('Exception in deleteProductFromSupabase:', err);
-    return false;
-  }
+  const res = await deleteProductWithCascade(supabase, productId);
+  return res.success;
 }
 

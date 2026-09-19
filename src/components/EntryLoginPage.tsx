@@ -3,6 +3,7 @@ import { Store, ShoppingBag, ShieldCheck, ArrowLeft, LogIn, Eye, EyeOff } from '
 import { Role } from '../types';
 import { useApp } from '../context/AppContext';
 import { BrandLogo } from './BrandLogo';
+import { AdminLoginModal } from './AdminLoginModal';
 
 interface EntryLoginPageProps {
   isOpen: boolean;
@@ -24,6 +25,7 @@ export const EntryLoginPage: React.FC<EntryLoginPageProps> = ({
   const [showPassword, setShowPassword] = useState(false);
   const [name, setName] = useState('');
   const [error, setError] = useState('');
+  const [isRecoveryModalOpen, setIsRecoveryModalOpen] = useState(false);
 
   // Always reset fields to blank whenever the modal opens or role changes
   useEffect(() => {
@@ -227,11 +229,23 @@ export const EntryLoginPage: React.FC<EntryLoginPageProps> = ({
                     />
                   </div>
                 )}
-                <p className="text-[11px] text-gray-500 mt-1">
-                  {selectedRole === 'SHOPKEEPER'
-                    ? 'Enter your shopkeeper admin password for direct access.'
-                    : 'Enter your registered 10-digit mobile number for direct access.'}
-                </p>
+                <div className="flex items-center justify-between mt-1">
+                  <p className="text-[11px] text-gray-500">
+                    {selectedRole === 'SHOPKEEPER'
+                      ? 'Enter your shopkeeper admin password for direct access.'
+                      : 'Enter your registered 10-digit mobile number for direct access.'}
+                  </p>
+                  {selectedRole === 'SHOPKEEPER' && (
+                    <button
+                      type="button"
+                      id="entry-forgot-password-btn"
+                      onClick={() => setIsRecoveryModalOpen(true)}
+                      className="text-xs font-bold text-[#0F2C59] hover:underline shrink-0"
+                    >
+                      Forgot Password?
+                    </button>
+                  )}
+                </div>
               </div>
 
               <button
@@ -246,6 +260,15 @@ export const EntryLoginPage: React.FC<EntryLoginPageProps> = ({
           </div>
         )}
       </div>
+
+      <AdminLoginModal
+        isOpen={isRecoveryModalOpen}
+        initialMode="FORGOT_PASSWORD"
+        onClose={() => setIsRecoveryModalOpen(false)}
+        onSuccess={() => {
+          setIsRecoveryModalOpen(false);
+        }}
+      />
     </div>
   );
 };

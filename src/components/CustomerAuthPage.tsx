@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { ShoppingBag, Store, ShieldCheck, Phone, ArrowRight, UserPlus, Sparkles, UserCheck, Lock } from 'lucide-react';
+import { ShoppingBag, Store, ShieldCheck, Phone, ArrowRight, UserPlus, Sparkles, UserCheck, Lock, Eye, EyeOff } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { Role } from '../types';
 import { BrandLogo } from './BrandLogo';
+import { AdminLoginModal } from './AdminLoginModal';
 
 interface CustomerAuthPageProps {
   onSuccess?: () => void;
@@ -15,8 +16,10 @@ export const CustomerAuthPage: React.FC<CustomerAuthPageProps> = ({ onSuccess })
   const [phone, setPhone] = useState('');
   const [name, setName] = useState('');
   const [adminPassword, setAdminPassword] = useState('');
+  const [showAdminPassword, setShowAdminPassword] = useState(false);
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [isRecoveryModalOpen, setIsRecoveryModalOpen] = useState(false);
 
   const handleCustomerLogin = async (overridePhone?: string, overrideName?: string) => {
     setError('');
@@ -276,25 +279,52 @@ export const CustomerAuthPage: React.FC<CustomerAuthPageProps> = ({ onSuccess })
                 <div className="relative">
                   <Lock size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" />
                   <input
-                    type="password"
+                    type={showAdminPassword ? 'text' : 'password'}
                     required
                     value={adminPassword}
                     onChange={(e) => setAdminPassword(e.target.value)}
                     placeholder="Enter admin password"
-                    className="w-full pl-9 pr-3.5 py-2.5 border border-gray-300 rounded-xl text-sm font-semibold text-gray-800 focus:ring-2 focus:ring-[#0F2C59] outline-none"
+                    className="w-full pl-9 pr-10 py-2.5 border border-gray-300 rounded-xl text-sm font-semibold text-gray-800 focus:ring-2 focus:ring-[#0F2C59] outline-none"
                   />
+                  <button
+                    type="button"
+                    onClick={() => setShowAdminPassword(!showAdminPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 focus:outline-none"
+                  >
+                    {showAdminPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
                 </div>
-                <p className="text-[11px] text-gray-500 mt-1">
-                  Owner portal for wholesale fulfillment, live margin controls &amp; catalog management.
-                </p>
+                <div className="flex items-center justify-between mt-2">
+                  <p className="text-[11px] text-gray-500">
+                    Owner portal for wholesale fulfillment &amp; controls.
+                  </p>
+                  <button
+                    type="button"
+                    id="shopkeeper-auth-forgot-password-btn"
+                    onClick={() => setIsRecoveryModalOpen(true)}
+                    className="text-xs font-bold text-[#0F2C59] hover:underline shrink-0"
+                  >
+                    Forgot Password?
+                  </button>
+                </div>
               </div>
 
               <button
                 type="submit"
-                className="w-full bg-[#D4AF37] hover:bg-[#b89528] text-[#0F2C59] font-black py-3 px-5 rounded-xl transition shadow-md flex items-center justify-center gap-2"
+                disabled={isLoading}
+                className="w-full bg-[#D4AF37] hover:bg-[#b89528] text-[#0F2C59] font-black py-3 px-5 rounded-xl transition shadow-md flex items-center justify-center gap-2 disabled:opacity-50"
               >
-                <ShieldCheck size={18} />
-                <span>Enter Shopkeeper Admin Center</span>
+                {isLoading ? (
+                  <>
+                    <span className="w-4 h-4 border-2 border-[#0F2C59] border-t-transparent rounded-full animate-spin"></span>
+                    <span>Verifying...</span>
+                  </>
+                ) : (
+                  <>
+                    <ShieldCheck size={18} />
+                    <span>Enter Shopkeeper Admin Center</span>
+                  </>
+                )}
               </button>
             </form>
           )}
@@ -306,6 +336,19 @@ export const CustomerAuthPage: React.FC<CustomerAuthPageProps> = ({ onSuccess })
           </div>
         </div>
       </div>
+
+      {/* Admin Password Recovery & Reset Modal */}
+      <AdminLoginModal
+        isOpen={isRecoveryModalOpen}
+        initialMode="FORGOT_PASSWORD"
+        onClose={() => setIsRecoveryModalOpen(false)}
+        onSuccess={() => {
+          setIsRecoveryModalOpen(false);
+          loginWithPhone('9876543210', Role.SHOPKEEPER, 'Om Prakash Sharma');
+          setActiveRole(Role.SHOPKEEPER);
+          if (onSuccess) onSuccess();
+        }}
+      />
     </div>
   );
 };

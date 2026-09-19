@@ -65,12 +65,50 @@ function aistudioMediaPlugin(): Plugin {
 }
 // LINT.ThenChange(//depot/google3/java/com/google/alkali/boq/makersuite/applet_dev_service/templates/initializers/react_theme/vite.config.ts:aistudio_media_plugin)
 
+function apiServerPlugin(): Plugin {
+  return {
+    name: 'vite-plugin-api-server',
+    configureServer(server) {
+      server.middlewares.use(async (req, res, next) => {
+        const url = req.url || '';
+        if (url.startsWith('/api/')) {
+          const pathname = url.split('?')[0].split('#')[0];
+          const relativePath = pathname.replace(/^\/api\//, '');
+          let targetPath = path.resolve(__dirname, 'api', `${relativePath}.ts`);
+          if (!fs.existsSync(targetPath)) {
+            targetPath = path.resolve(__dirname, 'api', relativePath, 'index.ts');
+          }
+          if (fs.existsSync(targetPath)) {
+            try {
+              const mod = await server.ssrLoadModule(targetPath);
+              if (typeof mod.default === 'function') {
+                await mod.default(req, res);
+                return;
+              }
+            } catch (err: any) {
+              console.error(`API Error on ${url}:`, err);
+              if (!res.headersSent) {
+                res.statusCode = 500;
+                res.setHeader('Content-Type', 'application/json');
+                res.end(JSON.stringify({ error: err?.message || 'Internal Server Error' }));
+              }
+              return;
+            }
+          }
+        }
+        next();
+      });
+    },
+  };
+}
+
 export default defineConfig(() => {
   return {
     plugins: [
       react(),
       tailwindcss(),
       aistudioMediaPlugin(),
+      apiServerPlugin(),
       VitePWA({
         registerType: 'autoUpdate',
         manifest: false, // We already have public/manifest.json matching the exact user prompt

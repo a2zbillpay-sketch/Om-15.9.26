@@ -402,7 +402,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       })),
     };
 
-    // 2. Save product to Supabase and WAIT for operation to complete
+    // 2. Save product through Server Boundary /api/products
+    try {
+      const resp = await fetch('/api/products', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(product),
+      });
+
+      if (resp.ok) {
+        const data = await resp.json();
+        const savedProduct = data.product || product;
+        setProducts((prev) => [savedProduct, ...prev]);
+        return { success: true };
+      } else if (resp.status === 401 && isSupabaseConfigured) {
+        return {
+          success: false,
+          error: 'Shopkeeper authorization required to add products. Please log in as Shopkeeper.',
+        };
+      } else {
+        const errorData = await resp.json().catch(() => ({}));
+        if (errorData.error) {
+          return { success: false, error: errorData.error };
+        }
+      }
+    } catch {
+      // Offline or network error fallback
+    }
+
+    // Direct Supabase fallback if offline/client-direct
     if (isSupabaseConfigured) {
       const saveResult = await saveProductToSupabase(product);
       if (!saveResult.success) {
@@ -414,8 +443,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     }
 
-    // 3. Only after successful Supabase persistence:
-    // Update React product state (which subsequently updates localStorage cache)
+    // 3. Update React product state (which subsequently updates localStorage cache)
     setProducts((prev) => [product, ...prev]);
     return { success: true };
   };
@@ -424,6 +452,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const current = products.find((p) => p.id === id);
     if (!current) return;
     const updated = { ...current, ...updates };
+
+    try {
+      const resp = await fetch('/api/products', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(updated),
+      });
+
+      if (resp.ok) {
+        const data = await resp.json();
+        const savedProduct = data.product || updated;
+        setProducts((prev) => prev.map((p) => (p.id === id ? savedProduct : p)));
+        return { success: true };
+      }
+    } catch {
+      // Offline fallback
+    }
+
     if (isSupabaseConfigured) {
       await saveProductToSupabase(updated);
     }
@@ -431,6 +478,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const deleteProduct = async (id: string) => {
+    try {
+      const resp = await fetch(`/api/products?id=${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+      if (resp.ok) {
+        setProducts((prev) => prev.filter((p) => p.id !== id));
+        return { success: true };
+      }
+    } catch {
+      // Offline fallback
+    }
+
     if (isSupabaseConfigured) {
       await deleteProductFromSupabase(id);
     }

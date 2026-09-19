@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 import crypto from 'crypto';
+import { getLastPasswordResetTime } from './store.ts';
 
 export interface AdminSession {
   role: 'SHOPKEEPER';
@@ -10,17 +11,22 @@ export interface AdminSession {
 export const SESSION_COOKIE_NAME = 'om_admin_session';
 export const SESSION_MAX_AGE_MS = 1000 * 60 * 60 * 8; // 8 hours
 
+let ephemeralSessionSecret: string | null = null;
+
 /**
- * Retrieves the required server-only secret for HMAC session signing.
- * FAILS CLOSED: Returns null if ADMIN_SESSION_SECRET is missing or too short (< 32 chars).
- * Never uses a hardcoded fallback.
+ * Retrieves the server-only secret for HMAC session signing.
+ * Uses ADMIN_SESSION_SECRET if set (min 32 chars).
+ * Falls back to an in-memory cryptographically random 256-bit secret for the server session lifetime.
  */
 export function getSessionSecret(): string | null {
   const secret = process.env.ADMIN_SESSION_SECRET;
-  if (!secret || typeof secret !== 'string' || secret.trim().length < 32) {
-    return null;
+  if (secret && typeof secret === 'string' && secret.trim().length >= 32) {
+    return secret.trim();
   }
-  return secret.trim();
+  if (!ephemeralSessionSecret) {
+    ephemeralSessionSecret = crypto.randomBytes(32).toString('hex');
+  }
+  return ephemeralSessionSecret;
 }
 
 /**
@@ -120,6 +126,12 @@ export function verifySessionToken(token: string): AdminSession | null {
     }
 
     if (typeof payload.expiresAt !== 'number' || Date.now() > payload.expiresAt) {
+      return null;
+    }
+
+    // Invalidate sessions issued before the most recent password reset
+    const resetTime = getLastPasswordResetTime();
+    if (resetTime > 0 && (typeof payload.issuedAt !== 'number' || payload.issuedAt < resetTime)) {
       return null;
     }
 
