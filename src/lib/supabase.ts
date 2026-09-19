@@ -6,9 +6,15 @@ import {
   deleteProductWithCascade,
 } from './product-service';
 
-// Retrieve credentials from Vite environment variables
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+// Retrieve credentials from Vite environment variables (with safe fallback for server/testing)
+const supabaseUrl =
+  (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_URL) ||
+  (typeof process !== 'undefined' && (process.env?.VITE_SUPABASE_URL || process.env?.SUPABASE_URL)) ||
+  '';
+const supabaseAnonKey =
+  (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_ANON_KEY) ||
+  (typeof process !== 'undefined' && (process.env?.VITE_SUPABASE_ANON_KEY || process.env?.SUPABASE_ANON_KEY)) ||
+  '';
 
 export const isSupabaseConfigured = Boolean(
   supabaseUrl &&
@@ -548,10 +554,18 @@ export async function fetchProductsFromSupabase(): Promise<Product[] | null> {
   if (!supabase) return null;
 
   try {
-    const { data: dbProducts, error: prodError } = await supabase
+    // Attempt ordering by updated_at (fallback to unsorted if column is unavailable)
+    let prodResult = await supabase
       .from('products')
       .select('*')
-      .order('created_at', { ascending: false });
+      .order('updated_at', { ascending: false });
+
+    if (prodResult.error) {
+      console.warn('Ordering products by updated_at failed, falling back to unordered select:', prodResult.error.message);
+      prodResult = await supabase.from('products').select('*');
+    }
+
+    const { data: dbProducts, error: prodError } = prodResult;
 
     if (prodError) {
       console.error('Failed to fetch products from Supabase:', prodError);
@@ -563,78 +577,143 @@ export async function fetchProductsFromSupabase(): Promise<Product[] | null> {
     }
 
     const productIds = dbProducts.map((p) => p.id);
-    const { data: dbVariants, error: varError } = await supabase
-      .from('product_variants')
-      .select('*')
-      .in('product_id', productIds);
-
-    if (varError) {
-      console.error('Failed to fetch product variants from Supabase:', varError);
-      return null;
-    }
-
-    const variantIds = (dbVariants || []).map((v) => v.id);
-    let dbTieredPrices: any[] = [];
-    if (variantIds.length > 0) {
-      const { data: tpData, error: tpError } = await supabase
-        .from('tiered_prices')
-        .select('*')
-        .in('variant_id', variantIds);
-
-      if (tpError) {
-        console.warn('Failed to fetch tiered prices from Supabase:', tpError);
-      } else if (tpData) {
-        dbTieredPrices = tpData;
-      }
-    }
-
-    // Index tiered prices by variant_id
-    const tieredPricesByVariant: Record<string, TieredPrice[]> = {};
-    for (const tp of dbTieredPrices) {
-      if (!tieredPricesByVariant[tp.variant_id]) {
-        tieredPricesByVariant[tp.variant_id] = [];
-      }
-      tieredPricesByVariant[tp.variant_id].push({
-        id: tp.id,
-        variantId: tp.variant_id,
-        minQty: Number(tp.min_qty),
-        maxQty: Number(tp.max_qty),
-        unitPrice: Number(tp.unit_price),
-      });
-    }
-
-    // Index variants by product_id
     const variantsByProduct: Record<string, ProductVariant[]> = {};
-    for (const v of dbVariants || []) {
-      if (!variantsByProduct[v.product_id]) {
-        variantsByProduct[v.product_id] = [];
+
+    // 1. Check if separate relational product_variants table exists
+    try {
+      const { data: dbVariants, error: varError } = await supabase
+        .from('product_variants')
+        .select('*')
+        .in('product_id', productIds);
+
+      if (!varError && dbVariants && dbVariants.length > 0) {
+        const variantIds = dbVariants.map((v) => v.id);
+        let dbTieredPrices: any[] = [];
+        try {
+          const { data: tpData, error: tpError } = await supabase
+            .from('tiered_prices')
+            .select('*')
+            .in('variant_id', variantIds);
+
+          if (!tpError && tpData) {
+            dbTieredPrices = tpData;
+          }
+        } catch {
+          // Relational tiered prices table not present
+        }
+
+        const tieredPricesByVariant: Record<string, TieredPrice[]> = {};
+        for (const tp of dbTieredPrices) {
+          if (!tieredPricesByVariant[tp.variant_id]) {
+            tieredPricesByVariant[tp.variant_id] = [];
+          }
+          tieredPricesByVariant[tp.variant_id].push({
+            id: tp.id,
+            variantId: tp.variant_id,
+            minQty: Number(tp.min_qty),
+            maxQty: Number(tp.max_qty),
+            unitPrice: Number(tp.unit_price),
+          });
+        }
+
+        for (const v of dbVariants) {
+          if (!variantsByProduct[v.product_id]) {
+            variantsByProduct[v.product_id] = [];
+          }
+          variantsByProduct[v.product_id].push({
+            id: v.id,
+            productId: v.product_id,
+            unit: (v.unit as UnitType) || UnitType.KG,
+            packSize: Number(v.pack_size || 1),
+            packLabel: v.pack_label || `${v.pack_size || 1} ${v.unit || 'KG'}`,
+            mrp: Number(v.mrp || 0),
+            baseSellingPrice: Number(v.base_selling_price || 0),
+            stockQuantity: Number(v.stock_quantity || 0),
+            maxOrderLimit: Number(v.max_order_limit || 20),
+            tieredPrices: tieredPricesByVariant[v.id] || [],
+          });
+        }
       }
-      variantsByProduct[v.product_id].push({
-        id: v.id,
-        productId: v.product_id,
-        unit: v.unit as UnitType,
-        packSize: Number(v.pack_size),
-        packLabel: v.pack_label,
-        mrp: Number(v.mrp),
-        baseSellingPrice: Number(v.base_selling_price),
-        stockQuantity: Number(v.stock_quantity),
-        maxOrderLimit: Number(v.max_order_limit),
-        tieredPrices: tieredPricesByVariant[v.id] || [],
-      });
+    } catch {
+      // product_variants table not available, fallback to embedded JSONB
     }
 
     // Assemble final Product list
-    const assembledProducts: Product[] = dbProducts.map((p) => ({
-      id: p.id,
-      name: p.name,
-      brand: p.brand,
-      description: p.description,
-      categoryId: p.category_id || '',
-      imageUrl: p.image_url && p.image_url.trim() ? p.image_url.trim() : undefined,
-      isDiscountExcluded: Boolean(p.is_discount_excluded),
-      variants: variantsByProduct[p.id] || [],
-      createdAt: p.created_at,
-    }));
+    const assembledProducts: Product[] = dbProducts.map((p) => {
+      // Match categoryId from INITIAL_CATEGORIES or fallback gracefully
+      const matchedCategory = INITIAL_CATEGORIES.find(
+        (c) =>
+          c.name.toLowerCase() === (p.category || '').toLowerCase() ||
+          c.id === p.category_id ||
+          c.id === p.category
+      );
+      const categoryId = matchedCategory ? matchedCategory.id : (p.category_id || p.category || 'cat-15');
+
+      // 1. Use relational variants if resolved
+      let variants: ProductVariant[] = variantsByProduct[p.id] || [];
+
+      // 2. Otherwise extract from embedded wholesale_tier_discount (JSONB)
+      if (variants.length === 0 && Array.isArray(p.wholesale_tier_discount) && p.wholesale_tier_discount.length > 0) {
+        variants = p.wholesale_tier_discount.map((v: any, idx: number) => {
+          const vUnit = (v.unit as UnitType) || UnitType.KG;
+          const vPackSize = Number(v.packSize ?? v.pack_size ?? 1);
+          const vPackLabel = v.packLabel || v.pack_label || `${vPackSize} ${vUnit}`;
+          const vTieredPrices: TieredPrice[] = Array.isArray(v.tieredPrices)
+            ? v.tieredPrices.map((tp: any, tpIdx: number) => ({
+                id: tp.id || `tp_${v.id || idx}_${tpIdx}`,
+                variantId: tp.variantId || tp.variant_id || v.id || `var_${p.id}_${idx}`,
+                minQty: Number(tp.minQty ?? tp.min_qty ?? 1),
+                maxQty: Number(tp.maxQty ?? tp.max_qty ?? 999),
+                unitPrice: Number(tp.unitPrice ?? tp.unit_price ?? v.baseSellingPrice ?? v.base_selling_price ?? p.price ?? 0),
+              }))
+            : [];
+
+          return {
+            id: v.id || `var_${p.id}_${idx + 1}`,
+            productId: p.id,
+            unit: vUnit,
+            packSize: vPackSize,
+            packLabel: vPackLabel,
+            mrp: Number(v.mrp || p.mrp || 0),
+            baseSellingPrice: Number(v.baseSellingPrice ?? v.base_selling_price ?? p.price ?? 0),
+            stockQuantity: Number(v.stockQuantity ?? v.stock_quantity ?? p.stock ?? 0),
+            maxOrderLimit: Number(v.maxOrderLimit ?? v.max_order_limit ?? 20),
+            tieredPrices: vTieredPrices,
+          };
+        });
+      }
+
+      // 3. Fallback: create primary variant from base product columns if variants array is empty
+      if (variants.length === 0) {
+        const defaultPack = p.unit ? String(p.unit) : '1 KG';
+        variants = [
+          {
+            id: `var_${p.id}_1`,
+            productId: p.id,
+            unit: UnitType.KG,
+            packSize: Number(p.weight_per_unit_kg || 1),
+            packLabel: defaultPack,
+            mrp: Number(p.mrp || p.price || 0),
+            baseSellingPrice: Number(p.price || p.mrp || 0),
+            stockQuantity: Number(p.stock || 0),
+            maxOrderLimit: Number(p.min_order_qty ? p.min_order_qty * 10 : 20),
+            tieredPrices: [],
+          },
+        ];
+      }
+
+      return {
+        id: p.id,
+        name: p.name,
+        brand: p.brand || p.sub_category || '',
+        description: p.description || '',
+        categoryId,
+        imageUrl: p.image_url && String(p.image_url).trim() ? String(p.image_url).trim() : undefined,
+        isDiscountExcluded: Boolean(p.is_discount_excluded),
+        variants,
+        createdAt: p.created_at || p.updated_at || new Date().toISOString(),
+      };
+    });
 
     return assembledProducts;
   } catch (err) {

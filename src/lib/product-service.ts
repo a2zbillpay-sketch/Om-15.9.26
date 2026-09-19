@@ -275,7 +275,7 @@ export async function saveProductWithCascadeSync(
   }
 
   try {
-    // 1. Ensure category exists in categories table to satisfy Foreign Key constraints
+    // 1. Ensure category exists in categories table to satisfy Foreign Key constraints if present
     if (product.categoryId) {
       const matchedCat = INITIAL_CATEGORIES.find((c) => c.id === product.categoryId);
       if (matchedCat) {
@@ -294,30 +294,38 @@ export async function saveProductWithCascadeSync(
       }
     }
 
-    // 2. Prepare and upsert Product record into public.products
+    // 2. Prepare Product record for public.products
+    const matchedCategory = INITIAL_CATEGORIES.find((c) => c.id === product.categoryId);
+    const categoryName = matchedCategory ? matchedCategory.name : (product.categoryId || 'Other Grocery Items');
+    const primaryVariant = product.variants?.[0];
+    const basePrice = primaryVariant ? Number(primaryVariant.baseSellingPrice || 0) : 0;
+    const mrp = primaryVariant ? Number(primaryVariant.mrp || 0) : 0;
+    const totalStock = (product.variants || []).reduce(
+      (sum, v) => sum + (Number(v.stockQuantity) || 0),
+      0
+    );
+    const unitLabel = primaryVariant
+      ? (primaryVariant.packLabel || `${primaryVariant.packSize || 1} ${primaryVariant.unit || 'KG'}`)
+      : '1 KG';
+
     const productPayload: Record<string, any> = {
       id: product.id,
       name: product.name,
-      brand: product.brand,
-      description: product.description || '',
-      category_id: product.categoryId || null,
+      category: categoryName,
+      sub_category: product.brand || '',
+      price: basePrice,
+      mrp: mrp,
+      stock: totalStock,
+      unit: unitLabel,
+      min_order_qty: 1,
       image_url: product.imageUrl && product.imageUrl.trim() ? product.imageUrl.trim() : null,
-      is_discount_excluded: Boolean(product.isDiscountExcluded),
-      created_at: product.createdAt || new Date().toISOString(),
+      wholesale_tier_discount: product.variants || [],
       updated_at: new Date().toISOString(),
     };
 
     let prodInsertResult = await supabaseClient
       .from('products')
       .upsert(productPayload, { onConflict: 'id' });
-
-    // Handle foreign key error gracefully
-    if (prodInsertResult.error && (prodInsertResult.error as any).code === '23503') {
-      productPayload.category_id = null;
-      prodInsertResult = await supabaseClient
-        .from('products')
-        .upsert(productPayload, { onConflict: 'id' });
-    }
 
     if (prodInsertResult.error) {
       return {
@@ -328,120 +336,47 @@ export async function saveProductWithCascadeSync(
 
     const incomingVariants = product.variants || [];
 
-    // 3. SYNCHRONIZE VARIANTS: Delete variants that were removed in the UI
-    const { data: existingVariants, error: fetchVarErr } = await supabaseClient
-      .from('product_variants')
-      .select('id')
-      .eq('product_id', product.id);
-
-    if (fetchVarErr) {
-      console.warn('Could not query existing variants for cleanup:', fetchVarErr.message);
-    } else if (existingVariants && existingVariants.length > 0) {
-      const incomingVarIdSet = new Set(incomingVariants.map((v) => v.id));
-      const removedVarIds = existingVariants
-        .map((v: any) => v.id)
-        .filter((id: string) => !incomingVarIdSet.has(id));
-
-      if (removedVarIds.length > 0) {
-        // Delete removed variants. ON DELETE CASCADE automatically cleans up their tiered_prices.
-        const { error: delVarErr } = await supabaseClient
-          .from('product_variants')
-          .delete()
-          .in('id', removedVarIds);
-
-        if (delVarErr) {
-          return {
-            success: false,
-            error: `Failed to remove deleted variants: ${delVarErr.message}`,
-          };
-        }
-      }
-    }
-
-    // 4. Upsert incoming variants
-    if (incomingVariants.length > 0) {
-      const variantsPayload = incomingVariants.map((v) => ({
-        id: v.id,
-        product_id: product.id,
-        unit: v.unit,
-        pack_size: Number(v.packSize),
-        pack_label: v.packLabel || `${v.packSize} ${v.unit}`,
-        mrp: Number(v.mrp),
-        base_selling_price: Number(v.baseSellingPrice),
-        stock_quantity: v.stockQuantity !== undefined && v.stockQuantity !== null ? Number(v.stockQuantity) : 0,
-        max_order_limit: v.maxOrderLimit !== undefined && v.maxOrderLimit !== null ? Number(v.maxOrderLimit) : 12,
-        created_at: new Date().toISOString(),
-      }));
-
-      const { error: varError } = await supabaseClient
+    // 3. Optional: If separate relational product_variants table exists, sync it
+    try {
+      const { data: existingVariants, error: fetchVarErr } = await supabaseClient
         .from('product_variants')
-        .upsert(variantsPayload, { onConflict: 'id' });
+        .select('id')
+        .eq('product_id', product.id);
 
-      if (varError) {
-        return {
-          success: false,
-          error: `Database error saving variants: ${varError.message}`,
-        };
-      }
+      if (!fetchVarErr && existingVariants) {
+        const incomingVarIdSet = new Set(incomingVariants.map((v) => v.id));
+        const removedVarIds = existingVariants
+          .map((v: any) => v.id)
+          .filter((id: string) => !incomingVarIdSet.has(id));
 
-      // 5. SYNCHRONIZE TIERED PRICES: Clean up removed wholesale slabs
-      const allIncomingTieredPrices: any[] = [];
-      for (const v of incomingVariants) {
-        if (v.tieredPrices && v.tieredPrices.length > 0) {
-          for (const tp of v.tieredPrices) {
-            allIncomingTieredPrices.push({
-              id: tp.id || `tp-${v.id}-${tp.minQty}-${Date.now()}`,
-              variant_id: v.id,
-              min_qty: Number(tp.minQty),
-              max_qty: Number(tp.maxQty) || 9999,
-              unit_price: Number(tp.unitPrice),
-            });
-          }
-        }
-      }
-
-      const survivingVarIds = incomingVariants.map((v) => v.id);
-      const { data: existingTps, error: fetchTpErr } = await supabaseClient
-        .from('tiered_prices')
-        .select('id, variant_id')
-        .in('variant_id', survivingVarIds);
-
-      if (fetchTpErr) {
-        console.warn('Could not query existing tiered prices for cleanup:', fetchTpErr.message);
-      } else if (existingTps && existingTps.length > 0) {
-        const incomingTpIdSet = new Set(allIncomingTieredPrices.map((tp) => tp.id));
-        const removedTpIds = existingTps
-          .map((tp: any) => tp.id)
-          .filter((id: string) => !incomingTpIdSet.has(id));
-
-        if (removedTpIds.length > 0) {
-          const { error: delTpErr } = await supabaseClient
-            .from('tiered_prices')
+        if (removedVarIds.length > 0) {
+          await supabaseClient
+            .from('product_variants')
             .delete()
-            .in('id', removedTpIds);
+            .in('id', removedVarIds);
+        }
 
-          if (delTpErr) {
-            return {
-              success: false,
-              error: `Failed to remove deleted wholesale slabs: ${delTpErr.message}`,
-            };
-          }
+        if (incomingVariants.length > 0) {
+          const variantsPayload = incomingVariants.map((v) => ({
+            id: v.id,
+            product_id: product.id,
+            unit: v.unit,
+            pack_size: Number(v.packSize),
+            pack_label: v.packLabel || `${v.packSize} ${v.unit}`,
+            mrp: Number(v.mrp),
+            base_selling_price: Number(v.baseSellingPrice),
+            stock_quantity: v.stockQuantity !== undefined && v.stockQuantity !== null ? Number(v.stockQuantity) : 0,
+            max_order_limit: v.maxOrderLimit !== undefined && v.maxOrderLimit !== null ? Number(v.maxOrderLimit) : 12,
+            updated_at: new Date().toISOString(),
+          }));
+
+          await supabaseClient
+            .from('product_variants')
+            .upsert(variantsPayload, { onConflict: 'id' });
         }
       }
-
-      // Upsert incoming tiered prices
-      if (allIncomingTieredPrices.length > 0) {
-        const { error: tpError } = await supabaseClient
-          .from('tiered_prices')
-          .upsert(allIncomingTieredPrices, { onConflict: 'id' });
-
-        if (tpError) {
-          return {
-            success: false,
-            error: `Database error saving wholesale slabs: ${tpError.message}`,
-          };
-        }
-      }
+    } catch {
+      // product_variants table not available, products.wholesale_tier_discount is primary store
     }
 
     return { success: true, product };
