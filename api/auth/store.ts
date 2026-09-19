@@ -87,7 +87,10 @@ export function verifyScryptHash(password: string, formattedHash: string): boole
 
 /**
  * Retrieves the currently active admin password hash.
- * Prefers the runtime hash (set during a verified password reset) over the initial env var.
+ * Priority:
+ * 1. runtimeAdminPasswordHash (set during verified reset or dynamic initialization)
+ * 2. process.env.ADMIN_PASSWORD_HASH
+ * 3. Lazily derived scrypt hash from process.env.ADMIN_SETUP_PASSWORD (cached in runtimeAdminPasswordHash)
  */
 export function getActiveAdminPasswordHash(): string | null {
   if (runtimeAdminPasswordHash) {
@@ -96,6 +99,11 @@ export function getActiveAdminPasswordHash(): string | null {
   const envHash = process.env.ADMIN_PASSWORD_HASH;
   if (envHash && typeof envHash === 'string' && envHash.trim().length > 0) {
     return envHash.trim();
+  }
+  const setupPassword = process.env.ADMIN_SETUP_PASSWORD;
+  if (setupPassword && typeof setupPassword === 'string' && setupPassword.trim().length > 0) {
+    runtimeAdminPasswordHash = hashPasswordWithScrypt(setupPassword.trim());
+    return runtimeAdminPasswordHash;
   }
   return null;
 }
