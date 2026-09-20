@@ -38,7 +38,8 @@ export const CustomerAuthPage: React.FC<CustomerAuthPageProps> = ({ onSuccess })
       await loginWithPhone(
         cleanPhone,
         Role.CUSTOMER,
-        name.trim()
+        customerMode === 'NEW' ? name.trim() : undefined,
+        { isExisting: customerMode === 'EXISTING' }
       );
       if (onSuccess) onSuccess();
     } catch (err: any) {

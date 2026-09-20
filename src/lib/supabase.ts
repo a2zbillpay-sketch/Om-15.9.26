@@ -1,5 +1,5 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { User, Order, Address, Role, OrderStatus, PaymentMethod, PaymentStatus, UnitType, Product, ProductVariant, TieredPrice } from '../types';
+import { User, Order, OrderItem, Address, Role, OrderStatus, PaymentMethod, PaymentStatus, UnitType, Product, ProductVariant, TieredPrice } from '../types';
 import { INITIAL_CATEGORIES } from '../data/seedData';
 import {
   saveProductWithCascadeSync,
@@ -40,6 +40,52 @@ if (isSupabaseConfigured) {
 
 export const supabase = supabaseInstance;
 
+function parseCustomerAddress(rawAddress?: string | null): {
+  fullAddress: string;
+  landmark: string;
+  pincode: string;
+} {
+  let savedAddressText = (rawAddress || '').trim();
+  let savedLandmark = '';
+  let savedPincode = '';
+
+  if (!savedAddressText) {
+    return { fullAddress: '', landmark: '', pincode: '' };
+  }
+
+  if (savedAddressText.startsWith('{') && savedAddressText.endsWith('}')) {
+    try {
+      const parsed = JSON.parse(savedAddressText);
+      return {
+        fullAddress: parsed.fullAddress || parsed.address || savedAddressText,
+        landmark: parsed.landmark || '',
+        pincode: parsed.pincode || '',
+      };
+    } catch {
+      // Ignore JSON parse error, treat as raw string
+    }
+  }
+
+  const landmarkMatch = savedAddressText.match(/\(Landmark:\s*([^)]+)\)/i);
+  if (landmarkMatch) {
+    savedLandmark = landmarkMatch[1].trim();
+    savedAddressText = savedAddressText.replace(/\(Landmark:\s*[^)]+\)/i, '').trim();
+  }
+
+  const pincodeMatch = savedAddressText.match(/[-,\s]+(\d{6})\s*$/);
+  if (pincodeMatch) {
+    savedPincode = pincodeMatch[1];
+    savedAddressText = savedAddressText.replace(/[-,\s]+\d{6}\s*$/, '').trim();
+  }
+
+  savedAddressText = savedAddressText.replace(/,\s*$/, '').trim();
+  return {
+    fullAddress: savedAddressText,
+    landmark: savedLandmark,
+    pincode: savedPincode,
+  };
+}
+
 /**
  * Deterministically resolves or creates a customer by their phone number.
  * This guarantees that Chrome, Samsung Internet, Safari, Firefox, Edge, etc.
@@ -55,56 +101,56 @@ export async function getOrCreateCustomerByPhone(
   const cleanPhone = phone.replace(/\D/g, '');
 
   try {
-    // 1. Check if user with this phone exists in Supabase
-    const { data: existingUser, error: selectError } = await supabase
+    // 1. Check if user with this phone and role exists in Supabase users table
+    const { data: existingRows } = await supabase
       .from('users')
       .select('*')
       .eq('phone', cleanPhone)
-      .maybeSingle();
+      .eq('role', role)
+      .order('updated_at', { ascending: false })
+      .limit(1);
 
-    if (selectError && selectError.code !== 'PGRST116') {
-      console.warn('Supabase select user warning:', selectError.message);
-    }
+    const existingUser = existingRows && existingRows.length > 0 ? existingRows[0] : null;
 
     if (existingUser) {
-      // Fetch associated addresses
-      const { data: addresses } = await supabase
-        .from('addresses')
-        .select('*')
-        .eq('user_id', existingUser.id);
-
-      const formattedAddresses: Address[] = (addresses || []).map((a: any) => ({
-        id: a.id,
-        userId: a.user_id,
-        fullAddress: a.full_address || a.fullAddress || '',
-        landmark: a.landmark || '',
-        pincode: a.pincode || '',
-        isDefault: Boolean(a.is_default || a.isDefault),
-      }));
+      const { fullAddress, landmark, pincode } = parseCustomerAddress(existingUser.address);
+      const formattedAddresses: Address[] = fullAddress
+        ? [
+            {
+              id: `addr-${existingUser.id}`,
+              userId: existingUser.id,
+              fullAddress,
+              landmark,
+              pincode,
+              isDefault: true,
+            },
+          ]
+        : [];
 
       return {
         id: existingUser.id,
         name: existingUser.name || name || '',
         phone: existingUser.phone,
         role: (existingUser.role as Role) || role,
-        referralCode: existingUser.referral_code || existingUser.referralCode || `OM${cleanPhone.slice(-4)}`,
-        walletBalance: Number(existingUser.wallet_balance || existingUser.walletBalance || 0),
-        codOrderCount: Number(existingUser.cod_order_count || existingUser.codOrderCount || 0),
+        referralCode: existingUser.referral_code || `OM${cleanPhone.slice(-4)}`,
+        walletBalance: Number(existingUser.outstanding_balance || existingUser.wallet_balance || 0),
+        codOrderCount: Number(existingUser.cod_order_count || 0),
         addresses: formattedAddresses,
-        createdAt: existingUser.created_at || new Date().toISOString(),
+        createdAt: existingUser.updated_at || existingUser.created_at || new Date().toISOString(),
       };
     }
 
-    // 2. User does not exist, create deterministic customer record in Supabase
+    // 2. User does not exist, create deterministic customer record in Supabase users table
     const referralCode = `OM${Math.floor(1000 + Math.random() * 9000)}`;
     const newCustomerPayload = {
+      id: `usr_${Date.now()}`,
       phone: cleanPhone,
       name: name || (role === Role.SHOPKEEPER ? 'Om Prakash Sharma' : ''),
       role,
-      referral_code: referralCode,
-      wallet_balance: 100, // Welcome ₹100 bonus
-      cod_order_count: 0,
-      created_at: new Date().toISOString(),
+      shop_name: name ? `${name}'s Kirana Store` : (role === Role.SHOPKEEPER ? 'Om Distributors' : ''),
+      address: '',
+      outstanding_balance: 0,
+      updated_at: new Date().toISOString(),
     };
 
     const { data: insertedUser, error: insertError } = await supabase
@@ -118,17 +164,16 @@ export async function getOrCreateCustomerByPhone(
       return null;
     }
 
-    // For a brand new customer, Address and Landmark are initially blank
     return {
       id: insertedUser.id,
       name: insertedUser.name || '',
       phone: insertedUser.phone,
       role: insertedUser.role as Role,
-      referralCode: insertedUser.referral_code || referralCode,
-      walletBalance: Number(insertedUser.wallet_balance || 100),
-      codOrderCount: Number(insertedUser.cod_order_count || 0),
+      referralCode,
+      walletBalance: 100,
+      codOrderCount: 0,
       addresses: [],
-      createdAt: insertedUser.created_at,
+      createdAt: insertedUser.updated_at || new Date().toISOString(),
     };
   } catch (err) {
     console.error('Error in getOrCreateCustomerByPhone:', err);
@@ -137,96 +182,112 @@ export async function getOrCreateCustomerByPhone(
 }
 
 /**
- * Saves or updates a customer profile (Name, Address, Landmark) in Supabase.
+ * Saves or updates a customer profile (Name, Address, Landmark, Pincode) in Supabase.
+ * Stores address directly in users.address and never queries or touches non-existent addresses table.
  */
 export async function saveCustomerProfileToSupabase(
   userId: string,
   phone: string,
   name: string,
   fullAddress: string,
-  landmark: string,
-  pincode: string = '422001'
+  landmark: string = '',
+  pincode: string = ''
 ): Promise<User | null> {
   if (!supabase) return null;
   const cleanPhone = phone.replace(/\D/g, '');
 
   try {
-    // 1. Update user name in Supabase users table
-    const { data: updatedUser, error: userError } = await supabase
-      .from('users')
-      .update({ name: name.trim() })
-      .eq('phone', cleanPhone)
-      .select()
-      .maybeSingle();
-
-    if (userError) {
-      console.warn('Supabase update user name warning:', userError.message);
+    let completeAddress = fullAddress.trim();
+    if (landmark.trim() && !completeAddress.toLowerCase().includes(landmark.trim().toLowerCase())) {
+      completeAddress = `${completeAddress} (Landmark: ${landmark.trim()})`;
+    }
+    if (pincode.trim() && !completeAddress.includes(pincode.trim())) {
+      completeAddress = `${completeAddress} - ${pincode.trim()}`;
     }
 
-    const targetUserId = updatedUser?.id || userId;
-
-    // 2. Upsert customer address in Supabase addresses table
-    const { data: existingAddresses } = await supabase
-      .from('addresses')
+    // 1. Locate existing CUSTOMER record in users table
+    const { data: existingRows } = await supabase
+      .from('users')
       .select('*')
-      .eq('user_id', targetUserId)
+      .eq('phone', cleanPhone)
+      .eq('role', 'CUSTOMER')
+      .order('updated_at', { ascending: false })
       .limit(1);
 
-    let finalAddress: Address;
+    let targetUser = existingRows && existingRows.length > 0 ? existingRows[0] : null;
 
-    if (existingAddresses && existingAddresses.length > 0) {
-      const existingAddrId = existingAddresses[0].id;
-      const { data: updatedAddr } = await supabase
-        .from('addresses')
-        .update({
-          full_address: fullAddress.trim(),
-          landmark: landmark.trim(),
-          pincode: pincode.trim(),
-          is_default: true,
-        })
-        .eq('id', existingAddrId)
+    if (targetUser) {
+      // Update existing customer record in users table
+      const updatePayload: Record<string, any> = {
+        address: completeAddress,
+        updated_at: new Date().toISOString(),
+      };
+      if (name.trim()) {
+        updatePayload.name = name.trim();
+      }
+      if (!targetUser.shop_name && name.trim()) {
+        updatePayload.shop_name = `${name.trim()}'s Kirana Store`;
+      }
+
+      const { data: updated, error: updateError } = await supabase
+        .from('users')
+        .update(updatePayload)
+        .eq('id', targetUser.id)
         .select()
         .single();
 
-      finalAddress = {
-        id: existingAddrId,
-        userId: targetUserId,
-        fullAddress: fullAddress.trim(),
-        landmark: landmark.trim(),
-        pincode: pincode.trim(),
-        isDefault: true,
-      };
+      if (updateError) {
+        console.warn('Supabase update customer profile warning:', updateError.message);
+      } else if (updated) {
+        targetUser = updated;
+      }
     } else {
-      const newAddrId = `addr-${targetUserId}-1`;
-      await supabase.from('addresses').insert({
-        id: newAddrId,
-        user_id: targetUserId,
-        full_address: fullAddress.trim(),
-        landmark: landmark.trim(),
-        pincode: pincode.trim(),
-        is_default: true,
-      });
-
-      finalAddress = {
-        id: newAddrId,
-        userId: targetUserId,
-        fullAddress: fullAddress.trim(),
-        landmark: landmark.trim(),
-        pincode: pincode.trim(),
-        isDefault: true,
+      // Insert new customer record into users table
+      const newUserId = userId && !userId.startsWith('user-') ? userId : `usr_${Date.now()}`;
+      const insertPayload = {
+        id: newUserId,
+        name: name.trim() || `Customer (${cleanPhone.slice(-4)})`,
+        phone: cleanPhone,
+        role: 'CUSTOMER',
+        shop_name: name.trim() ? `${name.trim()}'s Kirana Store` : `Customer (${cleanPhone.slice(-4)})`,
+        address: completeAddress,
+        outstanding_balance: 0,
+        updated_at: new Date().toISOString(),
       };
+
+      const { data: inserted, error: insertError } = await supabase
+        .from('users')
+        .insert(insertPayload)
+        .select()
+        .single();
+
+      if (insertError) {
+        console.warn('Supabase insert customer profile warning:', insertError.message);
+      } else if (inserted) {
+        targetUser = inserted;
+      }
     }
 
+    // Do NOT insert or update non-existent addresses table
+    const finalAddressObj: Address = {
+      id: `addr-${targetUser?.id || userId}`,
+      userId: targetUser?.id || userId,
+      fullAddress: fullAddress.trim(),
+      landmark: landmark.trim(),
+      pincode: pincode.trim(),
+      isDefault: true,
+    };
+
     return {
-      id: targetUserId,
-      name: updatedUser?.name || name.trim(),
+      id: targetUser?.id || userId,
+      name: targetUser?.name || name.trim(),
       phone: cleanPhone,
-      role: (updatedUser?.role as Role) || Role.CUSTOMER,
-      referralCode: updatedUser?.referral_code || `OM${cleanPhone.slice(-4)}`,
-      walletBalance: Number(updatedUser?.wallet_balance || 0),
-      codOrderCount: Number(updatedUser?.cod_order_count || 0),
-      addresses: [finalAddress],
-      createdAt: updatedUser?.created_at || new Date().toISOString(),
+      role: Role.CUSTOMER,
+      referralCode: `OM${cleanPhone.slice(-4)}`,
+      walletBalance: Number(targetUser?.outstanding_balance || 0),
+      codOrderCount: 0,
+      addresses: [finalAddressObj],
+      createdAt: targetUser?.updated_at || new Date().toISOString(),
     };
   } catch (err) {
     console.error('Error saving customer profile to Supabase:', err);
@@ -236,51 +297,228 @@ export async function saveCustomerProfileToSupabase(
 
 /**
  * Fetch customer profile (Name, Address, Landmark, Contact Number) from Supabase by phone.
+ * Queries public.users filtering strictly by phone AND role = CUSTOMER.
+ * Does not query non-existent public.addresses table.
  */
 export async function fetchCustomerProfileFromSupabase(phone: string): Promise<User | null> {
   if (!supabase) return null;
   const cleanPhone = phone.replace(/\D/g, '');
 
   try {
-    const { data: dbUser, error: userError } = await supabase
+    // 1. Safe query: Filter strictly by phone AND role = 'CUSTOMER'
+    // Order by updated_at descending with limit(1) to avoid PGRST116 if multiple rows exist
+    const { data: userRows, error: userError } = await supabase
       .from('users')
       .select('*')
       .eq('phone', cleanPhone)
-      .maybeSingle();
+      .eq('role', 'CUSTOMER')
+      .order('updated_at', { ascending: false })
+      .limit(1);
 
-    if (userError || !dbUser) {
+    if (userError) {
+      console.warn('Error fetching customer from Supabase users:', userError.message);
       return null;
     }
 
-    const { data: addresses } = await supabase
-      .from('addresses')
-      .select('*')
-      .eq('user_id', dbUser.id);
+    if (!userRows || userRows.length === 0) {
+      return null;
+    }
 
-    const formattedAddresses: Address[] = (addresses || []).map((a: any) => ({
-      id: a.id,
-      userId: a.user_id,
-      fullAddress: a.full_address || a.fullAddress || '',
-      landmark: a.landmark || '',
-      pincode: a.pincode || '',
-      isDefault: Boolean(a.is_default || a.isDefault),
-    }));
+    const dbUser = userRows[0];
+
+    // 2. Read the saved customer address directly from users.address
+    let { fullAddress, landmark, pincode } = parseCustomerAddress(dbUser.address);
+
+    // 3. Fallback: If users.address is empty, optionally use the most recent valid orders.delivery_address
+    if (!fullAddress) {
+      try {
+        const { data: recentOrders } = await supabase
+          .from('orders')
+          .select('delivery_address')
+          .or(`customer_id.eq.${dbUser.id},customer_phone.eq.${cleanPhone}`)
+          .not('delivery_address', 'is', null)
+          .order('created_at', { ascending: false })
+          .limit(1);
+
+        if (recentOrders && recentOrders.length > 0 && recentOrders[0].delivery_address) {
+          const fallbackParsed = parseCustomerAddress(recentOrders[0].delivery_address);
+          if (fallbackParsed.fullAddress) {
+            fullAddress = fallbackParsed.fullAddress;
+            if (!landmark) landmark = fallbackParsed.landmark;
+            if (!pincode) pincode = fallbackParsed.pincode;
+          }
+        }
+      } catch (orderErr) {
+        console.warn('Fallback order delivery_address lookup failed:', orderErr);
+      }
+    }
+
+    // Do NOT query the non-existent addresses table
+    // Do NOT invent or hard-code a customer pincode. If not stored, leave blank.
+    const formattedAddresses: Address[] = fullAddress
+      ? [
+          {
+            id: `addr-${dbUser.id}`,
+            userId: dbUser.id,
+            fullAddress,
+            landmark,
+            pincode, // Blank if not stored!
+            isDefault: true,
+          },
+        ]
+      : [];
 
     return {
       id: dbUser.id,
       name: dbUser.name || '',
       phone: dbUser.phone,
-      role: (dbUser.role as Role) || Role.CUSTOMER,
+      role: Role.CUSTOMER,
       referralCode: dbUser.referral_code || `OM${cleanPhone.slice(-4)}`,
-      walletBalance: Number(dbUser.wallet_balance || 0),
+      walletBalance: Number(dbUser.outstanding_balance || 0),
       codOrderCount: Number(dbUser.cod_order_count || 0),
       addresses: formattedAddresses,
-      createdAt: dbUser.created_at,
+      createdAt: dbUser.updated_at || new Date().toISOString(),
     };
   } catch (err) {
     console.warn('Error fetching customer profile from Supabase:', err);
     return null;
   }
+}
+
+/**
+ * Serializes order line items into the human-readable "Product Name" text format
+ * stored in the live Supabase orders table.
+ * Example output: "1. Aashirvaad Sharbati Select Whole Wheat Atta (1 KG) (Aashirvaad) - 1 Qty @ ₹60 = ₹60"
+ */
+export function serializeOrderItemsToProductName(items: OrderItem[]): string {
+  if (!items || items.length === 0) return '';
+  return items
+    .map((item, idx) => {
+      const parts: string[] = [];
+      const prodName = (item.productName || 'Grocery Item').trim();
+      parts.push(prodName);
+
+      if (item.variantName && !prodName.includes(item.variantName)) {
+        parts.push(`(${item.variantName.trim()})`);
+      }
+      if (item.brand && !prodName.includes(item.brand)) {
+        parts.push(`(${item.brand.trim()})`);
+      }
+
+      const label = parts.join(' ');
+      const qty = item.quantity || 1;
+      const unitPrice = item.unitPrice || 0;
+      const lineTotal = item.price || unitPrice * qty;
+
+      return `${idx + 1}. ${label} - ${qty} Qty @ ₹${unitPrice} = ₹${lineTotal}`;
+    })
+    .join('\n');
+}
+
+/**
+ * Parses the newline-separated "Product Name" column from the live orders table
+ * back into typed OrderItem structures.
+ */
+export function parseOrderItemsFromProductName(
+  rawText: string | null | undefined,
+  orderId: string,
+  fallbackTotal: number = 0
+): OrderItem[] {
+  if (!rawText || typeof rawText !== 'string' || !rawText.trim()) {
+    return [
+      {
+        id: `item-${orderId}-1`,
+        orderId,
+        variantId: '',
+        productName: 'Grocery Items',
+        quantity: 1,
+        unitPrice: fallbackTotal,
+        price: fallbackTotal,
+      },
+    ];
+  }
+
+  const lines = rawText
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+
+  if (lines.length === 0) {
+    return [
+      {
+        id: `item-${orderId}-1`,
+        orderId,
+        variantId: '',
+        productName: 'Grocery Items',
+        quantity: 1,
+        unitPrice: fallbackTotal,
+        price: fallbackTotal,
+      },
+    ];
+  }
+
+  const items: OrderItem[] = [];
+
+  for (let idx = 0; idx < lines.length; idx++) {
+    const line = lines[idx];
+    const pattern = /^(?:\d+\.\s*)?(.+?)\s*-\s*(\d+(?:\.\d+)?)\s*Qty(?:\s*@\s*₹?\s*(\d+(?:\.\d+)?))?(?:\s*=\s*₹?\s*(\d+(?:\.\d+)?))?/i;
+    const match = line.match(pattern);
+
+    if (match) {
+      const fullLabel = match[1].trim();
+      const qty = parseFloat(match[2]) || 1;
+      const parsedUnitPrice = match[3] ? parseFloat(match[3]) : undefined;
+      const parsedTotalPrice = match[4] ? parseFloat(match[4]) : undefined;
+
+      const unitPrice =
+        parsedUnitPrice !== undefined
+          ? parsedUnitPrice
+          : parsedTotalPrice !== undefined
+          ? Math.round(parsedTotalPrice / qty)
+          : Math.round(fallbackTotal / lines.length);
+
+      const totalPrice =
+        parsedTotalPrice !== undefined
+          ? parsedTotalPrice
+          : unitPrice * qty;
+
+      items.push({
+        id: `item-${orderId}-${idx + 1}`,
+        orderId,
+        variantId: '',
+        productName: fullLabel,
+        quantity: qty,
+        unitPrice,
+        price: totalPrice,
+      });
+    } else {
+      const cleaned = line.replace(/^\d+\.\s*/, '').trim();
+      const unitPrice = idx === 0 ? fallbackTotal : 0;
+      items.push({
+        id: `item-${orderId}-${idx + 1}`,
+        orderId,
+        variantId: '',
+        productName: cleaned || 'Grocery Item',
+        quantity: 1,
+        unitPrice,
+        price: unitPrice,
+      });
+    }
+  }
+
+  return items.length > 0
+    ? items
+    : [
+        {
+          id: `item-${orderId}-1`,
+          orderId,
+          variantId: '',
+          productName: rawText.trim(),
+          quantity: 1,
+          unitPrice: fallbackTotal,
+          price: fallbackTotal,
+        },
+      ];
 }
 
 /**
@@ -293,10 +531,11 @@ export async function fetchCustomerOrdersFromSupabase(
   if (!supabase) return null;
 
   try {
+    const cleanPhone = phone.trim().replace(/^\+91/, '').replace(/\D/g, '');
     const { data: ordersData, error: ordersError } = await supabase
       .from('orders')
-      .select('*, order_items(*)')
-      .or(`user_id.eq.${customerId},user_phone.eq.${phone}`)
+      .select('*')
+      .or(`customer_id.eq.${customerId},customer_phone.eq.${cleanPhone}`)
       .order('created_at', { ascending: false });
 
     if (ordersError) {
@@ -306,47 +545,43 @@ export async function fetchCustomerOrdersFromSupabase(
 
     if (!ordersData) return [];
 
-    return ordersData.map((o: any) => ({
-      id: o.id,
-      orderNumber: o.order_number || o.orderNumber || `OM-${o.id.slice(0, 5)}`,
-      userId: o.user_id || customerId,
-      userName: o.user_name || o.userName || 'Customer',
-      userPhone: o.user_phone || phone,
-      addressId: o.address_id || 'addr-default',
-      address: o.shipping_address || o.address || {
-        id: o.address_id || 'addr-default',
-        userId: o.user_id || customerId,
-        fullAddress: o.delivery_address || 'Nashik City Doorstep',
-        landmark: '',
-        pincode: '422001',
-        isDefault: true,
-      },
-      status: (o.status as OrderStatus) || OrderStatus.ORDER_ACCEPTED,
-      paymentMethod: (o.payment_method as PaymentMethod) || PaymentMethod.COD,
-      paymentStatus: (o.payment_status as PaymentStatus) || PaymentStatus.PENDING,
-      deliveryDate: o.delivery_date || new Date().toISOString().split('T')[0],
-      subtotal: Number(o.subtotal || 0),
-      discountAmount: Number(o.discount_amount || 0),
-      deliveryFee: Number(o.delivery_fee || 0),
-      codCharge: Number(o.cod_charge || 0),
-      finalAmount: Number(o.final_amount || 0),
-      razorpayOrderId: o.razorpay_order_id,
-      razorpayPaymentId: o.razorpay_payment_id,
-      createdAt: o.created_at || new Date().toISOString(),
-      items: (o.order_items || []).map((item: any) => ({
-        id: item.id,
-        orderId: o.id,
-        variantId: item.product_variant_id || item.variantId || '',
-        variantName: item.variant_name || item.pack_label || '',
-        productName: item.product_name || '',
-        brand: item.brand || '',
-        unit: (item.unit as UnitType) || UnitType.KG,
-        packSize: Number(item.pack_size || 1),
-        quantity: Number(item.quantity || 1),
-        unitPrice: Number(item.unit_price || 0),
-        price: Number(item.total_price || item.price || 0),
-      })),
-    }));
+    return ordersData.map((o: any) => {
+      const finalAmount = Number(o.final_total ?? o.subtotal ?? 0);
+      const subtotal = Number(o.subtotal ?? finalAmount);
+      const discountAmount = Number(o.discount_amount ?? 0);
+      const deliveryFee = Math.max(0, finalAmount - (subtotal - discountAmount));
+      const orderNumber = (o.notes || '').replace(/^Order\s*#?/i, '').trim() || o.id.replace(/^ord[-_]/i, '').slice(0, 8);
+      const items = parseOrderItemsFromProductName(o['Product Name'], o.id, finalAmount);
+      const parsedAddress = parseCustomerAddress(o.delivery_address);
+
+      return {
+        id: o.id,
+        orderNumber: orderNumber || `OM-${o.id.slice(0, 5)}`,
+        userId: o.customer_id || customerId,
+        userName: o.customer_name || 'Customer',
+        userPhone: o.customer_phone || cleanPhone,
+        addressId: 'addr-' + o.id,
+        address: {
+          id: 'addr-' + o.id,
+          userId: o.customer_id || customerId,
+          fullAddress: parsedAddress.fullAddress || (o.delivery_address ? String(o.delivery_address).trim() : '') || 'Address not specified',
+          landmark: parsedAddress.landmark || '',
+          pincode: parsedAddress.pincode || '',
+          isDefault: true,
+        },
+        status: (o.status as OrderStatus) || OrderStatus.ORDER_ACCEPTED,
+        paymentMethod: (o.payment_method as PaymentMethod) || PaymentMethod.COD,
+        paymentStatus: o.is_paid ? PaymentStatus.RECEIVED : PaymentStatus.PENDING,
+        deliveryDate: o.preferred_slot || (o.created_at ? o.created_at.split('T')[0] : new Date().toISOString().split('T')[0]),
+        subtotal,
+        discountAmount,
+        deliveryFee,
+        codCharge: 0,
+        finalAmount,
+        createdAt: o.created_at || new Date().toISOString(),
+        items,
+      };
+    });
   } catch (err) {
     console.error('Failed to query orders from Supabase:', err);
     return null;
@@ -355,80 +590,40 @@ export async function fetchCustomerOrdersFromSupabase(
 
 /**
  * Saves a new order centrally to Supabase.
+ * Strictly uses the 20 columns supported by the live orders table.
  */
 export async function saveOrderToSupabase(order: Order): Promise<boolean> {
   if (!supabase) return false;
 
   try {
-    // 1. Insert order header
     const orderPayload = {
       id: order.id,
-      order_number: order.orderNumber,
-      user_id: order.userId,
-      user_name: order.userName,
-      user_phone: order.userPhone,
-      address_id: order.addressId,
-      shipping_address: order.address,
-      status: order.status,
-      payment_method: order.paymentMethod,
-      payment_status: order.paymentStatus,
-      delivery_date: order.deliveryDate,
+      customer_id: order.userId,
+      customer_name: order.userName || 'Customer',
+      customer_phone: order.userPhone || '',
+      shop_name: order.userName || 'Customer',
+      'Product Name': serializeOrderItemsToProductName(order.items),
       subtotal: order.subtotal,
       discount_amount: order.discountAmount,
-      delivery_fee: order.deliveryFee,
-      cod_charge: order.codCharge,
-      final_amount: order.finalAmount,
-      razorpay_order_id: order.razorpayOrderId || null,
-      razorpay_payment_id: order.razorpayPaymentId || null,
-      created_at: order.createdAt,
+      final_total: order.finalAmount,
+      status: order.status,
+      payment_method: order.paymentMethod,
+      is_paid: order.paymentStatus === PaymentStatus.RECEIVED,
+      delivery_address:
+        typeof order.address === 'string'
+          ? order.address
+          : order.address?.fullAddress || '',
+      preferred_slot: order.deliveryDate || order.createdAt?.split('T')[0] || '',
+      notes: order.orderNumber ? `Order #${order.orderNumber}` : '',
+      weight_kg: (order as any).weightKg || null,
+      created_at: order.createdAt || new Date().toISOString(),
+      updated_at: new Date().toISOString(),
     };
 
     const { error: orderError } = await supabase.from('orders').insert(orderPayload);
     if (orderError) {
       console.error('Failed to save order to Supabase:', orderError);
       return false;
-    }
-
-    // 2. Insert order items
-    if (order.items && order.items.length > 0) {
-      const itemsPayload = order.items.map((item) => ({
-        id: item.id,
-        order_id: order.id,
-        product_variant_id: item.variantId,
-        product_name: item.productName || '',
-        variant_name: item.variantName || '',
-        brand: item.brand || '',
-        unit: item.unit || UnitType.KG,
-        pack_size: item.packSize || 1,
-        quantity: item.quantity,
-        unit_price: item.unitPrice,
-        total_price: item.price,
-      }));
-
-      const { error: itemsError } = await supabase.from('order_items').insert(itemsPayload);
-      if (itemsError) {
-        console.warn('Failed to save order items to Supabase:', itemsError);
-      }
-    }
-
-    // 3. Increment COD count in Supabase if payment was COD
-    if (order.paymentMethod === PaymentMethod.COD) {
-      try {
-        await supabase.rpc('increment_cod_count', { user_id: order.userId });
-      } catch {
-        // Fallback standard update
-        const { data: userRow } = await supabase
-          .from('users')
-          .select('cod_order_count')
-          .eq('id', order.userId)
-          .single();
-        if (userRow) {
-          await supabase
-            .from('users')
-            .update({ cod_order_count: (userRow.cod_order_count || 0) + 1 })
-            .eq('id', order.userId);
-        }
-      }
     }
 
     return true;
@@ -447,7 +642,7 @@ export async function fetchAllOrdersForAdmin(): Promise<Order[] | null> {
   try {
     const { data: ordersData, error: ordersError } = await supabase
       .from('orders')
-      .select('*, order_items(*)')
+      .select('*')
       .order('created_at', { ascending: false });
 
     if (ordersError) {
@@ -457,47 +652,43 @@ export async function fetchAllOrdersForAdmin(): Promise<Order[] | null> {
 
     if (!ordersData) return [];
 
-    return ordersData.map((o: any) => ({
-      id: o.id,
-      orderNumber: o.order_number || o.orderNumber || `OM-${o.id.slice(0, 5)}`,
-      userId: o.user_id,
-      userName: o.user_name || 'Customer',
-      userPhone: o.user_phone || '',
-      addressId: o.address_id || 'addr-default',
-      address: o.shipping_address || o.address || {
-        id: o.address_id || 'addr-default',
-        userId: o.user_id,
-        fullAddress: o.delivery_address || 'Nashik City Doorstep',
-        landmark: '',
-        pincode: '422001',
-        isDefault: true,
-      },
-      status: (o.status as OrderStatus) || OrderStatus.ORDER_ACCEPTED,
-      paymentMethod: (o.payment_method as PaymentMethod) || PaymentMethod.COD,
-      paymentStatus: (o.payment_status as PaymentStatus) || PaymentStatus.PENDING,
-      deliveryDate: o.delivery_date || new Date().toISOString().split('T')[0],
-      subtotal: Number(o.subtotal || 0),
-      discountAmount: Number(o.discount_amount || 0),
-      deliveryFee: Number(o.delivery_fee || 0),
-      codCharge: Number(o.cod_charge || 0),
-      finalAmount: Number(o.final_amount || 0),
-      razorpayOrderId: o.razorpay_order_id,
-      razorpayPaymentId: o.razorpay_payment_id,
-      createdAt: o.created_at || new Date().toISOString(),
-      items: (o.order_items || []).map((item: any) => ({
-        id: item.id,
-        orderId: o.id,
-        variantId: item.product_variant_id || item.variantId || '',
-        variantName: item.variant_name || item.pack_label || '',
-        productName: item.product_name || '',
-        brand: item.brand || '',
-        unit: (item.unit as UnitType) || UnitType.KG,
-        packSize: Number(item.pack_size || 1),
-        quantity: Number(item.quantity || 1),
-        unitPrice: Number(item.unit_price || 0),
-        price: Number(item.total_price || item.price || 0),
-      })),
-    }));
+    return ordersData.map((o: any) => {
+      const finalAmount = Number(o.final_total ?? o.subtotal ?? 0);
+      const subtotal = Number(o.subtotal ?? finalAmount);
+      const discountAmount = Number(o.discount_amount ?? 0);
+      const deliveryFee = Math.max(0, finalAmount - (subtotal - discountAmount));
+      const orderNumber = (o.notes || '').replace(/^Order\s*#?/i, '').trim() || o.id.replace(/^ord[-_]/i, '').slice(0, 8);
+      const items = parseOrderItemsFromProductName(o['Product Name'], o.id, finalAmount);
+      const parsedAddress = parseCustomerAddress(o.delivery_address);
+
+      return {
+        id: o.id,
+        orderNumber: orderNumber || `OM-${o.id.slice(0, 5)}`,
+        userId: o.customer_id || '',
+        userName: o.customer_name || 'Customer',
+        userPhone: o.customer_phone || '',
+        addressId: 'addr-' + o.id,
+        address: {
+          id: 'addr-' + o.id,
+          userId: o.customer_id || '',
+          fullAddress: parsedAddress.fullAddress || (o.delivery_address ? String(o.delivery_address).trim() : '') || 'Address not specified',
+          landmark: parsedAddress.landmark || '',
+          pincode: parsedAddress.pincode || '',
+          isDefault: true,
+        },
+        status: (o.status as OrderStatus) || OrderStatus.ORDER_ACCEPTED,
+        paymentMethod: (o.payment_method as PaymentMethod) || PaymentMethod.COD,
+        paymentStatus: o.is_paid ? PaymentStatus.RECEIVED : PaymentStatus.PENDING,
+        deliveryDate: o.preferred_slot || (o.created_at ? o.created_at.split('T')[0] : new Date().toISOString().split('T')[0]),
+        subtotal,
+        discountAmount,
+        deliveryFee,
+        codCharge: 0,
+        finalAmount,
+        createdAt: o.created_at || new Date().toISOString(),
+        items,
+      };
+    });
   } catch (err) {
     console.error('Exception fetching admin orders:', err);
     return null;
@@ -509,14 +700,24 @@ export async function fetchAllOrdersForAdmin(): Promise<Order[] | null> {
  */
 export async function updateOrderStatusInSupabase(
   orderId: string,
-  newStatus: OrderStatus
+  newStatus: OrderStatus,
+  isPaid?: boolean
 ): Promise<boolean> {
   if (!supabase) return false;
 
   try {
+    const updatePayload: Record<string, any> = {
+      status: newStatus,
+      updated_at: new Date().toISOString(),
+    };
+
+    if (typeof isPaid === 'boolean') {
+      updatePayload.is_paid = isPaid;
+    }
+
     const { error } = await supabase
       .from('orders')
-      .update({ status: newStatus, updated_at: new Date().toISOString() })
+      .update(updatePayload)
       .eq('id', orderId);
 
     if (error) {

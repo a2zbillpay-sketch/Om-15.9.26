@@ -152,10 +152,26 @@ CREATE POLICY "Public Read Variants" ON public.product_variants FOR SELECT USING
 CREATE POLICY "Public Read Tiered Prices" ON public.tiered_prices FOR SELECT USING (true);
 CREATE POLICY "Public Read Settings" ON public.system_settings FOR SELECT USING (true);
 
--- Users: Read/Write by Phone / Public Key for PWA client
-CREATE POLICY "Users Select Policy" ON public.users FOR SELECT USING (true);
-CREATE POLICY "Users Insert Policy" ON public.users FOR INSERT WITH CHECK (true);
-CREATE POLICY "Users Update Policy" ON public.users FOR UPDATE USING (true);
+-- Users: Read/Write by Phone / Public Key for PWA client (System & Admin credential rows protected)
+DROP POLICY IF EXISTS "Users Select Policy" ON public.users;
+CREATE POLICY "Users Select Policy" ON public.users 
+FOR SELECT USING (
+  role != 'SYSTEM' AND id != 'admin_credential_store'
+);
+
+DROP POLICY IF EXISTS "Users Insert Policy" ON public.users;
+CREATE POLICY "Users Insert Policy" ON public.users 
+FOR INSERT WITH CHECK (
+  role != 'SYSTEM' AND id != 'admin_credential_store'
+);
+
+DROP POLICY IF EXISTS "Users Update Policy" ON public.users;
+CREATE POLICY "Users Update Policy" ON public.users 
+FOR UPDATE USING (
+  role != 'SYSTEM' AND id != 'admin_credential_store'
+) WITH CHECK (
+  role != 'SYSTEM' AND id != 'admin_credential_store'
+);
 
 -- Addresses Policy
 CREATE POLICY "Addresses Select Policy" ON public.addresses FOR SELECT USING (true);

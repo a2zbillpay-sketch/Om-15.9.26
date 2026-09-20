@@ -87,26 +87,34 @@ export function verifyScryptHash(password: string, formattedHash: string): boole
 
 /**
  * Server-side Supabase client helper for Admin credential persistence.
- * Uses server-side service role key if available, otherwise anon key.
+ * Strictly requires the privileged SUPABASE_SERVICE_ROLE_KEY to prevent
+ * any reliance or fallback on public/anon keys.
  */
 async function getServerSupabaseClient() {
   const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
-  const key =
-    process.env.SUPABASE_SERVICE_ROLE_KEY ||
-    process.env.SUPABASE_ANON_KEY ||
-    process.env.VITE_SUPABASE_ANON_KEY;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-  if (url && key && url !== 'https://your-project.supabase.co' && key !== 'your-anon-key') {
-    try {
-      const { createClient } = await import('@supabase/supabase-js');
-      return createClient(url, key, {
-        auth: { persistSession: false },
-      });
-    } catch {
-      return null;
-    }
+  if (!key || key.trim() === '' || key === 'your-service-role-key') {
+    console.error(
+      '[CRITICAL AUTH CONFIG ERROR] SUPABASE_SERVICE_ROLE_KEY is missing or unconfigured. Admin credential operations require a privileged service role key and will not fall back to public/anon keys.'
+    );
+    return null;
   }
-  return null;
+
+  if (!url || url.includes('your-project.supabase.co')) {
+    console.error('[CRITICAL AUTH CONFIG ERROR] Supabase URL is missing or unconfigured.');
+    return null;
+  }
+
+  try {
+    const { createClient } = await import('@supabase/supabase-js');
+    return createClient(url, key, {
+      auth: { persistSession: false },
+    });
+  } catch (err: any) {
+    console.error('[CRITICAL AUTH CONFIG ERROR] Failed to initialize server Supabase client:', err?.message);
+    return null;
+  }
 }
 
 const ADMIN_CREDENTIAL_RECORD_ID = 'admin_credential_store';

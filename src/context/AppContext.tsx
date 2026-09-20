@@ -134,7 +134,12 @@ interface AppContextType {
   setSelectedAddressId: (id: string) => void;
   isAuthModalOpen: boolean;
   setIsAuthModalOpen: (open: boolean) => void;
-  loginWithPhone: (phone: string, role: Role, name?: string) => User;
+  loginWithPhone: (
+    phone: string,
+    role: Role,
+    name?: string,
+    options?: { isExisting?: boolean }
+  ) => Promise<User>;
   logout: () => void;
   isSupabaseConfigured: boolean;
   refreshOrders: () => Promise<void>;
@@ -825,7 +830,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       userId: targetUserId,
       fullAddress: data.fullAddress.trim(),
       landmark: data.landmark.trim(),
-      pincode: data.pincode?.trim() || '422001',
+      pincode: data.pincode?.trim() || '',
       isDefault: true,
     };
 
@@ -869,7 +874,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           data.name.trim(),
           data.fullAddress.trim(),
           data.landmark.trim(),
-          data.pincode?.trim() || '422001'
+          data.pincode?.trim() || ''
         );
       } catch (err) {
         console.error('Supabase profile save error:', err);
@@ -881,7 +886,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Auth operations (Standardized Customer Flow Step 1)
-  const loginWithPhone = (phone: string, role: Role, name?: string): User => {
+  const loginWithPhone = async (
+    phone: string,
+    role: Role,
+    name?: string,
+    options?: { isExisting?: boolean }
+  ): Promise<User> => {
     const cleanPhone = phone.replace(/\D/g, '');
 
     if (role === Role.SHOPKEEPER) {
@@ -902,90 +912,107 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     // CUSTOMER FLOW:
-    // Rule 5: Never use stale localStorage customer data to populate another customer's profile.
-    let resolvedUser: User | null = null;
-    const phoneKey = `om_profile_${cleanPhone}`;
-    const localProfile = localStorage.getItem(phoneKey);
-    if (localProfile) {
-      try {
-        resolvedUser = JSON.parse(localProfile);
-      } catch {
-        resolvedUser = null;
-      }
-    }
+    if (options?.isExisting) {
+      // Existing Customer login: must await database profile lookup before advancing
+      let resolvedUser: User | null = null;
 
-    // Check seed / local users array (e.g. Rajesh Gupta 9820123456)
-    if (!resolvedUser) {
-      const matchInSeed = INITIAL_USERS.find((u) => u.phone === cleanPhone);
-      if (matchInSeed) {
-        resolvedUser = matchInSeed;
+      if (isSupabaseConfigured) {
+        resolvedUser = await fetchCustomerProfileFromSupabase(cleanPhone);
       }
-    }
 
-    let finalUser: User;
-    if (resolvedUser) {
-      // Existing customer: ensure authenticated contact number matches (Rule 1 & 2)
-      finalUser = {
+      // Check local cache if offline or not returned by Supabase
+      if (!resolvedUser) {
+        const phoneKey = `om_profile_${cleanPhone}`;
+        const localProfile = localStorage.getItem(phoneKey);
+        if (localProfile) {
+          try {
+            resolvedUser = JSON.parse(localProfile);
+          } catch {
+            resolvedUser = null;
+          }
+        }
+      }
+
+      // If customer record is not found, throw error to inform the user
+      if (!resolvedUser) {
+        throw new Error(
+          `No registered customer profile found for +91 ${cleanPhone}. Please switch to New Customer to register.`
+        );
+      }
+
+      const finalUser: User = {
         ...resolvedUser,
         phone: cleanPhone,
-      };
-    } else {
-      // Rule 3: For a new customer, Address and Landmark must initially be blank.
-      finalUser = {
-        id: `user-${cleanPhone}`,
-        name: name || '',
-        phone: cleanPhone,
         role: Role.CUSTOMER,
-        referralCode: `OM${cleanPhone.length >= 4 ? cleanPhone.slice(-4) : '2026'}`,
-        walletBalance: 100, // Welcome ₹100 bonus
-        codOrderCount: 0,
-        addresses: [], // Strictly blank!
-        createdAt: new Date().toISOString(),
       };
+
+      setCurrentUser(finalUser);
+      setActiveRoleState(Role.CUSTOMER);
+      setSelectedAddressId(finalUser.addresses[0]?.id || null);
+      setIsAuthModalOpen(false);
+
+      const customerSavedCart = loadCustomerCart(cleanPhone);
+      setCart(customerSavedCart);
+
+      localStorage.setItem(`om_profile_${cleanPhone}`, JSON.stringify(finalUser));
+      localStorage.setItem(
+        'om_customer_session',
+        JSON.stringify({
+          phone: cleanPhone,
+          role: Role.CUSTOMER,
+          profileCompleted: false, // Navigate to Profile step first to confirm details
+        })
+      );
+
+      setUsers((prev) => {
+        const exists = prev.some((u) => u.phone === cleanPhone || u.id === finalUser.id);
+        if (exists) return prev.map((u) => (u.phone === cleanPhone || u.id === finalUser.id ? finalUser : u));
+        return [...prev, finalUser];
+      });
+
+      if (isSupabaseConfigured) {
+        fetchCustomerOrdersFromSupabase(finalUser.id, cleanPhone).then((dbOrders) => {
+          if (dbOrders) setOrders(dbOrders);
+        });
+        refreshProducts();
+      }
+
+      setCustomerFlowStep('PROFILE');
+      return finalUser;
     }
+
+    // NEW CUSTOMER FLOW:
+    // New Customer must continue to start with a clean/empty profile
+    const finalUser: User = {
+      id: `user-${cleanPhone}`,
+      name: name?.trim() || '',
+      phone: cleanPhone,
+      role: Role.CUSTOMER,
+      referralCode: `OM${cleanPhone.length >= 4 ? cleanPhone.slice(-4) : '2026'}`,
+      walletBalance: 100, // Welcome ₹100 bonus
+      codOrderCount: 0,
+      addresses: [], // Strictly blank for new customers!
+      createdAt: new Date().toISOString(),
+    };
 
     setCurrentUser(finalUser);
     setActiveRoleState(Role.CUSTOMER);
-    setSelectedAddressId(finalUser.addresses[0]?.id || null);
+    setSelectedAddressId(null);
     setIsAuthModalOpen(false);
 
-    // Restore strictly this customer's saved cart, or empty if new / no saved cart
     const customerSavedCart = loadCustomerCart(cleanPhone);
     setCart(customerSavedCart);
 
-    // Persist active session (Rule 8: Refreshing the page must not lose saved profile information)
     localStorage.setItem(
       'om_customer_session',
       JSON.stringify({
         phone: cleanPhone,
         role: Role.CUSTOMER,
-        profileCompleted: false, // Navigate to Profile step first
+        profileCompleted: false,
       })
     );
 
-    // Required Flow: App opens → Customer login → Customer Profile → Products/Shop
     setCustomerFlowStep('PROFILE');
-
-    // Rule 4: When an existing customer logs in again, load their saved Name, Address and Landmark from Supabase
-    if (isSupabaseConfigured) {
-      fetchCustomerProfileFromSupabase(cleanPhone).then((remoteUser) => {
-        if (remoteUser) {
-          setCurrentUser(remoteUser);
-          localStorage.setItem(`om_profile_${cleanPhone}`, JSON.stringify(remoteUser));
-          setUsers((prev) => {
-            const exists = prev.some((u) => u.phone === cleanPhone);
-            if (exists) return prev.map((u) => (u.phone === cleanPhone ? remoteUser : u));
-            return [...prev, remoteUser];
-          });
-        }
-      });
-
-      fetchCustomerOrdersFromSupabase(finalUser.id, cleanPhone).then((dbOrders) => {
-        if (dbOrders) setOrders(dbOrders);
-      });
-      refreshProducts();
-    }
-
     return finalUser;
   };
 

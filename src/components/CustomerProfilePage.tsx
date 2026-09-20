@@ -22,7 +22,7 @@ export const CustomerProfilePage: React.FC<CustomerProfilePageProps> = ({
   const [name, setName] = useState(currentUser.name || '');
   const [address, setAddress] = useState(primaryAddress?.fullAddress || '');
   const [landmark, setLandmark] = useState(primaryAddress?.landmark || '');
-  const [pincode, setPincode] = useState(primaryAddress?.pincode || '422001');
+  const [pincode, setPincode] = useState(primaryAddress?.pincode || '');
   const [isSaving, setIsSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
@@ -33,10 +33,10 @@ export const CustomerProfilePage: React.FC<CustomerProfilePageProps> = ({
     const currentPrimary = currentUser.addresses && currentUser.addresses.length > 0 ? currentUser.addresses[0] : null;
     setAddress(currentPrimary?.fullAddress || '');
     setLandmark(currentPrimary?.landmark || '');
-    setPincode(currentPrimary?.pincode || '422001');
+    setPincode(currentPrimary?.pincode || '');
     setErrorMessage('');
     setSuccessMessage('');
-  }, [currentUser.id, currentUser.phone]);
+  }, [currentUser.id, currentUser.phone, currentUser.name, currentUser.addresses]);
 
   const isNewCustomer = !primaryAddress || !primaryAddress.fullAddress.trim();
 
@@ -62,7 +62,7 @@ export const CustomerProfilePage: React.FC<CustomerProfilePageProps> = ({
         name: name.trim(),
         fullAddress: address.trim(),
         landmark: landmark.trim(),
-        pincode: pincode.trim() || '422001',
+        pincode: pincode.trim(),
       });
 
       setSuccessMessage('Profile saved successfully! Proceeding to shop...');
