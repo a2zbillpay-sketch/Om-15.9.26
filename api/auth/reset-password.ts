@@ -94,8 +94,8 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
     // Hash new password using scrypt (salt:derivedHex)
     const formattedHash = hashPasswordWithScrypt(newPassword);
 
-    // Save active runtime admin password hash and update lastPasswordResetTime
-    setActiveAdminPasswordHash(formattedHash);
+    // Save active persistent admin password hash to database and update in-memory cache
+    await setActiveAdminPasswordHash(formattedHash);
 
     // Invalidate existing sessions: clear session cookie on response
     clearAdminSessionCookie(res);

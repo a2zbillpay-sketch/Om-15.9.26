@@ -61,6 +61,38 @@ const BLANK_CUSTOMER: User = {
   createdAt: '',
 };
 
+// Customer-scoped cart helpers: Isolates every customer's cart by their 10-digit mobile number.
+const getCustomerCartKey = (phone?: string): string | null => {
+  if (!phone) return null;
+  const cleanPhone = phone.replace(/\D/g, '');
+  return cleanPhone.length === 10 ? `om_cart_${cleanPhone}` : null;
+};
+
+const loadCustomerCart = (phone?: string): CartItem[] => {
+  const key = getCustomerCartKey(phone);
+  if (!key) return [];
+  try {
+    const saved = localStorage.getItem(key);
+    return saved ? JSON.parse(saved) : [];
+  } catch {
+    return [];
+  }
+};
+
+const saveCustomerCart = (phone: string | undefined, cartItems: CartItem[]): void => {
+  const key = getCustomerCartKey(phone);
+  if (!key) return;
+  try {
+    if (cartItems.length === 0) {
+      localStorage.removeItem(key);
+    } else {
+      localStorage.setItem(key, JSON.stringify(cartItems));
+    }
+  } catch {
+    // ignore storage quota errors
+  }
+};
+
 interface AppContextType {
   currentUser: User;
   setCurrentUser: (user: User) => void;
@@ -234,8 +266,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
 
   const [cart, setCart] = useState<CartItem[]>(() => {
-    const saved = localStorage.getItem('om_cart');
-    return saved ? JSON.parse(saved) : [];
+    // Isolate cart to active customer session phone
+    const savedSession = localStorage.getItem('om_customer_session');
+    if (savedSession) {
+      try {
+        const session: CustomerSession = JSON.parse(savedSession);
+        if (session.phone) {
+          return loadCustomerCart(session.phone);
+        }
+      } catch {
+        // Fallback to empty
+      }
+    }
+    return [];
   });
 
   const [orders, setOrders] = useState<Order[]>(() => {
@@ -267,9 +310,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     localStorage.setItem('om_current_user', JSON.stringify(currentUser));
   }, [currentUser]);
 
+  // Sync cart strictly to the active customer's scoped key. Never store to a shared global cart.
   useEffect(() => {
-    localStorage.setItem('om_cart', JSON.stringify(cart));
-  }, [cart]);
+    if (currentUser && currentUser.phone) {
+      saveCustomerCart(currentUser.phone, cart);
+    }
+  }, [cart, currentUser]);
 
   useEffect(() => {
     localStorage.setItem('om_orders', JSON.stringify(orders));
@@ -497,21 +543,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setProducts((prev) => prev.filter((p) => p.id !== id));
   };
 
-  // Cart operations
+  // Cart operations (scoped to active customer)
   const addToCart = (product: Product, variant: ProductVariant, quantity = 1) => {
     setCart((prev) => {
       const existingIndex = prev.findIndex((item) => item.variantId === variant.id);
+      let updated: CartItem[];
       if (existingIndex > -1) {
         const existing = prev[existingIndex];
         const newQty = Math.min(
           variant.maxOrderLimit,
           Math.min(variant.stockQuantity, existing.quantity + quantity)
         );
-        const updated = [...prev];
+        updated = [...prev];
         updated[existingIndex] = { ...existing, quantity: newQty };
-        return updated;
+      } else {
+        updated = [...prev, { productId: product.id, product, variantId: variant.id, variant, quantity }];
       }
-      return [...prev, { productId: product.id, product, variantId: variant.id, variant, quantity }];
+      if (currentUser?.phone) {
+        saveCustomerCart(currentUser.phone, updated);
+      }
+      return updated;
     });
   };
 
@@ -520,8 +571,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       removeFromCart(variantId);
       return;
     }
-    setCart((prev) =>
-      prev.map((item) => {
+    setCart((prev) => {
+      const updated = prev.map((item) => {
         if (item.variantId === variantId) {
           const clamped = Math.min(
             item.variant.maxOrderLimit,
@@ -530,16 +581,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           return { ...item, quantity: clamped };
         }
         return item;
-      })
-    );
+      });
+      if (currentUser?.phone) {
+        saveCustomerCart(currentUser.phone, updated);
+      }
+      return updated;
+    });
   };
 
   const removeFromCart = (variantId: string) => {
-    setCart((prev) => prev.filter((item) => item.variantId !== variantId));
+    setCart((prev) => {
+      const updated = prev.filter((item) => item.variantId !== variantId);
+      if (currentUser?.phone) {
+        saveCustomerCart(currentUser.phone, updated);
+      }
+      return updated;
+    });
   };
 
   const clearCart = () => {
     setCart([]);
+    if (currentUser?.phone) {
+      saveCustomerCart(currentUser.phone, []);
+    }
   };
 
   // Dynamic Checkout Breakdown calculation using the engine
@@ -885,6 +949,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setSelectedAddressId(finalUser.addresses[0]?.id || null);
     setIsAuthModalOpen(false);
 
+    // Restore strictly this customer's saved cart, or empty if new / no saved cart
+    const customerSavedCart = loadCustomerCart(cleanPhone);
+    setCart(customerSavedCart);
+
     // Persist active session (Rule 8: Refreshing the page must not lose saved profile information)
     localStorage.setItem(
       'om_customer_session',
@@ -924,6 +992,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const logout = () => {
     localStorage.removeItem('om_customer_session');
     setCurrentUser(BLANK_CUSTOMER);
+    setCart([]);
     setActiveRoleState(Role.CUSTOMER);
     setSelectedAddressId(null);
     setCustomerFlowStep('AUTH');

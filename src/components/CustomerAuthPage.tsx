@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ShoppingBag, Store, ShieldCheck, Phone, ArrowRight, UserPlus, Sparkles, UserCheck, Lock, Eye, EyeOff } from 'lucide-react';
+import { ShoppingBag, Store, ShieldCheck, Phone, ArrowRight, UserPlus, UserCheck, Lock, Eye, EyeOff } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { Role } from '../types';
 import { BrandLogo } from './BrandLogo';
@@ -13,6 +13,7 @@ export const CustomerAuthPage: React.FC<CustomerAuthPageProps> = ({ onSuccess })
   const { loginWithPhone, setActiveRole } = useApp();
 
   const [activePortal, setActivePortal] = useState<'CUSTOMER' | 'SHOPKEEPER'>('CUSTOMER');
+  const [customerMode, setCustomerMode] = useState<'NEW' | 'EXISTING'>('NEW');
   const [phone, setPhone] = useState('');
   const [name, setName] = useState('');
   const [adminPassword, setAdminPassword] = useState('');
@@ -21,10 +22,10 @@ export const CustomerAuthPage: React.FC<CustomerAuthPageProps> = ({ onSuccess })
   const [isLoading, setIsLoading] = useState(false);
   const [isRecoveryModalOpen, setIsRecoveryModalOpen] = useState(false);
 
-  const handleCustomerLogin = async (overridePhone?: string, overrideName?: string) => {
+  const handleCustomerLogin = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     setError('');
-    const rawPhone = overridePhone || phone;
-    const cleanPhone = rawPhone.replace(/\D/g, '');
+    const cleanPhone = phone.replace(/\D/g, '');
 
     if (!cleanPhone || cleanPhone.length !== 10) {
       setError('Please enter a valid 10-digit mobile number.');
@@ -37,7 +38,7 @@ export const CustomerAuthPage: React.FC<CustomerAuthPageProps> = ({ onSuccess })
       await loginWithPhone(
         cleanPhone,
         Role.CUSTOMER,
-        overrideName !== undefined ? overrideName : name.trim()
+        name.trim()
       );
       if (onSuccess) onSuccess();
     } catch (err: any) {
@@ -146,127 +147,193 @@ export const CustomerAuthPage: React.FC<CustomerAuthPageProps> = ({ onSuccess })
 
           {activePortal === 'CUSTOMER' ? (
             <div className="space-y-6">
-              {/* Development Testing Fast-Track (Required per prompt) */}
-              <div className="bg-amber-50/70 border border-amber-200/80 rounded-2xl p-4 sm:p-5">
-                <div className="flex items-center gap-2 mb-2">
-                  <Sparkles size={16} className="text-[#FF6B00]" />
-                  <h3 className="text-xs font-black uppercase tracking-wider text-[#0F2C59]">
-                    Development Fast-Test Modes
-                  </h3>
-                </div>
-                <p className="text-[11px] text-gray-600 mb-3 leading-normal">
-                  Select a test scenario below to verify both new customer registration and returning customer database lookup:
-                </p>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {/* Test Existing Customer */}
+              {/* Customer Option Selector (1. New Customer, 2. Existing Customer) */}
+              <div className="space-y-2">
+                <label className="block text-[11px] font-black uppercase tracking-wider text-gray-500">
+                  Select Customer Type
+                </label>
+                <div className="grid grid-cols-2 gap-3">
+                  {/* Option 1: New Customer */}
                   <button
                     type="button"
-                    onClick={() => handleCustomerLogin('9820123456', 'Rajesh Gupta')}
-                    className="p-3 bg-white hover:bg-blue-50 border border-gray-300 hover:border-[#0F2C59] rounded-xl text-left transition shadow-xs group"
+                    id="customer-tab-new"
+                    onClick={() => {
+                      setCustomerMode('NEW');
+                      setError('');
+                    }}
+                    className={`p-3.5 rounded-2xl border text-left transition relative flex flex-col justify-between ${
+                      customerMode === 'NEW'
+                        ? 'bg-orange-50/80 border-[#FF6B00] text-gray-900 shadow-sm ring-1 ring-[#FF6B00]'
+                        : 'bg-white border-gray-200 text-gray-600 hover:border-gray-300 hover:bg-gray-50'
+                    }`}
                   >
-                    <div className="flex items-center justify-between text-xs font-bold text-gray-900 mb-1">
-                      <span className="flex items-center gap-1 text-[#0F2C59]">
-                        <UserCheck size={14} className="text-emerald-600" />
-                        <span>Existing Customer</span>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="flex items-center gap-1.5 text-xs font-black text-[#FF6B00]">
+                        <UserPlus size={16} />
+                        <span>1. New Customer</span>
                       </span>
-                      <ArrowRight size={13} className="text-gray-400 group-hover:translate-x-0.5 transition-transform" />
+                      {customerMode === 'NEW' && (
+                        <span className="w-2 h-2 rounded-full bg-[#FF6B00]"></span>
+                      )}
                     </div>
-                    <div className="text-[11px] font-semibold text-gray-700">Rajesh Gupta &bull; 9820123456</div>
-                    <div className="text-[10px] text-gray-500 mt-1">
-                      Loads saved Name, Address &amp; Landmark from database
-                    </div>
+                    <span className="text-[11px] text-gray-500 leading-snug">
+                      First-time grocery registration
+                    </span>
                   </button>
 
-                  {/* Test New Customer */}
+                  {/* Option 2: Existing Customer */}
                   <button
                     type="button"
+                    id="customer-tab-existing"
                     onClick={() => {
-                      // Generate fresh number or use deterministic test new customer
-                      const randomSuffix = Math.floor(1000 + Math.random() * 9000);
-                      handleCustomerLogin(`989900${randomSuffix}`, '');
+                      setCustomerMode('EXISTING');
+                      setError('');
                     }}
-                    className="p-3 bg-white hover:bg-orange-50 border border-gray-300 hover:border-[#FF6B00] rounded-xl text-left transition shadow-xs group"
+                    className={`p-3.5 rounded-2xl border text-left transition relative flex flex-col justify-between ${
+                      customerMode === 'EXISTING'
+                        ? 'bg-blue-50/80 border-[#0F2C59] text-gray-900 shadow-sm ring-1 ring-[#0F2C59]'
+                        : 'bg-white border-gray-200 text-gray-600 hover:border-gray-300 hover:bg-gray-50'
+                    }`}
                   >
-                    <div className="flex items-center justify-between text-xs font-bold text-gray-900 mb-1">
-                      <span className="flex items-center gap-1 text-[#FF6B00]">
-                        <UserPlus size={14} className="text-[#FF6B00]" />
-                        <span>New Customer</span>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="flex items-center gap-1.5 text-xs font-black text-[#0F2C59]">
+                        <UserCheck size={16} className="text-emerald-600" />
+                        <span>2. Existing Customer</span>
                       </span>
-                      <ArrowRight size={13} className="text-gray-400 group-hover:translate-x-0.5 transition-transform" />
+                      {customerMode === 'EXISTING' && (
+                        <span className="w-2 h-2 rounded-full bg-[#0F2C59]"></span>
+                      )}
                     </div>
-                    <div className="text-[11px] font-semibold text-gray-700">Brand New Mobile Number</div>
-                    <div className="text-[10px] text-gray-500 mt-1">
-                      Address &amp; Landmark start 100% blank
-                    </div>
+                    <span className="text-[11px] text-gray-500 leading-snug">
+                      Auto-load saved profile &amp; address
+                    </span>
                   </button>
                 </div>
               </div>
 
-              {/* Standard Direct Mobile Input */}
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  handleCustomerLogin();
-                }}
-                className="space-y-4 pt-1"
-              >
-                <div>
-                  <label className="block text-xs font-black text-gray-700 uppercase tracking-wider mb-1.5">
-                    Customer Mobile Number <span className="text-rose-500">*</span>
-                  </label>
-                  <div className="flex items-center gap-2">
-                    <span className="bg-gray-100 text-gray-700 font-mono font-bold px-3.5 py-2.5 rounded-xl border border-gray-300 text-sm">
-                      +91
-                    </span>
-                    <div className="relative flex-1">
-                      <Phone size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" />
+              {/* Dynamic Customer Form */}
+              <form onSubmit={handleCustomerLogin} className="space-y-4 pt-1">
+                {customerMode === 'NEW' ? (
+                  /* Option 1: New Customer Form */
+                  <>
+                    <div className="bg-orange-50/50 border border-orange-200/60 rounded-xl p-3 text-[11px] text-gray-600">
+                      <strong className="text-[#FF6B00]">New Customer Registration:</strong> Enter your 10-digit mobile number below. You will set up your personalized delivery address in the next step.
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-black text-gray-700 uppercase tracking-wider mb-1.5">
+                        Mobile Number <span className="text-rose-500">*</span>
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <span className="bg-gray-100 text-gray-700 font-mono font-bold px-3.5 py-2.5 rounded-xl border border-gray-300 text-sm">
+                          +91
+                        </span>
+                        <div className="relative flex-1">
+                          <Phone size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                          <input
+                            type="tel"
+                            id="new-customer-mobile-input"
+                            maxLength={10}
+                            required
+                            value={phone}
+                            onChange={(e) => setPhone(e.target.value.replace(/\D/g, ''))}
+                            placeholder="Enter your 10-digit mobile"
+                            className="w-full pl-9 pr-3.5 py-2.5 border border-gray-300 rounded-xl text-sm font-mono font-bold text-gray-800 placeholder:text-gray-400 focus:ring-2 focus:ring-[#FF6B00] focus:border-transparent outline-none transition"
+                          />
+                        </div>
+                      </div>
+                      <p className="text-[11px] text-gray-500 mt-1">
+                        Your mobile number will anchor your delivery account and contact details.
+                      </p>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-black text-gray-700 uppercase tracking-wider mb-1.5">
+                        Your Full Name (Optional)
+                      </label>
                       <input
-                        type="tel"
-                        maxLength={10}
-                        required
-                        value={phone}
-                        onChange={(e) => setPhone(e.target.value.replace(/\D/g, ''))}
-                        placeholder="Enter 10-digit mobile"
-                        className="w-full pl-9 pr-3.5 py-2.5 border border-gray-300 rounded-xl text-sm font-mono font-bold text-gray-800 placeholder:text-gray-400 focus:ring-2 focus:ring-[#0F2C59] focus:border-transparent outline-none transition"
+                        type="text"
+                        id="new-customer-name-input"
+                        value={name}
+                        onChange={(e) => setName(e.target.value)}
+                        placeholder="e.g. Ramesh Patil"
+                        className="w-full px-3.5 py-2.5 border border-gray-300 rounded-xl text-sm font-semibold text-gray-800 placeholder:text-gray-400 focus:ring-2 focus:ring-[#FF6B00] focus:border-transparent outline-none transition"
                       />
                     </div>
-                  </div>
-                  <p className="text-[11px] text-gray-500 mt-1">
-                    Your 10-digit mobile anchors your single universal customer identity across all browsers.
-                  </p>
-                </div>
 
-                <div>
-                  <label className="block text-xs font-black text-gray-700 uppercase tracking-wider mb-1.5">
-                    Customer Full Name (Optional)
-                  </label>
-                  <input
-                    type="text"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    placeholder="e.g. Ramesh Patil (will be retrieved if existing)"
-                    className="w-full px-3.5 py-2.5 border border-gray-300 rounded-xl text-sm font-semibold text-gray-800 placeholder:text-gray-400 focus:ring-2 focus:ring-[#0F2C59] focus:border-transparent outline-none transition"
-                  />
-                </div>
+                    <button
+                      type="submit"
+                      id="new-customer-submit-btn"
+                      disabled={isLoading}
+                      className="w-full bg-[#FF6B00] hover:bg-[#e05e00] text-white font-extrabold py-3 px-5 rounded-xl transition shadow-md flex items-center justify-center gap-2 hover:scale-[1.01] active:scale-[0.99] disabled:opacity-50"
+                    >
+                      {isLoading ? (
+                        <>
+                          <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                          <span>Creating Customer Profile...</span>
+                        </>
+                      ) : (
+                        <>
+                          <span>Continue as New Customer</span>
+                          <ArrowRight size={16} className="text-white" />
+                        </>
+                      )}
+                    </button>
+                  </>
+                ) : (
+                  /* Option 2: Existing Customer Form */
+                  <>
+                    <div className="bg-blue-50/50 border border-blue-200/60 rounded-xl p-3 text-[11px] text-gray-600">
+                      <strong className="text-[#0F2C59]">Existing Customer Sign-In:</strong> Enter your registered 10-digit mobile number. Your saved delivery name, address, and landmark will be retrieved automatically.
+                    </div>
 
-                <button
-                  type="submit"
-                  disabled={isLoading}
-                  className="w-full bg-[#0F2C59] hover:bg-[#153e7d] text-white font-extrabold py-3 px-5 rounded-xl transition shadow-md flex items-center justify-center gap-2 hover:scale-[1.01] active:scale-[0.99] disabled:opacity-50"
-                >
-                  {isLoading ? (
-                    <>
-                      <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
-                      <span>Authenticating...</span>
-                    </>
-                  ) : (
-                    <>
-                      <span>Proceed to Customer Profile</span>
-                      <ArrowRight size={16} className="text-[#D4AF37]" />
-                    </>
-                  )}
-                </button>
+                    <div>
+                      <label className="block text-xs font-black text-gray-700 uppercase tracking-wider mb-1.5">
+                        Registered Mobile Number <span className="text-rose-500">*</span>
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <span className="bg-gray-100 text-gray-700 font-mono font-bold px-3.5 py-2.5 rounded-xl border border-gray-300 text-sm">
+                          +91
+                        </span>
+                        <div className="relative flex-1">
+                          <Phone size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                          <input
+                            type="tel"
+                            id="existing-customer-mobile-input"
+                            maxLength={10}
+                            required
+                            value={phone}
+                            onChange={(e) => setPhone(e.target.value.replace(/\D/g, ''))}
+                            placeholder="Enter saved 10-digit mobile"
+                            className="w-full pl-9 pr-3.5 py-2.5 border border-gray-300 rounded-xl text-sm font-mono font-bold text-gray-800 placeholder:text-gray-400 focus:ring-2 focus:ring-[#0F2C59] focus:border-transparent outline-none transition"
+                          />
+                        </div>
+                      </div>
+                      <p className="text-[11px] text-gray-500 mt-1">
+                        If this mobile number is found in the database, your saved address will be preloaded.
+                      </p>
+                    </div>
+
+                    <button
+                      type="submit"
+                      id="existing-customer-submit-btn"
+                      disabled={isLoading}
+                      className="w-full bg-[#0F2C59] hover:bg-[#153e7d] text-white font-extrabold py-3 px-5 rounded-xl transition shadow-md flex items-center justify-center gap-2 hover:scale-[1.01] active:scale-[0.99] disabled:opacity-50"
+                    >
+                      {isLoading ? (
+                        <>
+                          <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                          <span>Looking up Customer Record...</span>
+                        </>
+                      ) : (
+                        <>
+                          <span>Load Saved Profile &amp; Continue</span>
+                          <ArrowRight size={16} className="text-[#D4AF37]" />
+                        </>
+                      )}
+                    </button>
+                  </>
+                )}
               </form>
             </div>
           ) : (

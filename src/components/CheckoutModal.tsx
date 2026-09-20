@@ -74,20 +74,25 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   };
 
   const handleSelectPaymentMethod = async (method: PaymentMethod) => {
-    setIsDualPaymentOpen(false);
-
     if (method === PaymentMethod.ADVANCE_ONLINE) {
+      setIsDualPaymentOpen(false);
       // Trigger simulated UPI / Razorpay Gateway
       setIsSimulatingRazorpay(true);
     } else {
-      // Direct Cash On Delivery Placement
-      const order = await createOrder({
-        address: currentSelectedAddress,
-        paymentMethod: PaymentMethod.COD,
-        deliveryDate,
-      });
-      onClose();
-      onOrderSuccess(order.id);
+      // Cash On Delivery Placement - triggered strictly via "Confirm COD Order" button
+      try {
+        const order = await createOrder({
+          address: currentSelectedAddress,
+          paymentMethod: PaymentMethod.COD,
+          deliveryDate,
+        });
+        setIsDualPaymentOpen(false);
+        onClose();
+        onOrderSuccess(order.id);
+      } catch (err) {
+        console.error('Error creating COD order:', err);
+        throw err;
+      }
     }
   };
 

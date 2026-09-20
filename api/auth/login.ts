@@ -72,7 +72,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
       return;
     }
 
-    const isValid = verifyAdminPassword(password);
+    const isValid = await verifyAdminPassword(password);
 
     if (!isValid) {
       res.statusCode = 401;

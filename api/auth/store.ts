@@ -86,35 +86,175 @@ export function verifyScryptHash(password: string, formattedHash: string): boole
 }
 
 /**
- * Retrieves the currently active admin password hash.
- * Priority:
- * 1. runtimeAdminPasswordHash (set during verified reset or dynamic initialization)
- * 2. process.env.ADMIN_PASSWORD_HASH
- * 3. Lazily derived scrypt hash from process.env.ADMIN_SETUP_PASSWORD (cached in runtimeAdminPasswordHash)
+ * Server-side Supabase client helper for Admin credential persistence.
+ * Uses server-side service role key if available, otherwise anon key.
  */
-export function getActiveAdminPasswordHash(): string | null {
-  if (runtimeAdminPasswordHash) {
-    return runtimeAdminPasswordHash;
-  }
-  const envHash = process.env.ADMIN_PASSWORD_HASH;
-  if (envHash && typeof envHash === 'string' && envHash.trim().length > 0) {
-    return envHash.trim();
-  }
-  const setupPassword = process.env.ADMIN_SETUP_PASSWORD;
-  if (setupPassword && typeof setupPassword === 'string' && setupPassword.trim().length > 0) {
-    runtimeAdminPasswordHash = hashPasswordWithScrypt(setupPassword.trim());
-    return runtimeAdminPasswordHash;
+async function getServerSupabaseClient() {
+  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+  const key =
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.SUPABASE_ANON_KEY ||
+    process.env.VITE_SUPABASE_ANON_KEY;
+
+  if (url && key && url !== 'https://your-project.supabase.co' && key !== 'your-anon-key') {
+    try {
+      const { createClient } = await import('@supabase/supabase-js');
+      return createClient(url, key, {
+        auth: { persistSession: false },
+      });
+    } catch {
+      return null;
+    }
   }
   return null;
 }
 
+const ADMIN_CREDENTIAL_RECORD_ID = 'admin_credential_store';
+const ADMIN_CREDENTIAL_PHONE_KEY = '__admin_credential__';
+
+/**
+ * Loads the persistent admin password hash from Supabase.
+ */
+async function loadPersistedAdminHashFromDb(): Promise<{ hash: string; updatedAt: string } | null> {
+  const supabase = await getServerSupabaseClient();
+  if (!supabase) return null;
+
+  try {
+    const { data, error } = await supabase
+      .from('users')
+      .select('id, address, updated_at')
+      .eq('id', ADMIN_CREDENTIAL_RECORD_ID)
+      .maybeSingle();
+
+    if (error || !data || !data.address) {
+      return null;
+    }
+
+    // Address column contains structured metadata JSON: { hash: "salt:derivedHex", updated_at: "..." }
+    const parsed = JSON.parse(data.address);
+    if (parsed && typeof parsed.hash === 'string' && parsed.hash.includes(':')) {
+      return {
+        hash: parsed.hash.trim(),
+        updatedAt: parsed.updated_at || data.updated_at || '',
+      };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Persists the admin password hash to Supabase.
+ */
+async function savePersistedAdminHashToDb(formattedHash: string): Promise<boolean> {
+  const supabase = await getServerSupabaseClient();
+  if (!supabase) return false;
+
+  const nowIso = new Date().toISOString();
+  const payload = {
+    hash: formattedHash.trim(),
+    updated_at: nowIso,
+  };
+
+  try {
+    const { error } = await supabase.from('users').upsert({
+      id: ADMIN_CREDENTIAL_RECORD_ID,
+      phone: ADMIN_CREDENTIAL_PHONE_KEY,
+      role: 'SYSTEM',
+      name: 'Admin Credential Store',
+      shop_name: 'admin_credential_store',
+      address: JSON.stringify(payload),
+      updated_at: nowIso,
+    });
+
+    if (error) {
+      console.error('Failed to persist admin password hash to database:', error.message);
+      return false;
+    }
+    return true;
+  } catch (err: any) {
+    console.error('Exception persisting admin password hash to database:', err?.message);
+    return false;
+  }
+}
+
+/**
+ * Retrieves the currently active admin password hash.
+ * Priority:
+ * 1. In-memory cache (runtimeAdminPasswordHash)
+ * 2. Persistent Supabase database record (admin_credential_store)
+ * 3. Initial bootstrap seed ONLY if database has no record yet:
+ *    - ADMIN_PASSWORD_HASH if configured
+ *    - Or lazily derived scrypt hash from ADMIN_SETUP_PASSWORD
+ *    - The bootstrap hash is immediately persisted to the database so future restarts
+ *      will load from the database and never re-read the setup seed.
+ */
+export async function getActiveAdminPasswordHash(): Promise<string | null> {
+  // 1. In-memory cache
+  if (runtimeAdminPasswordHash) {
+    return runtimeAdminPasswordHash;
+  }
+
+  // 2. Persistent Supabase Database
+  const dbRecord = await loadPersistedAdminHashFromDb();
+  if (dbRecord && dbRecord.hash) {
+    runtimeAdminPasswordHash = dbRecord.hash;
+    return runtimeAdminPasswordHash;
+  }
+
+  // 3. Initial Bootstrap: ONLY when no credential exists in the database
+  let bootstrapHash: string | null = null;
+  const envHash = process.env.ADMIN_PASSWORD_HASH;
+  if (envHash && typeof envHash === 'string' && envHash.trim().length > 0) {
+    bootstrapHash = envHash.trim();
+  } else {
+    const setupPassword = process.env.ADMIN_SETUP_PASSWORD;
+    if (setupPassword && typeof setupPassword === 'string' && setupPassword.trim().length > 0) {
+      bootstrapHash = hashPasswordWithScrypt(setupPassword.trim());
+    }
+  }
+
+  if (bootstrapHash) {
+    runtimeAdminPasswordHash = bootstrapHash;
+    // Persist bootstrap hash into database so subsequent restarts read from DB
+    await savePersistedAdminHashToDb(bootstrapHash);
+    return runtimeAdminPasswordHash;
+  }
+
+  return null;
+}
+
+/**
+ * Synchronous accessor for in-memory active hash (if already initialized in RAM).
+ */
+export function getActiveAdminPasswordHashSync(): string | null {
+  return runtimeAdminPasswordHash;
+}
+
 /**
  * Sets a new runtime admin password hash following a verified password reset.
- * Also records the reset timestamp to invalidate existing sessions.
+ * Persists the new hash to Supabase database so it survives server restarts,
+ * updates in-memory cache, and records the reset timestamp to invalidate sessions.
  */
-export function setActiveAdminPasswordHash(formattedHash: string): void {
+export async function setActiveAdminPasswordHash(formattedHash: string): Promise<boolean> {
   runtimeAdminPasswordHash = formattedHash;
   lastPasswordResetTime = Date.now();
+
+  const persisted = await savePersistedAdminHashToDb(formattedHash);
+  return persisted;
+}
+
+/**
+ * Synchronous setter for in-memory cache and timestamp.
+ */
+export function setActiveAdminPasswordHashSync(formattedHash: string): void {
+  runtimeAdminPasswordHash = formattedHash;
+  lastPasswordResetTime = Date.now();
+  // Asynchronously persist to database in background
+  savePersistedAdminHashToDb(formattedHash).catch((err) => {
+    console.error('Background admin hash save error:', err);
+  });
 }
 
 /**
@@ -125,10 +265,10 @@ export function getLastPasswordResetTime(): number {
 }
 
 /**
- * Verifies the admin password against the active hash.
+ * Verifies the admin password against the active persistent hash.
  */
-export function verifyAdminPassword(password: string): boolean {
-  const activeHash = getActiveAdminPasswordHash();
+export async function verifyAdminPassword(password: string): Promise<boolean> {
+  const activeHash = await getActiveAdminPasswordHash();
   if (!activeHash) {
     return false;
   }

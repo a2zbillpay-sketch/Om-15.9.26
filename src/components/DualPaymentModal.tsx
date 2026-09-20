@@ -1,12 +1,12 @@
-import React from 'react';
-import { ShieldCheck, Truck, ArrowRight, Percent } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { ShieldCheck, Truck, ArrowRight, Percent, CheckCircle2 } from 'lucide-react';
 import { CheckoutBreakdown } from '../lib/engine/checkout-calculator';
 
 interface DualPaymentModalProps {
   isOpen: boolean;
   onClose: () => void;
   breakdown: CheckoutBreakdown;
-  onSelectPayment: (method: 'COD' | 'ADVANCE_ONLINE') => void;
+  onSelectPayment: (method: 'COD' | 'ADVANCE_ONLINE') => void | Promise<void>;
 }
 
 export const DualPaymentModal: React.FC<DualPaymentModalProps> = ({
@@ -15,17 +15,55 @@ export const DualPaymentModal: React.FC<DualPaymentModalProps> = ({
   breakdown,
   onSelectPayment,
 }) => {
+  const [selectedMethod, setSelectedMethod] = useState<'COD' | 'ADVANCE_ONLINE' | null>(null);
+  const [isPlacingOrder, setIsPlacingOrder] = useState(false);
+
+  useEffect(() => {
+    if (isOpen) {
+      setSelectedMethod(null);
+      setIsPlacingOrder(false);
+    }
+  }, [isOpen]);
+
   if (!isOpen) return null;
 
   const totalSavings =
     breakdown.codFinalTotal - breakdown.advanceFinalTotal;
 
+  const handleCardClick = () => {
+    // Tapping/clicking the COD card container ONLY selects or highlights COD.
+    // It strictly does NOT create or place an order.
+    setSelectedMethod('COD');
+  };
+
+  const handleConfirmCodOrder = async (e: React.MouseEvent) => {
+    // ONLY clicking the explicit "Confirm COD Order" button triggers order creation.
+    e.stopPropagation();
+    if (isPlacingOrder) return;
+    setIsPlacingOrder(true);
+    try {
+      await onSelectPayment('COD');
+    } catch (err) {
+      console.error('Failed to create COD order:', err);
+      setIsPlacingOrder(false);
+    }
+  };
+
   return (
     <div
       id="dual-payment-modal"
       className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 z-50 animate-fadeIn"
+      onClick={(e) => {
+        // Prevent accidental backdrop touches from performing any unintended action
+        if (e.target === e.currentTarget) {
+          e.stopPropagation();
+        }
+      }}
     >
-      <div className="bg-white w-full max-w-lg rounded-t-2xl sm:rounded-2xl p-6 shadow-2xl border-t-4 border-[#D4AF37] max-h-[90vh] overflow-y-auto">
+      <div
+        id="dual-payment-modal-content"
+        className="bg-white w-full max-w-lg rounded-t-2xl sm:rounded-2xl p-6 shadow-2xl border-t-4 border-[#D4AF37] max-h-[90vh] overflow-y-auto"
+      >
         <div className="text-center mb-6">
           <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-amber-50 border border-amber-200 rounded-full text-amber-900 text-xs font-bold mb-2">
             <Percent size={13} className="text-[#FF6B00]" />
@@ -88,15 +126,38 @@ export const DualPaymentModal: React.FC<DualPaymentModalProps> = ({
 
           {/* Option 2: Cash on Delivery */}
           <div
-            id="select-cod-payment-btn"
-            onClick={() => onSelectPayment('COD')}
-            className="bg-gray-50 hover:bg-gray-100 border-2 border-gray-300 rounded-xl p-4 cursor-pointer transition-all flex flex-col justify-between hover:shadow-md"
+            id="cod-payment-option-card"
+            onClick={handleCardClick}
+            className={`relative rounded-xl p-4 transition-all flex flex-col justify-between cursor-pointer border-2 ${
+              selectedMethod === 'COD'
+                ? 'bg-amber-50/40 border-[#0F2C59] ring-2 ring-[#0F2C59]/20 shadow-md'
+                : 'bg-gray-50/80 hover:bg-gray-100 border-gray-300 hover:border-gray-400'
+            }`}
           >
-            <div>
-              <div className="flex items-center gap-2 mb-2">
-                <Truck className="text-gray-700" size={20} />
-                <span className="font-bold text-[#0F2C59] text-sm">Cash On Delivery</span>
+            {selectedMethod === 'COD' && (
+              <div className="absolute -top-3 right-3 bg-[#0F2C59] text-white text-[10px] font-extrabold px-2.5 py-0.5 rounded-full uppercase tracking-wider shadow-sm flex items-center gap-1">
+                <CheckCircle2 size={11} className="text-[#D4AF37]" />
+                <span>Selected</span>
               </div>
+            )}
+
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <Truck className={selectedMethod === 'COD' ? 'text-[#0F2C59]' : 'text-gray-700'} size={20} />
+                  <span className="font-bold text-[#0F2C59] text-sm">Cash On Delivery</span>
+                </div>
+                <div
+                  className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${
+                    selectedMethod === 'COD'
+                      ? 'border-[#0F2C59] bg-[#0F2C59]'
+                      : 'border-gray-400 bg-white'
+                  }`}
+                >
+                  {selectedMethod === 'COD' && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
+                </div>
+              </div>
+
               <p className="text-[11px] text-gray-600 mb-3">Pay cash or UPI to driver at doorstep</p>
 
               <div className="space-y-1.5 text-xs text-gray-700 border-t border-gray-200 pt-2.5">
@@ -115,14 +176,43 @@ export const DualPaymentModal: React.FC<DualPaymentModalProps> = ({
               </div>
             </div>
 
-            <div className="mt-4 pt-3 border-t border-gray-200 flex justify-between items-center">
-              <div>
-                <span className="text-[11px] font-bold text-gray-500 block">Payable Amount:</span>
-                <span className="text-lg font-black text-[#0F2C59]">₹{breakdown.codFinalTotal}</span>
+            <div>
+              <div className="mt-4 pt-3 border-t border-gray-200 flex justify-between items-center">
+                <div>
+                  <span className="text-[11px] font-bold text-gray-500 block">Payable Amount:</span>
+                  <span className="text-lg font-black text-[#0F2C59]">₹{breakdown.codFinalTotal}</span>
+                </div>
+                {selectedMethod === 'COD' ? (
+                  <span className="text-[10px] font-bold text-amber-800 bg-amber-100 px-2 py-0.5 rounded">
+                    Pay at Doorstep
+                  </span>
+                ) : (
+                  <span className="text-[10px] font-bold text-gray-500 bg-gray-200 px-2 py-0.5 rounded">
+                    Tap to Select
+                  </span>
+                )}
               </div>
-              <span className="bg-gray-400 text-white p-1.5 rounded-full">
-                <ArrowRight size={14} />
-              </span>
+
+              {/* Explicit Confirm COD Order Button or Selection Prompt */}
+              <div className="mt-3">
+                {selectedMethod === 'COD' ? (
+                  <button
+                    id="confirm-cod-order-btn"
+                    type="button"
+                    disabled={isPlacingOrder}
+                    onClick={handleConfirmCodOrder}
+                    className="w-full py-3 px-4 bg-[#0F2C59] hover:bg-[#153e7d] active:scale-[0.99] text-white font-extrabold text-sm rounded-xl shadow-lg transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                  >
+                    <CheckCircle2 size={16} className="text-[#D4AF37]" />
+                    <span>{isPlacingOrder ? 'Placing Order...' : 'Confirm COD Order'}</span>
+                  </button>
+                ) : (
+                  <div className="w-full py-2.5 px-3 text-center bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 transition">
+                    <span>Tap to Select COD</span>
+                    <ArrowRight size={13} />
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>

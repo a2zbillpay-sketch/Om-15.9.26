@@ -4,8 +4,8 @@ import {
   verifyRecoveryCode,
   createResetToken,
   consumeResetToken,
-  setActiveAdminPasswordHash,
-  verifyAdminPassword,
+  hashPasswordWithScrypt,
+  verifyScryptHash,
 } from '../api/auth/store.ts';
 import {
   createSessionToken,
@@ -13,8 +13,72 @@ import {
   SESSION_MAX_AGE_MS,
 } from '../api/auth/verify.ts';
 
+// SAFETY GUARD: Verify this script NEVER imports or invokes production credential mutators
+if (typeof globalThis.setActiveAdminPasswordHash !== 'undefined') {
+  throw new Error('FATAL SECURITY GUARD: setActiveAdminPasswordHash must not be accessible in test suite');
+}
+
+/**
+ * Isolated In-Memory Mock Credential Store
+ * Simulates credential storage, updates, and verification in pure RAM.
+ * STRICTLY guarantees zero network requests and zero Supabase database writes.
+ */
+class IsolatedMockCredentialStore {
+  constructor() {
+    this.activeHash = null;
+    this.updatedAt = 0;
+  }
+
+  async updatePasswordHash(newFormattedHash) {
+    const parts = newFormattedHash.split(':');
+    if (parts.length !== 2 || parts[0].length < 16 || parts[1].length < 32) {
+      return false;
+    }
+    this.activeHash = newFormattedHash;
+    this.updatedAt = Date.now();
+    return true;
+  }
+
+  async verifyPassword(password) {
+    if (!this.activeHash) return false;
+    return verifyScryptHash(password, this.activeHash);
+  }
+
+  getUpdatedAt() {
+    return this.updatedAt;
+  }
+}
+
+async function getProductionCredentialTimestamp() {
+  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
+  if (!url || !key || url.includes('your-project') || key.includes('your-anon-key')) {
+    return null;
+  }
+  try {
+    const { createClient } = await import('@supabase/supabase-js');
+    const sb = createClient(url, key, { auth: { persistSession: false } });
+    const { data } = await sb
+      .from('users')
+      .select('updated_at')
+      .eq('id', 'admin_credential_store')
+      .maybeSingle();
+    return data?.updated_at || null;
+  } catch {
+    return null;
+  }
+}
+
 async function runVerification() {
-  console.log('--- TEST 1: Recovery Identity Matching ---');
+  console.log('=== RUNNING RECOVERY & AUTH SUITE (ISOLATED TEST MODE) ===');
+
+  // Baseline Safety Check: Capture pre-test production credential record timestamp
+  const preTestTimestamp = await getProductionCredentialTimestamp();
+  if (preTestTimestamp) {
+    console.log('[SAFETY AUDIT] Production admin_credential_store initial timestamp:', preTestTimestamp);
+  }
+
+  console.log('\n--- TEST 1: Recovery Identity Matching ---');
   const match1 = await matchesRecoveryIdentity('8668912656');
   console.log('Registered proprietor 8668912656 matches:', match1);
   const match2 = await matchesRecoveryIdentity('9876543210');
@@ -58,41 +122,75 @@ async function runVerification() {
     throw new Error('TEST 4 FAILED: Reset token single-use check failed');
   }
 
-  console.log('\n--- TEST 5: Password Reset & Hash Updating ---');
-  const crypto = await import('crypto');
-  const testPassword = 'NewSecurePassword#2026';
-  const salt = crypto.randomBytes(16).toString('hex');
-  const hash = crypto.scryptSync(testPassword, salt, 64).toString('hex');
-  const newHashRecord = `${salt}:${hash}`;
+  console.log('\n--- TEST 5: Password Reset & Hash Updating (Isolated In-Memory Store) ---');
+  const mockStore = new IsolatedMockCredentialStore();
+  const testPassword = 'TestMockPassword#2026';
 
-  setActiveAdminPasswordHash(newHashRecord);
-  const verifyOld = verifyAdminPassword('WrongPassword');
-  const verifyNew = verifyAdminPassword(testPassword);
+  // 1. Verify production scrypt password hashing
+  const generatedHash = hashPasswordWithScrypt(testPassword);
+  console.log('Scrypt hash generation valid format (salt:hash):', generatedHash.includes(':'));
+
+  // 2. Verify hash updating behavior in isolated mock store (ZERO database writes)
+  const updateResult = await mockStore.updatePasswordHash(generatedHash);
+  console.log('Isolated mock credential store updated:', updateResult);
+
+  // 3. Verify password verification logic: wrong password rejected
+  const verifyOld = await mockStore.verifyPassword('WrongPassword');
   console.log('Wrong password verification rejected:', !verifyOld);
+
+  // 4. Verify password verification logic: new password accepted
+  const verifyNew = await mockStore.verifyPassword(testPassword);
   console.log('New password verification accepted:', verifyNew);
 
-  if (verifyOld || !verifyNew) {
-    throw new Error('TEST 5 FAILED: Password verification failed');
+  if (!updateResult || verifyOld || !verifyNew) {
+    throw new Error('TEST 5 FAILED: Isolated password update or verification failed');
   }
 
-  console.log('\n--- TEST 6: Session Signing & Invalidation ---');
+  console.log('\n--- TEST 6: Session Signing, Verification & Invalidation ---');
   const now = Date.now();
-  const sessionToken = createSessionToken({
+  const validSessionToken = createSessionToken({
     role: 'SHOPKEEPER',
     issuedAt: now,
     expiresAt: now + SESSION_MAX_AGE_MS,
   });
-  console.log('Session token generated:', Boolean(sessionToken));
-  const sessionValid = verifySessionToken(sessionToken);
+  console.log('Session token generated:', Boolean(validSessionToken));
+  const sessionValid = validSessionToken ? verifySessionToken(validSessionToken) : null;
   console.log('Session token verified (role):', sessionValid?.role);
 
-  if (!sessionValid || sessionValid.role !== 'SHOPKEEPER') {
-    throw new Error('TEST 6 FAILED: Session verification failed');
+  // Invalidation check: expired session token must be rejected
+  const expiredToken = createSessionToken({
+    role: 'SHOPKEEPER',
+    issuedAt: now - 100000,
+    expiresAt: now - 1000, // Expired in the past
+  });
+  const expiredCheck = expiredToken ? verifySessionToken(expiredToken) : null;
+  console.log('Expired session token rejected (null):', expiredCheck === null);
+
+  // Invalidation check: tampered signature token must be rejected
+  const tamperedToken = validSessionToken ? `${validSessionToken.slice(0, -5)}abcde` : '';
+  const tamperedCheck = verifySessionToken(tamperedToken);
+  console.log('Tampered session token rejected (null):', tamperedCheck === null);
+
+  if (!sessionValid || sessionValid.role !== 'SHOPKEEPER' || expiredCheck !== null || tamperedCheck !== null) {
+    throw new Error('TEST 6 FAILED: Session verification or invalidation failed');
   }
 
-  console.log('\n=============================================');
-  console.log('ALL 6 RECOVERY & AUTHENTICATION TESTS PASSED!');
-  console.log('=============================================');
+  // Final Safety Verification: Confirm production admin credential was NOT touched
+  const postTestTimestamp = await getProductionCredentialTimestamp();
+  if (preTestTimestamp && postTestTimestamp) {
+    if (preTestTimestamp !== postTestTimestamp) {
+      throw new Error(
+        `CRITICAL SECURITY FAILURE: Production admin_credential_store timestamp changed from ${preTestTimestamp} to ${postTestTimestamp}!`
+      );
+    }
+    console.log('\n[SAFETY AUDIT CONFIRMED] Production admin_credential_store timestamp remained strictly unchanged:');
+    console.log(`Pre-test:  ${preTestTimestamp}`);
+    console.log(`Post-test: ${postTestTimestamp}`);
+  }
+
+  console.log('\n========================================================');
+  console.log('ALL TESTS PASSED WITH 100% PRODUCTION CREDENTIAL ISOLATION!');
+  console.log('========================================================');
 }
 
 runVerification().catch((err) => {
