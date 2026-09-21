@@ -910,6 +910,7 @@ export async function fetchProductsFromSupabase(): Promise<Product[] | null> {
         description: p.description || '',
         categoryId,
         imageUrl: p.image_url && String(p.image_url).trim() ? String(p.image_url).trim() : undefined,
+        barcode: p.barcode ? String(p.barcode).trim() : null,
         isDiscountExcluded: Boolean(p.is_discount_excluded),
         variants,
         createdAt: p.created_at || p.updated_at || new Date().toISOString(),

@@ -25,6 +25,7 @@ export interface BulkUploadRow {
   brand?: string;
   categoryId?: string;
   categoryName?: string;
+  barcode?: string;
   description?: string;
   imageUrl?: string;
   isDiscountExcluded?: boolean | string;
@@ -47,6 +48,113 @@ export interface BulkUploadResult {
 }
 
 const VALID_UNITS = new Set<string>(Object.values(UnitType));
+
+/**
+ * Validates and normalizes product barcode.
+ * - Allowed to be null or undefined (returns null).
+ * - Empty string or whitespace-only returns null.
+ * - String trimmed and preserved as exact string (never coerced to numeric).
+ * - Max length 64 characters.
+ * - Allowed characters: standard barcode alphanumeric and common punctuation: A-Z, a-z, 0-9, hyphen, underscore, period.
+ */
+export function normalizeAndValidateBarcode(rawBarcode: any): { valid: boolean; barcode: string | null; error?: string } {
+  if (rawBarcode === undefined || rawBarcode === null) {
+    return { valid: true, barcode: null };
+  }
+
+  // Preserve as exact string without numeric conversion
+  const str = String(rawBarcode).trim();
+  if (!str) {
+    return { valid: true, barcode: null };
+  }
+
+  if (str.length > 64) {
+    return { valid: false, barcode: null, error: 'Barcode exceeds maximum allowed length of 64 characters.' };
+  }
+
+  // Barcode format safety check: disallow control characters, newlines, tabs
+  if (/[\r\n\t\x00-\x1f\x7f]/.test(str)) {
+    return { valid: false, barcode: null, error: 'Barcode contains invalid control characters.' };
+  }
+
+  // Ensure barcode characters are standard printable ASCII
+  if (!/^[\x20-\x7E]+$/.test(str)) {
+    return { valid: false, barcode: null, error: 'Barcode contains invalid non-ASCII characters.' };
+  }
+
+  return { valid: true, barcode: str };
+}
+
+export interface BarcodeLookupMatchResult {
+  valid: boolean;
+  error?: string;
+  normalizedBarcode: string | null;
+  status: 'empty' | 'invalid' | 'found' | 'not_found' | 'duplicate_found';
+  product?: Product;
+  duplicateProducts?: Product[];
+}
+
+/**
+ * Performs exact barcode matching against a product collection.
+ * - Preserves leading zeros and exact character sequences.
+ * - Enforces exact equality (not partial or fuzzy).
+ * - Distinguishes between single match, not found, and duplicate legacy data.
+ */
+export function lookupProductByBarcode(
+  rawBarcode: string,
+  products: Product[]
+): BarcodeLookupMatchResult {
+  const trimmed = String(rawBarcode ?? '').trim();
+  if (!trimmed) {
+    return {
+      valid: false,
+      error: 'Please enter or scan a barcode.',
+      normalizedBarcode: null,
+      status: 'empty',
+    };
+  }
+
+  const validation = normalizeAndValidateBarcode(trimmed);
+  if (!validation.valid || !validation.barcode) {
+    return {
+      valid: false,
+      error: validation.error || 'Invalid barcode format.',
+      normalizedBarcode: null,
+      status: 'invalid',
+    };
+  }
+
+  const targetBarcode = validation.barcode;
+
+  // Exact match (case-insensitive for safety, preserving leading zeros and exact length)
+  const matches = products.filter(
+    (p) => p.barcode && p.barcode.trim().toLowerCase() === targetBarcode.toLowerCase()
+  );
+
+  if (matches.length === 1) {
+    return {
+      valid: true,
+      normalizedBarcode: targetBarcode,
+      status: 'found',
+      product: matches[0],
+    };
+  }
+
+  if (matches.length === 0) {
+    return {
+      valid: true,
+      normalizedBarcode: targetBarcode,
+      status: 'not_found',
+    };
+  }
+
+  return {
+    valid: true,
+    normalizedBarcode: targetBarcode,
+    status: 'duplicate_found',
+    duplicateProducts: matches,
+  };
+}
 
 /**
  * Validates and normalizes a single wholesale tiered price slab.
@@ -228,6 +336,13 @@ export function normalizeAndValidateProduct(raw: any): ProductValidationResult {
   const imageUrl = raw.imageUrl && String(raw.imageUrl).trim() ? String(raw.imageUrl).trim() : undefined;
   const isDiscountExcluded = Boolean(raw.isDiscountExcluded);
 
+  // Barcode normalization & validation
+  const barcodeValidation = normalizeAndValidateBarcode(raw.barcode);
+  if (!barcodeValidation.valid) {
+    return { valid: false, error: barcodeValidation.error };
+  }
+  const barcode = barcodeValidation.barcode;
+
   const rawVariants = Array.isArray(raw.variants) ? raw.variants : [];
   if (rawVariants.length === 0) {
     return { valid: false, error: 'Product must have at least one pack variant.' };
@@ -251,6 +366,7 @@ export function normalizeAndValidateProduct(raw: any): ProductValidationResult {
       description,
       categoryId,
       imageUrl,
+      barcode,
       isDiscountExcluded,
       createdAt: raw.createdAt || new Date().toISOString(),
       variants: normalizedVariants,
@@ -320,6 +436,7 @@ export async function saveProductWithCascadeSync(
       min_order_qty: 1,
       image_url: product.imageUrl && product.imageUrl.trim() ? product.imageUrl.trim() : null,
       wholesale_tier_discount: product.variants || [],
+      barcode: product.barcode && product.barcode.trim() ? product.barcode.trim() : null,
       updated_at: new Date().toISOString(),
     };
 
@@ -327,7 +444,26 @@ export async function saveProductWithCascadeSync(
       .from('products')
       .upsert(productPayload, { onConflict: 'id' });
 
+    // Graceful fallback: If barcode column has not yet been migrated in Supabase table
+    if (prodInsertResult.error && prodInsertResult.error.message?.includes('barcode')) {
+      const fallbackPayload = { ...productPayload };
+      delete fallbackPayload.barcode;
+      prodInsertResult = await supabaseClient
+        .from('products')
+        .upsert(fallbackPayload, { onConflict: 'id' });
+    }
+
     if (prodInsertResult.error) {
+      if (
+        prodInsertResult.error.code === '23505' ||
+        prodInsertResult.error.message?.toLowerCase().includes('barcode') ||
+        prodInsertResult.error.message?.toLowerCase().includes('idx_products_barcode_unique')
+      ) {
+        return {
+          success: false,
+          error: `Barcode "${product.barcode}" is already assigned to another product. Each product must have a unique barcode.`,
+        };
+      }
       return {
         success: false,
         error: `Database error saving product: ${prodInsertResult.error.message || 'Check database permissions'}`,
@@ -473,6 +609,7 @@ export function processBulkProductRows(rows: BulkUploadRow[]): BulkUploadResult 
       description: firstRow.description || '',
       categoryId: firstRow.categoryId || '',
       imageUrl: firstRow.imageUrl || undefined,
+      barcode: firstRow.barcode || undefined,
       isDiscountExcluded: Boolean(firstRow.isDiscountExcluded),
       variants: rawVariants,
     };

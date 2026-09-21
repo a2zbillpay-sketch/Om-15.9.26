@@ -25,6 +25,11 @@ import {
   Users,
   RefreshCw,
   Database,
+  Scan,
+  Barcode,
+  CheckCircle2,
+  AlertTriangle,
+  Boxes,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { OrderStatus, PaymentMethod, Product, ProductVariant, TieredPrice, UnitType, Role } from '../types';
@@ -32,7 +37,15 @@ import { AdminSettingsControl } from './AdminSettingsControl';
 import { LogoUploadModal } from './LogoUploadModal';
 import { EditProductModal } from './EditProductModal';
 import { AddVariantModal } from './AddVariantModal';
+import { StockAdjustmentModal } from './StockAdjustmentModal';
+import { BarcodeScannerModal } from './BarcodeScannerModal';
+import { BarcodeLookupBanner } from './BarcodeLookupBanner';
 import { formatVariantPack } from '../utils/variantFormatter';
+import {
+  normalizeAndValidateBarcode,
+  lookupProductByBarcode,
+  BarcodeLookupMatchResult,
+} from '../lib/product-service';
 
 export interface VariantFormRow {
   id: string;
@@ -106,6 +119,8 @@ export const AdminDashboard: React.FC = () => {
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   // Add variant to individual product state
   const [addingVariantProduct, setAddingVariantProduct] = useState<Product | null>(null);
+  // Barcode-assisted stock management modal state
+  const [stockAdjustProduct, setStockAdjustProduct] = useState<Product | null>(null);
 
   const handleSaveEditProduct = (productId: string, updates: Partial<Product>) => {
     updateProduct(productId, updates);
@@ -119,6 +134,26 @@ export const AdminDashboard: React.FC = () => {
     });
   };
 
+  const handleSaveStock = async (
+    productId: string,
+    updatedVariants: ProductVariant[]
+  ): Promise<{ success: boolean; error?: string }> => {
+    const res = await updateProduct(productId, { variants: updatedVariants });
+    if (res && res.success) {
+      if (editingProduct && editingProduct.id === productId) {
+        setEditingProduct({ ...editingProduct, variants: updatedVariants });
+      }
+      if (barcodeLookupResult && barcodeLookupResult.product && barcodeLookupResult.product.id === productId) {
+        setBarcodeLookupResult({
+          ...barcodeLookupResult,
+          product: { ...barcodeLookupResult.product, variants: updatedVariants },
+        });
+      }
+      return { success: true };
+    }
+    return { success: false, error: res?.error || 'Failed to update stock in inventory.' };
+  };
+
   // Main product form state - starts completely BLANK without hardcoded defaults
   const [newProductData, setNewProductData] = useState({
     name: '',
@@ -126,6 +161,7 @@ export const AdminDashboard: React.FC = () => {
     description: '',
     categoryId: '',
     imageUrl: '',
+    barcode: '',
     isDiscountExcluded: false,
   });
 
@@ -133,6 +169,16 @@ export const AdminDashboard: React.FC = () => {
   const [variantRows, setVariantRows] = useState<VariantFormRow[]>([createBlankVariantRow()]);
   const [formValidationError, setFormValidationError] = useState<string | null>(null);
   const [isSubmittingProduct, setIsSubmittingProduct] = useState(false);
+  const [isAddBarcodeScannerOpen, setIsAddBarcodeScannerOpen] = useState(false);
+  const [isInventorySearchScannerOpen, setIsInventorySearchScannerOpen] = useState(false);
+
+  // Barcode-Based Product Lookup & Inventory Workflow states
+  const [barcodeLookupResult, setBarcodeLookupResult] = useState<BarcodeLookupMatchResult | null>(null);
+  const [manualBarcodeInput, setManualBarcodeInput] = useState('');
+  const [barcodeLookupError, setBarcodeLookupError] = useState<string | null>(null);
+  const [highlightedProductId, setHighlightedProductId] = useState<string | null>(null);
+  const [onlyShowLookupMatched, setOnlyShowLookupMatched] = useState(false);
+  const [isInventoryLookupScannerOpen, setIsInventoryLookupScannerOpen] = useState(false);
 
   const handleOpenAddProductModal = () => {
     setNewProductData({
@@ -141,12 +187,70 @@ export const AdminDashboard: React.FC = () => {
       description: '',
       categoryId: '',
       imageUrl: '',
+      barcode: '',
       isDiscountExcluded: false,
     });
     // Table always opens completely blank with 0 pre-filled values
     setVariantRows([createBlankVariantRow()]);
     setFormValidationError(null);
     setIsAddProductModalOpen(true);
+  };
+
+  const handleOpenAddProductModalWithBarcode = (initialBarcode: string) => {
+    setNewProductData({
+      name: '',
+      brand: '',
+      description: '',
+      categoryId: '',
+      imageUrl: '',
+      barcode: initialBarcode,
+      isDiscountExcluded: false,
+    });
+    setVariantRows([createBlankVariantRow()]);
+    setFormValidationError(null);
+    setBarcodeLookupResult(null);
+    setBarcodeLookupError(null);
+    setIsAddProductModalOpen(true);
+  };
+
+  const handleBarcodeLookup = (rawBarcode: string) => {
+    setBarcodeLookupError(null);
+    const lookupRes = lookupProductByBarcode(rawBarcode, products);
+
+    if (lookupRes.status === 'empty') {
+      setBarcodeLookupError('Please enter or scan a barcode.');
+      return;
+    }
+
+    if (lookupRes.status === 'invalid') {
+      setBarcodeLookupError(lookupRes.error || 'Invalid barcode format.');
+      setBarcodeLookupResult(lookupRes);
+      return;
+    }
+
+    setBarcodeLookupResult(lookupRes);
+
+    if (lookupRes.status === 'found' && lookupRes.product) {
+      setHighlightedProductId(lookupRes.product.id);
+      // Smooth scroll to product card
+      setTimeout(() => {
+        const el = document.getElementById(`inventory-product-${lookupRes.product!.id}`);
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      }, 120);
+    } else {
+      setHighlightedProductId(null);
+      setOnlyShowLookupMatched(false);
+    }
+  };
+
+  const handleClearBarcodeLookup = () => {
+    setBarcodeLookupResult(null);
+    setHighlightedProductId(null);
+    setBarcodeLookupError(null);
+    setOnlyShowLookupMatched(false);
+    setManualBarcodeInput('');
   };
 
   const handleCloseAddProductModal = () => {
@@ -156,6 +260,7 @@ export const AdminDashboard: React.FC = () => {
       description: '',
       categoryId: '',
       imageUrl: '',
+      barcode: '',
       isDiscountExcluded: false,
     });
     setVariantRows([createBlankVariantRow()]);
@@ -251,8 +356,20 @@ export const AdminDashboard: React.FC = () => {
   const filteredProducts = products.filter(
     (p) =>
       p.name.toLowerCase().includes(inventorySearch.toLowerCase()) ||
-      p.brand.toLowerCase().includes(inventorySearch.toLowerCase())
+      p.brand.toLowerCase().includes(inventorySearch.toLowerCase()) ||
+      (p.barcode && p.barcode.toLowerCase().includes(inventorySearch.toLowerCase()))
   );
+
+  const displayedProducts =
+    onlyShowLookupMatched && barcodeLookupResult?.status === 'found' && barcodeLookupResult.product
+      ? [barcodeLookupResult.product]
+      : filteredProducts;
+
+  const newBarcodeConflict = newProductData.barcode.trim()
+    ? products.find(
+        (p) => p.barcode && p.barcode.trim().toLowerCase() === newProductData.barcode.trim().toLowerCase()
+      )
+    : null;
 
   const filteredCustomers = customerUsers.filter(
     (c) =>
@@ -279,6 +396,25 @@ export const AdminDashboard: React.FC = () => {
     if (!newProductData.categoryId) {
       setFormValidationError('Please select a category.');
       return;
+    }
+
+    let validatedBarcode: string | undefined = undefined;
+    if (newProductData.barcode.trim()) {
+      const barcodeValidation = normalizeAndValidateBarcode(newProductData.barcode);
+      if (!barcodeValidation.valid) {
+        setFormValidationError(barcodeValidation.error || 'Invalid barcode format.');
+        return;
+      }
+      const conflict = products.find(
+        (p) => p.barcode && p.barcode.trim().toLowerCase() === barcodeValidation.barcode?.toLowerCase()
+      );
+      if (conflict) {
+        setFormValidationError(
+          `Barcode "${barcodeValidation.barcode}" is already assigned to "${conflict.name}" (${conflict.brand}). Barcodes must be unique.`
+        );
+        return;
+      }
+      validatedBarcode = barcodeValidation.barcode || undefined;
     }
 
     if (variantRows.length === 0) {
@@ -387,6 +523,7 @@ export const AdminDashboard: React.FC = () => {
       description: newProductData.description.trim(),
       categoryId: newProductData.categoryId,
       imageUrl: newProductData.imageUrl.trim() || undefined,
+      barcode: validatedBarcode,
       isDiscountExcluded: newProductData.isDiscountExcluded,
       variants: constructedVariants,
     };
@@ -672,31 +809,141 @@ export const AdminDashboard: React.FC = () => {
         {activeTab === 'INVENTORY' && (
           <div className="space-y-4">
             <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-200 flex flex-wrap justify-between items-center gap-3">
-              <div className="flex-1 max-w-sm relative">
+              {/* Standard Catalog Search */}
+              <div className="flex-1 min-w-[220px] max-w-sm relative">
                 <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                 <input
                   type="text"
                   placeholder="Search catalog products..."
                   value={inventorySearch}
                   onChange={(e) => setInventorySearch(e.target.value)}
-                  className="w-full pl-8 pr-3 py-1.5 text-xs border border-gray-300 rounded-lg outline-none"
+                  className="w-full pl-8 pr-16 py-1.5 text-xs border border-gray-300 rounded-lg outline-none"
                 />
+                <button
+                  type="button"
+                  id="search-scan-barcode-btn"
+                  onClick={() => setIsInventoryLookupScannerOpen(true)}
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 text-[11px] font-semibold text-[#0F2C59] hover:text-[#FF6B00] transition-colors py-0.5 px-1.5 rounded hover:bg-orange-50 flex items-center gap-1 border border-gray-200"
+                  title="Scan barcode to lookup product"
+                >
+                  <Scan size={12} className="text-[#FF6B00]" />
+                  <span>Scan</span>
+                </button>
+              </div>
+
+              {/* Barcode Quick Lookup Control Group */}
+              <div className="flex items-center gap-1.5 bg-gray-50 border border-gray-200 p-1 rounded-xl">
+                <div className="relative">
+                  <Barcode size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                  <input
+                    type="text"
+                    id="inventory-manual-barcode-input"
+                    placeholder="Enter barcode..."
+                    value={manualBarcodeInput}
+                    onChange={(e) => {
+                      setManualBarcodeInput(e.target.value);
+                      if (barcodeLookupError) setBarcodeLookupError(null);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        if (manualBarcodeInput.trim()) {
+                          handleBarcodeLookup(manualBarcodeInput);
+                        }
+                      }
+                    }}
+                    className="w-32 sm:w-40 pl-7 pr-2 py-1 text-xs font-mono border border-gray-300 rounded-lg outline-none focus:border-[#0F2C59] bg-white text-gray-900"
+                  />
+                </div>
+                <button
+                  type="button"
+                  id="inventory-barcode-lookup-btn"
+                  onClick={() => {
+                    if (manualBarcodeInput.trim()) {
+                      handleBarcodeLookup(manualBarcodeInput);
+                    } else {
+                      setIsInventoryLookupScannerOpen(true);
+                    }
+                  }}
+                  className="px-2.5 py-1 bg-white hover:bg-gray-100 text-[#0F2C59] border border-gray-300 text-xs font-bold rounded-lg shadow-2xs transition active:scale-95 cursor-pointer"
+                  title={manualBarcodeInput.trim() ? "Lookup entered barcode" : "Scan barcode with camera"}
+                >
+                  <span>Lookup</span>
+                </button>
+                <button
+                  type="button"
+                  id="inventory-barcode-scan-btn"
+                  onClick={() => setIsInventoryLookupScannerOpen(true)}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 bg-[#0F2C59] hover:bg-[#1a3f7a] text-white text-xs font-bold rounded-lg shadow-2xs transition active:scale-95 cursor-pointer"
+                  title="Scan barcode with camera"
+                >
+                  <Scan size={12} className="text-[#FF6B00]" />
+                  <span className="hidden sm:inline">Scan Barcode</span>
+                  <span className="sm:hidden">Scan</span>
+                </button>
               </div>
 
               <button
                 id="open-add-product-btn"
                 onClick={handleOpenAddProductModal}
-                className="bg-[#0F2C59] hover:bg-[#153e7d] text-white px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow transition"
+                className="bg-[#0F2C59] hover:bg-[#153e7d] text-white px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow transition shrink-0"
               >
                 <Plus size={14} className="text-[#D4AF37]" />
                 <span>Add New Product & Tier Slabs</span>
               </button>
             </div>
 
+            {/* Inline validation feedback if manual input has errors */}
+            {barcodeLookupError && (
+              <div className="bg-red-50 border border-red-200 text-red-700 text-xs px-3.5 py-2 rounded-xl flex items-center justify-between animate-in fade-in duration-150">
+                <span className="flex items-center gap-1.5">
+                  <AlertCircle size={14} className="text-red-500 shrink-0" />
+                  {barcodeLookupError}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setBarcodeLookupError(null)}
+                  className="text-red-400 hover:text-red-700 font-bold p-0.5"
+                >
+                  <X size={13} />
+                </button>
+              </div>
+            )}
+
+            {/* Barcode-Based Product Lookup Banner (Found, Not Found, or Duplicate) */}
+            <BarcodeLookupBanner
+              result={barcodeLookupResult}
+              onClear={handleClearBarcodeLookup}
+              onOpenEditor={(p) => setEditingProduct(p)}
+              onAddVariant={(p) => setAddingVariantProduct(p)}
+              onAddProductWithBarcode={(barcode) => handleOpenAddProductModalWithBarcode(barcode)}
+              onlyShowMatched={onlyShowLookupMatched}
+              onToggleOnlyShowMatched={() => setOnlyShowLookupMatched((prev) => !prev)}
+            />
+
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {filteredProducts.map((p) => (
-                <div key={p.id} className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm flex flex-col justify-between">
+              {displayedProducts.map((p) => (
+                <div
+                  key={p.id}
+                  id={`inventory-product-${p.id}`}
+                  className={`bg-white rounded-xl border p-4 shadow-sm flex flex-col justify-between transition-all duration-300 ${
+                    highlightedProductId === p.id
+                      ? 'border-[#FF6B00] ring-4 ring-[#FF6B00]/30 shadow-lg bg-orange-50/15'
+                      : 'border-gray-200'
+                  }`}
+                >
                   <div>
+                    {highlightedProductId === p.id && (
+                      <div className="mb-2.5 flex items-center justify-between bg-[#FF6B00]/10 border border-[#FF6B00]/30 px-2.5 py-1 rounded-lg">
+                        <span className="text-[10px] font-black uppercase text-[#FF6B00] flex items-center gap-1">
+                          <CheckCircle2 size={12} />
+                          <span>Exact Barcode Match</span>
+                        </span>
+                        <span className="text-[10px] font-mono font-bold text-gray-700">
+                          {p.barcode}
+                        </span>
+                      </div>
+                    )}
                     <div className="flex gap-3">
                       {p.imageUrl && p.imageUrl.trim() ? (
                         <img
@@ -710,7 +957,14 @@ export const AdminDashboard: React.FC = () => {
                         </div>
                       )}
                       <div className="flex-1 min-w-0">
-                        <div className="text-[10px] font-bold text-[#FF6B00] uppercase truncate">{p.brand}</div>
+                        <div className="flex items-center justify-between gap-1">
+                          <span className="text-[10px] font-bold text-[#FF6B00] uppercase truncate">{p.brand}</span>
+                          {p.barcode && (
+                            <span className="text-[9px] font-mono bg-gray-100 text-gray-700 px-1.5 py-0.5 rounded border border-gray-200 shrink-0" title={`Barcode: ${p.barcode}`}>
+                              {p.barcode}
+                            </span>
+                          )}
+                        </div>
                         
                         {/* Item Name and Action Buttons */}
                         <div className="mt-0.5">
@@ -930,7 +1184,7 @@ export const AdminDashboard: React.FC = () => {
                   <span className="text-[10px] text-gray-500 font-medium">* Required fields</span>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
                   <div>
                     <label className="font-bold text-gray-700 block mb-1">
                       Product Name <span className="text-red-500">*</span>
@@ -972,6 +1226,57 @@ export const AdminDashboard: React.FC = () => {
                         </option>
                       ))}
                     </select>
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="font-bold text-gray-700">
+                        Barcode <span className="text-xs text-gray-400 font-normal">(Optional)</span>
+                      </label>
+                      <button
+                        type="button"
+                        id="add-scan-barcode-btn"
+                        onClick={() => setIsAddBarcodeScannerOpen(true)}
+                        className="inline-flex items-center gap-1 text-xs font-semibold text-[#0F2C59] hover:text-[#FF6B00] transition-colors py-0.5 px-2 rounded-lg hover:bg-orange-50 border border-gray-200 hover:border-[#FF6B00]/40"
+                        title="Scan barcode with camera"
+                      >
+                        <Scan className="w-3.5 h-3.5 text-[#FF6B00]" />
+                        <span>Scan</span>
+                      </button>
+                    </div>
+                    <div className="relative">
+                      <input
+                        type="text"
+                        id="new-product-barcode-input"
+                        placeholder="e.g. 8901030383321"
+                        value={newProductData.barcode}
+                        onChange={(e) => {
+                          setNewProductData({ ...newProductData, barcode: e.target.value });
+                          if (formValidationError?.toLowerCase().includes('barcode')) {
+                            setFormValidationError(null);
+                          }
+                        }}
+                        className={`w-full p-2.5 border rounded-xl outline-none font-mono text-gray-900 bg-white pr-9 ${
+                          newBarcodeConflict
+                            ? 'border-amber-400 bg-amber-50/50 focus:border-amber-500 focus:ring-1 focus:ring-amber-500'
+                            : 'border-gray-300 focus:border-[#0F2C59] focus:ring-1 focus:ring-[#0F2C59]'
+                        }`}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setIsAddBarcodeScannerOpen(true)}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-[#FF6B00] transition-colors p-1"
+                        title="Scan barcode with camera"
+                      >
+                        <Scan className="w-4 h-4" />
+                      </button>
+                    </div>
+                    {newBarcodeConflict && (
+                      <p className="text-[11px] text-amber-700 mt-1 flex items-center gap-1">
+                        <AlertCircle className="w-3.5 h-3.5 shrink-0 text-amber-600" />
+                        Already used by &quot;{newBarcodeConflict.name}&quot; ({newBarcodeConflict.brand})
+                      </p>
+                    )}
                   </div>
                 </div>
 
@@ -1297,6 +1602,7 @@ export const AdminDashboard: React.FC = () => {
         isOpen={Boolean(editingProduct)}
         onClose={() => setEditingProduct(null)}
         onSave={handleSaveEditProduct}
+        existingProducts={products}
       />
 
       {/* Add Variant to Specific Item Modal */}
@@ -1305,6 +1611,38 @@ export const AdminDashboard: React.FC = () => {
         isOpen={Boolean(addingVariantProduct)}
         onClose={() => setAddingVariantProduct(null)}
         onAddVariant={handleAddVariantToProduct}
+      />
+
+      {/* Barcode Scanner for Add Product */}
+      <BarcodeScannerModal
+        isOpen={isAddBarcodeScannerOpen}
+        onClose={() => setIsAddBarcodeScannerOpen(false)}
+        onScan={(scannedBarcode) => {
+          setNewProductData((prev) => ({ ...prev, barcode: scannedBarcode }));
+          if (formValidationError?.toLowerCase().includes('barcode')) {
+            setFormValidationError(null);
+          }
+        }}
+        title="Scan Barcode for New Product"
+        subtitle="Align product package barcode within camera frame"
+        currentBarcode={newProductData.barcode}
+        existingProducts={products}
+      />
+
+      {/* Barcode Scanner for Inventory Lookup & Product Identification */}
+      <BarcodeScannerModal
+        isOpen={isInventoryLookupScannerOpen || isInventorySearchScannerOpen}
+        onClose={() => {
+          setIsInventoryLookupScannerOpen(false);
+          setIsInventorySearchScannerOpen(false);
+        }}
+        onScan={(scannedBarcode) => {
+          handleBarcodeLookup(scannedBarcode);
+        }}
+        title="Lookup Product by Barcode"
+        subtitle="Scan or enter any product barcode to instantly locate and inspect"
+        allowDuplicates={true}
+        existingProducts={products}
       />
     </div>
   );

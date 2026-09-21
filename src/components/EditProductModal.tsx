@@ -1,14 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { X, Save, Layers, Check, Trash2, AlertCircle } from 'lucide-react';
+import { X, Save, Layers, Check, Trash2, AlertCircle, Scan } from 'lucide-react';
 import { Product, ProductVariant } from '../types';
 import { INITIAL_CATEGORIES } from '../data/seedData';
 import { formatVariantPack } from '../utils/variantFormatter';
+import { BarcodeScannerModal } from './BarcodeScannerModal';
+import { normalizeAndValidateBarcode } from '../lib/product-service';
 
 interface EditProductModalProps {
   product: Product | null;
   isOpen: boolean;
   onClose: () => void;
   onSave: (productId: string, updates: Partial<Product>) => void;
+  existingProducts?: Product[];
 }
 
 export const EditProductModal: React.FC<EditProductModalProps> = ({
@@ -16,11 +19,15 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
   isOpen,
   onClose,
   onSave,
+  existingProducts = [],
 }) => {
   const [name, setName] = useState('');
   const [brand, setBrand] = useState('');
   const [categoryId, setCategoryId] = useState('');
   const [imageUrl, setImageUrl] = useState('');
+  const [barcode, setBarcode] = useState('');
+  const [isBarcodeScannerOpen, setIsBarcodeScannerOpen] = useState(false);
+  const [barcodeError, setBarcodeError] = useState<string | null>(null);
   const [description, setDescription] = useState('');
   const [isDiscountExcluded, setIsDiscountExcluded] = useState(false);
   const [variants, setVariants] = useState<ProductVariant[]>([]);
@@ -33,6 +40,8 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
       setBrand(product.brand || '');
       setCategoryId(product.categoryId || 'cat-1');
       setImageUrl(product.imageUrl || '');
+      setBarcode(product.barcode || '');
+      setBarcodeError(null);
       setDescription(product.description || '');
       setIsDiscountExcluded(Boolean(product.isDiscountExcluded));
       setVariants(product.variants ? JSON.parse(JSON.stringify(product.variants)) : []);
@@ -68,15 +77,41 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
     setVariants((prev) => prev.filter((_, i) => i !== index));
   };
 
+  const barcodeConflict = barcode.trim()
+    ? existingProducts.find(
+        (p) =>
+          p.id !== product?.id &&
+          p.barcode &&
+          p.barcode.trim().toLowerCase() === barcode.trim().toLowerCase()
+      )
+    : null;
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return;
+
+    let validatedBarcode: string | undefined = undefined;
+    if (barcode.trim()) {
+      const barcodeValidation = normalizeAndValidateBarcode(barcode);
+      if (!barcodeValidation.valid) {
+        setBarcodeError(barcodeValidation.error || 'Invalid barcode format.');
+        return;
+      }
+      if (barcodeConflict) {
+        setBarcodeError(
+          `Barcode "${barcodeValidation.barcode}" is already assigned to "${barcodeConflict.name}" (${barcodeConflict.brand}). Barcodes must be unique.`
+        );
+        return;
+      }
+      validatedBarcode = barcodeValidation.barcode || undefined;
+    }
 
     onSave(product.id, {
       name: name.trim(),
       brand: brand.trim() || 'General',
       categoryId,
       imageUrl: imageUrl.trim(),
+      barcode: validatedBarcode,
       description: description.trim(),
       isDiscountExcluded,
       variants,
@@ -181,6 +216,63 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
                   </option>
                 ))}
               </select>
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="font-bold text-gray-700">
+                  Barcode <span className="text-xs text-gray-400 font-normal">(Optional)</span>
+                </label>
+                <button
+                  type="button"
+                  id="edit-scan-barcode-btn"
+                  onClick={() => setIsBarcodeScannerOpen(true)}
+                  className="inline-flex items-center gap-1 text-xs font-semibold text-[#0F2C59] hover:text-[#FF6B00] transition-colors py-0.5 px-2 rounded-lg hover:bg-orange-50 border border-gray-200 hover:border-[#FF6B00]/40"
+                  title="Scan barcode with camera"
+                >
+                  <Scan className="w-3.5 h-3.5 text-[#FF6B00]" />
+                  <span>Scan</span>
+                </button>
+              </div>
+              <div className="relative">
+                <input
+                  type="text"
+                  id="edit-product-barcode-input"
+                  value={barcode}
+                  onChange={(e) => {
+                    setBarcode(e.target.value);
+                    setBarcodeError(null);
+                  }}
+                  placeholder="e.g. 8901030383321"
+                  className={`w-full p-2.5 border rounded-xl font-mono text-gray-900 outline-none pr-9 ${
+                    barcodeConflict
+                      ? 'border-amber-400 bg-amber-50/50 focus:border-amber-500 focus:ring-1 focus:ring-amber-500'
+                      : barcodeError
+                      ? 'border-red-400 bg-red-50/30 focus:border-red-500 focus:ring-1 focus:ring-red-500'
+                      : 'border-gray-300 focus:border-[#0F2C59] focus:ring-1 focus:ring-[#0F2C59]'
+                  }`}
+                />
+                <button
+                  type="button"
+                  onClick={() => setIsBarcodeScannerOpen(true)}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-[#FF6B00] transition-colors p-1"
+                  title="Scan barcode with camera"
+                >
+                  <Scan className="w-4 h-4" />
+                </button>
+              </div>
+              {barcodeConflict && (
+                <p className="text-[11px] text-amber-700 mt-1 flex items-center gap-1">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0 text-amber-600" />
+                  Already used by &quot;{barcodeConflict.name}&quot; ({barcodeConflict.brand})
+                </p>
+              )}
+              {barcodeError && (
+                <p className="text-[11px] text-red-600 mt-1 flex items-center gap-1">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0 text-red-500" />
+                  {barcodeError}
+                </p>
+              )}
             </div>
           </div>
 
@@ -356,6 +448,21 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
           </div>
         </form>
       </div>
+
+      {/* Camera Barcode Scanner Modal */}
+      <BarcodeScannerModal
+        isOpen={isBarcodeScannerOpen}
+        onClose={() => setIsBarcodeScannerOpen(false)}
+        onScan={(scanned) => {
+          setBarcode(scanned);
+          setBarcodeError(null);
+        }}
+        title={`Scan Barcode for ${name || product.name}`}
+        subtitle="Align product package barcode within camera frame"
+        currentBarcode={barcode}
+        existingProducts={existingProducts}
+        excludeProductId={product.id}
+      />
     </div>
   );
 };

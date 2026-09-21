@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS public.products (
   description TEXT NOT NULL,
   category_id TEXT REFERENCES public.categories(id),
   image_url TEXT,
+  barcode VARCHAR(64),
   is_discount_excluded BOOLEAN NOT NULL DEFAULT false,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -130,6 +131,7 @@ CREATE INDEX IF NOT EXISTS idx_orders_user_id ON public.orders(user_id);
 CREATE INDEX IF NOT EXISTS idx_orders_user_phone ON public.orders(user_phone);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON public.orders(status);
 CREATE INDEX IF NOT EXISTS idx_order_items_order_id ON public.order_items(order_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_products_barcode_unique ON public.products(barcode) WHERE barcode IS NOT NULL;
 
 -- ==============================================================================
 -- ROW LEVEL SECURITY (RLS) POLICIES

@@ -94,6 +94,7 @@ export interface Product {
   description: string;
   categoryId: string;
   imageUrl?: string;
+  barcode?: string | null;
   isDiscountExcluded: boolean;
   variants: ProductVariant[];
   createdAt: string;

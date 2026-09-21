@@ -112,7 +112,7 @@ interface AppContextType {
   categories: Category[];
   products: Product[];
   addProduct: (product: Omit<Product, 'id' | 'createdAt'>) => Promise<{ success: boolean; error?: string }>;
-  updateProduct: (id: string, updates: Partial<Product>) => void;
+  updateProduct: (id: string, updates: Partial<Product>) => Promise<{ success: boolean; error?: string }>;
   deleteProduct: (id: string) => void;
   cart: CartItem[];
   addToCart: (product: Product, variant: ProductVariant, quantity?: number) => void;
@@ -499,9 +499,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { success: true };
   };
 
-  const updateProduct = async (id: string, updates: Partial<Product>) => {
+  const updateProduct = async (
+    id: string,
+    updates: Partial<Product>
+  ): Promise<{ success: boolean; error?: string }> => {
     const current = products.find((p) => p.id === id);
-    if (!current) return;
+    if (!current) return { success: false, error: 'Product not found.' };
     const updated = { ...current, ...updates };
 
     try {
@@ -517,15 +520,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const savedProduct = data.product || updated;
         setProducts((prev) => prev.map((p) => (p.id === id ? savedProduct : p)));
         return { success: true };
+      } else {
+        const errData = await resp.json().catch(() => ({}));
+        return {
+          success: false,
+          error: errData.error || `Server error (${resp.status}): Failed to update product.`,
+        };
       }
     } catch {
       // Offline fallback
+      if (isSupabaseConfigured) {
+        const dbResult = await saveProductToSupabase(updated);
+        if (!dbResult.success) {
+          return { success: false, error: dbResult.error || 'Failed to update product in database.' };
+        }
+      }
+      setProducts((prev) => prev.map((p) => (p.id === id ? updated : p)));
+      return { success: true };
     }
-
-    if (isSupabaseConfigured) {
-      await saveProductToSupabase(updated);
-    }
-    setProducts((prev) => prev.map((p) => (p.id === id ? updated : p)));
   };
 
   const deleteProduct = async (id: string) => {
