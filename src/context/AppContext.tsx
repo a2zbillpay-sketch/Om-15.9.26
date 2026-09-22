@@ -128,6 +128,11 @@ interface AppContextType {
   }) => Promise<Order>;
   cancelOrder: (orderId: string) => boolean;
   updateOrderStatus: (orderId: string, newStatus: OrderStatus) => void;
+  recordCodCollection: (
+    orderId: string,
+    collectedAmount: number,
+    markAsDelivered?: boolean
+  ) => { success: boolean; error?: string };
   userAddresses: Address[];
   addAddress: (address: Omit<Address, 'id' | 'userId'>) => void;
   selectedAddressId: string | null;
@@ -786,13 +791,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       prev.map((o) => {
         if (o.id === orderId) {
           const isDelivered = newStatus === OrderStatus.DELIVERED;
+          let updatedPaymentStatus = o.paymentStatus;
+          let updatedCodCollected = o.codCollectedAmount;
+
+          if (isDelivered && o.paymentMethod === PaymentMethod.COD) {
+            if (updatedCodCollected !== undefined) {
+              updatedPaymentStatus =
+                updatedCodCollected === o.finalAmount
+                  ? PaymentStatus.RECEIVED
+                  : updatedCodCollected > 0
+                  ? PaymentStatus.PARTIALLY_COLLECTED
+                  : PaymentStatus.PENDING;
+            } else {
+              // Default full COD collection if delivered without prior custom record
+              updatedCodCollected = o.finalAmount;
+              updatedPaymentStatus = PaymentStatus.RECEIVED;
+            }
+          }
+
           return {
             ...o,
             status: newStatus,
-            paymentStatus:
-              isDelivered && o.paymentMethod === PaymentMethod.COD
-                ? PaymentStatus.RECEIVED
-                : o.paymentStatus,
+            paymentStatus: updatedPaymentStatus,
+            codCollectedAmount: updatedCodCollected,
           };
         }
         return o;
@@ -804,6 +825,70 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         console.warn('Background Supabase status update error:', err);
       });
     }
+  };
+
+  const recordCodCollection = (
+    orderId: string,
+    collectedAmount: number,
+    markAsDelivered: boolean = false
+  ): { success: boolean; error?: string } => {
+    const order = orders.find((o) => o.id === orderId);
+    if (!order) {
+      return { success: false, error: 'Order not found.' };
+    }
+    if (order.paymentMethod !== PaymentMethod.COD) {
+      return { success: false, error: 'Collection can only be recorded for Cash on Delivery (COD) orders.' };
+    }
+
+    if (typeof collectedAmount !== 'number' || isNaN(collectedAmount) || !isFinite(collectedAmount)) {
+      return { success: false, error: 'Please enter a valid numeric monetary amount.' };
+    }
+
+    if (collectedAmount < 0) {
+      return { success: false, error: 'Collected amount cannot be negative.' };
+    }
+
+    if (collectedAmount > order.finalAmount) {
+      return {
+        success: false,
+        error: `Collected amount (₹${collectedAmount}) cannot exceed the bill amount (₹${order.finalAmount}).`,
+      };
+    }
+
+    const cleanAmount = Math.round(collectedAmount * 100) / 100;
+
+    let newPaymentStatus: PaymentStatus;
+    if (cleanAmount === order.finalAmount) {
+      newPaymentStatus = PaymentStatus.RECEIVED;
+    } else if (cleanAmount > 0) {
+      newPaymentStatus = PaymentStatus.PARTIALLY_COLLECTED;
+    } else {
+      newPaymentStatus = PaymentStatus.PENDING;
+    }
+
+    setOrders((prev) =>
+      prev.map((o) => {
+        if (o.id === orderId) {
+          return {
+            ...o,
+            codCollectedAmount: cleanAmount,
+            paymentStatus: newPaymentStatus,
+            status: markAsDelivered ? OrderStatus.DELIVERED : o.status,
+          };
+        }
+        return o;
+      })
+    );
+
+    if (isSupabaseConfigured) {
+      const isPaid = cleanAmount === order.finalAmount;
+      const nextStatus = markAsDelivered ? OrderStatus.DELIVERED : order.status;
+      updateOrderStatusInSupabase(orderId, nextStatus, isPaid).catch((err) => {
+        console.warn('Background Supabase status update error:', err);
+      });
+    }
+
+    return { success: true };
   };
 
   // Address management
@@ -1065,6 +1150,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         createOrder,
         cancelOrder,
         updateOrderStatus,
+        recordCodCollection,
         userAddresses,
         addAddress,
         selectedAddressId,

@@ -35,6 +35,7 @@ export enum PaymentStatus {
   RECEIVED = 'RECEIVED',
   FAILED = 'FAILED',
   REFUNDED = 'REFUNDED',
+  PARTIALLY_COLLECTED = 'PARTIALLY_COLLECTED',
 }
 
 export interface Address {
@@ -132,6 +133,7 @@ export interface Order {
   deliveryFee: number;
   codCharge: number;
   finalAmount: number;
+  codCollectedAmount?: number;
   razorpayOrderId?: string;
   razorpayPaymentId?: string;
   createdAt: string;

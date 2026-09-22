@@ -30,9 +30,10 @@ import {
   CheckCircle2,
   AlertTriangle,
   Boxes,
+  Banknote,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { OrderStatus, PaymentMethod, Product, ProductVariant, TieredPrice, UnitType, Role } from '../types';
+import { Order, OrderStatus, PaymentMethod, Product, ProductVariant, TieredPrice, UnitType, Role } from '../types';
 import { AdminSettingsControl } from './AdminSettingsControl';
 import { LogoUploadModal } from './LogoUploadModal';
 import { EditProductModal } from './EditProductModal';
@@ -40,6 +41,8 @@ import { AddVariantModal } from './AddVariantModal';
 import { StockAdjustmentModal } from './StockAdjustmentModal';
 import { BarcodeScannerModal } from './BarcodeScannerModal';
 import { BarcodeLookupBanner } from './BarcodeLookupBanner';
+import { CodCollectionModal } from './CodCollectionModal';
+import { ProductImageUploader } from './ProductImageUploader';
 import { formatVariantPack } from '../utils/variantFormatter';
 import {
   normalizeAndValidateBarcode,
@@ -104,6 +107,7 @@ export const AdminDashboard: React.FC = () => {
     users,
     isSupabaseConfigured,
     refreshOrders,
+    recordCodCollection,
   } = useApp();
 
   const [activeTab, setActiveTab] = useState<'ORDERS' | 'INVENTORY' | 'SETTINGS' | 'CUSTOMERS'>('ORDERS');
@@ -112,6 +116,7 @@ export const AdminDashboard: React.FC = () => {
   const [customerSearch, setCustomerSearch] = useState<string>('');
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isLogoModalOpen, setIsLogoModalOpen] = useState(false);
+  const [codCollectingOrder, setCodCollectingOrder] = useState<Order | null>(null);
 
   // Add product modal state
   const [isAddProductModalOpen, setIsAddProductModalOpen] = useState(false);
@@ -138,6 +143,13 @@ export const AdminDashboard: React.FC = () => {
     productId: string,
     updatedVariants: ProductVariant[]
   ): Promise<{ success: boolean; error?: string }> => {
+    if (
+      barcodeLookupResult &&
+      (barcodeLookupResult.status === 'duplicate_found' || barcodeLookupResult.status === 'not_found')
+    ) {
+      return { success: false, error: 'Cannot modify stock: duplicate or invalid barcode conflict detected.' };
+    }
+
     const res = await updateProduct(productId, { variants: updatedVariants });
     if (res && res.success) {
       if (editingProduct && editingProduct.id === productId) {
@@ -739,15 +751,48 @@ export const AdminDashboard: React.FC = () => {
                           <div className="text-[10px] text-gray-500 font-mono">+91 {order.userPhone}</div>
                         </td>
                         <td className="p-3">
-                          <span
-                            className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                              order.paymentMethod === PaymentMethod.ADVANCE_ONLINE
-                                ? 'bg-emerald-100 text-emerald-800'
-                                : 'bg-gray-100 text-gray-800'
-                            }`}
-                          >
-                            {order.paymentMethod === PaymentMethod.ADVANCE_ONLINE ? 'UPI Advance' : 'COD'}
-                          </span>
+                          <div className="flex flex-col gap-1">
+                            <span
+                              className={`inline-flex items-center gap-1 w-fit px-2 py-0.5 rounded text-[10px] font-bold ${
+                                order.paymentMethod === PaymentMethod.ADVANCE_ONLINE
+                                  ? 'bg-emerald-100 text-emerald-800'
+                                  : 'bg-amber-100 text-amber-800'
+                              }`}
+                            >
+                              {order.paymentMethod === PaymentMethod.ADVANCE_ONLINE ? 'UPI Advance' : 'COD'}
+                            </span>
+                            {order.paymentMethod === PaymentMethod.COD && (
+                              <div className="text-[10px] space-y-0.5">
+                                {order.codCollectedAmount !== undefined ? (
+                                  order.codCollectedAmount === order.finalAmount ? (
+                                    <span className="text-emerald-700 font-bold block">
+                                      Full: ₹{order.codCollectedAmount}
+                                    </span>
+                                  ) : (
+                                    <div className="leading-tight">
+                                      <span className="text-amber-800 font-bold block">
+                                        Partial: ₹{order.codCollectedAmount}
+                                      </span>
+                                      <span className="text-red-600 font-semibold block text-[9px]">
+                                        Short: ₹{order.finalAmount - order.codCollectedAmount}
+                                      </span>
+                                    </div>
+                                  )
+                                ) : (
+                                  <span className="text-gray-400 font-medium block">Collection Pending</span>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => setCodCollectingOrder(order)}
+                                  className="inline-flex items-center gap-1 text-[10px] font-bold text-[#0F2C59] hover:text-[#FF6B00] transition cursor-pointer"
+                                  title="Record or Adjust COD Collection"
+                                >
+                                  <Banknote size={11} />
+                                  <span>{order.codCollectedAmount !== undefined ? 'Adjust COD' : 'Collect COD'}</span>
+                                </button>
+                              </div>
+                            )}
+                          </div>
                         </td>
                         <td className="p-3">
                           <span className="font-medium text-gray-800">
@@ -757,8 +802,13 @@ export const AdminDashboard: React.FC = () => {
                             {order.items.map((i) => i.productName).join(', ')}
                           </div>
                         </td>
-                        <td className="p-3 font-black text-gray-900">
-                          ₹{order.finalAmount}
+                        <td className="p-3">
+                          <div className="font-black text-gray-900">₹{order.finalAmount}</div>
+                          {order.paymentMethod === PaymentMethod.COD && order.codCollectedAmount !== undefined && (
+                            <div className="text-[10px] text-gray-500 font-medium mt-0.5">
+                              Dep: <span className="font-bold text-[#0F2C59]">₹{order.codCollectedAmount}</span>
+                            </div>
+                          )}
                         </td>
                         <td className="p-3">
                           <span
@@ -779,7 +829,18 @@ export const AdminDashboard: React.FC = () => {
                           {order.status !== OrderStatus.CANCELLED && order.status !== OrderStatus.DELIVERED ? (
                             <select
                               value={order.status}
-                              onChange={(e) => updateOrderStatus(order.id, e.target.value as OrderStatus)}
+                              onChange={(e) => {
+                                const newStatus = e.target.value as OrderStatus;
+                                if (
+                                  newStatus === OrderStatus.DELIVERED &&
+                                  order.paymentMethod === PaymentMethod.COD &&
+                                  order.codCollectedAmount === undefined
+                                ) {
+                                  setCodCollectingOrder(order);
+                                } else {
+                                  updateOrderStatus(order.id, newStatus);
+                                }
+                              }}
                               className="bg-white border border-gray-300 text-gray-800 text-[11px] font-bold rounded-lg p-1.5 outline-none focus:ring-1 focus:ring-[#0F2C59]"
                             >
                               <option value={OrderStatus.ORDER_ACCEPTED}>Order Accepted</option>
@@ -913,6 +974,7 @@ export const AdminDashboard: React.FC = () => {
               onOpenEditor={(p) => setEditingProduct(p)}
               onAddVariant={(p) => setAddingVariantProduct(p)}
               onAddProductWithBarcode={(barcode) => handleOpenAddProductModalWithBarcode(barcode)}
+              onUpdateStock={(p) => setStockAdjustProduct(p)}
               onlyShowMatched={onlyShowLookupMatched}
               onToggleOnlyShowMatched={() => setOnlyShowLookupMatched((prev) => !prev)}
             />
@@ -945,6 +1007,7 @@ export const AdminDashboard: React.FC = () => {
                         <img
                           src={p.imageUrl}
                           alt={p.name}
+                          loading="lazy"
                           className="w-16 h-16 rounded-lg object-cover border shrink-0"
                         />
                       ) : (
@@ -993,6 +1056,19 @@ export const AdminDashboard: React.FC = () => {
                               <Plus size={13} className="text-[#D4AF37]" />
                               <span>+ Add Variant</span>
                             </button>
+
+                            {highlightedProductId === p.id && (
+                              <button
+                                type="button"
+                                id={`item-adjust-stock-btn-${p.id}`}
+                                onClick={() => setStockAdjustProduct(p)}
+                                className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-[#FF6B00] hover:bg-[#e05e00] text-white text-xs font-bold rounded-lg shadow-2xs transition active:scale-95 cursor-pointer touch-manipulation"
+                                title={`Adjust Stock for ${p.name}`}
+                              >
+                                <Boxes size={13} />
+                                <span>Adjust Stock</span>
+                              </button>
+                            )}
                           </div>
                         </div>
 
@@ -1282,20 +1358,14 @@ export const AdminDashboard: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
-                  <div className="sm:col-span-2">
-                    <label className="font-bold text-gray-700 block mb-1">Image URL (Optional)</label>
-                    <input
-                      type="text"
-                      id="new-product-image-input"
-                      placeholder="https://... (or leave blank for automatic category default)"
-                      value={newProductData.imageUrl}
-                      onChange={(e) => setNewProductData({ ...newProductData, imageUrl: e.target.value })}
-                      className="w-full p-2.5 border border-gray-300 rounded-xl outline-none text-gray-800 bg-white"
-                    />
-                  </div>
+                <div className="pt-1 space-y-3">
+                  <ProductImageUploader
+                    currentImageUrl={newProductData.imageUrl}
+                    onImageChange={(newUrl) => setNewProductData({ ...newProductData, imageUrl: newUrl })}
+                    productName={newProductData.name}
+                  />
 
-                  <div className="flex items-center pt-5">
+                  <div className="flex items-center pt-1">
                     <label className="flex items-center gap-2 cursor-pointer font-bold text-gray-700 select-none">
                       <input
                         type="checkbox"
@@ -1631,6 +1701,18 @@ export const AdminDashboard: React.FC = () => {
         existingProducts={products}
       />
 
+      {/* Barcode-Assisted Stock Adjustment Modal */}
+      <StockAdjustmentModal
+        product={stockAdjustProduct}
+        isOpen={Boolean(stockAdjustProduct)}
+        onClose={() => setStockAdjustProduct(null)}
+        onSaveStock={handleSaveStock}
+        onOpenEditor={(p) => {
+          setStockAdjustProduct(null);
+          setEditingProduct(p);
+        }}
+      />
+
       {/* Barcode Scanner for Inventory Lookup & Product Identification */}
       <BarcodeScannerModal
         isOpen={isInventoryLookupScannerOpen || isInventorySearchScannerOpen}
@@ -1645,6 +1727,16 @@ export const AdminDashboard: React.FC = () => {
         subtitle="Scan or enter any product barcode to instantly locate and inspect"
         allowDuplicates={true}
         existingProducts={products}
+      />
+
+      {/* COD Cash Collection & Deposit Modal */}
+      <CodCollectionModal
+        order={codCollectingOrder}
+        isOpen={Boolean(codCollectingOrder)}
+        onClose={() => setCodCollectingOrder(null)}
+        onSave={(orderId, amount, markDelivered) => {
+          return recordCodCollection(orderId, amount, markDelivered);
+        }}
       />
     </div>
   );

@@ -4,6 +4,7 @@ import { Product, ProductVariant } from '../types';
 import { INITIAL_CATEGORIES } from '../data/seedData';
 import { formatVariantPack } from '../utils/variantFormatter';
 import { BarcodeScannerModal } from './BarcodeScannerModal';
+import { ProductImageUploader } from './ProductImageUploader';
 import { normalizeAndValidateBarcode } from '../lib/product-service';
 
 interface EditProductModalProps {
@@ -275,17 +276,11 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
             </div>
           </div>
 
-          <div>
-            <label className="font-bold text-gray-700 block mb-1">Image URL</label>
-            <input
-              type="url"
-              id="edit-product-image-input"
-              value={imageUrl}
-              onChange={(e) => setImageUrl(e.target.value)}
-              placeholder="https://..."
-              className="w-full p-2.5 border border-gray-300 rounded-xl text-gray-900 focus:border-[#0F2C59] focus:ring-1 focus:ring-[#0F2C59] outline-none"
-            />
-          </div>
+          <ProductImageUploader
+            currentImageUrl={imageUrl}
+            onImageChange={(newUrl) => setImageUrl(newUrl)}
+            productName={name}
+          />
 
           <div>
             <label className="font-bold text-gray-700 block mb-1">Description</label>
