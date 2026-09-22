@@ -56,21 +56,137 @@ export function validateImageFile(file: File | Blob): { valid: boolean; error?: 
   return { valid: true };
 }
 
+export type SquareFitMode = 'crop' | 'contain';
+
+export interface ImageOptimizationOptions {
+  maxDimension?: number;
+  quality?: number;
+  fitMode?: SquareFitMode;
+  backgroundColor?: string;
+}
+
+export interface SquareGeometry {
+  canvasSize: number;
+  sx: number;
+  sy: number;
+  sw: number;
+  sh: number;
+  dx: number;
+  dy: number;
+  dw: number;
+  dh: number;
+}
+
 /**
- * Resizes and compresses an image on-device using HTML5 Canvas before uploading.
- * High-resolution phone camera photos (typically 4000x3000px, 6-12MB) are scaled down to
- * max 1000px dimension and compressed to high-efficiency JPEG/WebP (~100-250KB),
- * preventing unnecessary mobile data usage and cloud storage waste.
+ * Calculates distortion-free geometry for 1:1 square canvas rendering.
+ * - 'crop' (Center-Crop): crops equal margins from edges to fill 1:1 square. Zero distortion.
+ * - 'contain' (Fit): scales entire image inside 1:1 square with background padding. Zero distortion.
+ */
+export function calculateSquareGeometry(
+  origWidth: number,
+  origHeight: number,
+  maxDimension: number = 1000,
+  fitMode: SquareFitMode = 'crop'
+): SquareGeometry {
+  if (fitMode === 'contain') {
+    const maxDim = Math.max(origWidth, origHeight);
+    const canvasSize = Math.min(maxDim, maxDimension);
+    const scale = canvasSize / maxDim;
+    const dw = origWidth * scale;
+    const dh = origHeight * scale;
+    const dx = (canvasSize - dw) / 2;
+    const dy = (canvasSize - dh) / 2;
+    return {
+      canvasSize,
+      sx: 0,
+      sy: 0,
+      sw: origWidth,
+      sh: origHeight,
+      dx,
+      dy,
+      dw,
+      dh,
+    };
+  }
+
+  // Center-crop (default): Take the largest centered square
+  const minDim = Math.min(origWidth, origHeight);
+  const canvasSize = Math.min(minDim, maxDimension);
+  const sx = Math.round((origWidth - minDim) / 2);
+  const sy = Math.round((origHeight - minDim) / 2);
+  return {
+    canvasSize,
+    sx,
+    sy,
+    sw: minDim,
+    sh: minDim,
+    dx: 0,
+    dy: 0,
+    dw: canvasSize,
+    dh: canvasSize,
+  };
+}
+
+/**
+ * Renders a source image onto a canvas in 1:1 square format without distortion.
+ */
+export function renderSquareToCanvas(
+  ctx: CanvasRenderingContext2D,
+  img: HTMLImageElement | HTMLCanvasElement,
+  origWidth: number,
+  origHeight: number,
+  canvasSize: number,
+  fitMode: SquareFitMode = 'crop',
+  backgroundColor: string = '#FFFFFF'
+): void {
+  const geom = calculateSquareGeometry(origWidth, origHeight, canvasSize, fitMode);
+
+  ctx.clearRect(0, 0, canvasSize, canvasSize);
+
+  if (fitMode === 'contain') {
+    ctx.fillStyle = backgroundColor;
+    ctx.fillRect(0, 0, canvasSize, canvasSize);
+  }
+
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(
+    img,
+    geom.sx,
+    geom.sy,
+    geom.sw,
+    geom.sh,
+    geom.dx,
+    geom.dy,
+    geom.dw,
+    geom.dh
+  );
+}
+
+/**
+ * Resizes, crops/fits into a 1:1 SQUARE format without distortion, and compresses
+ * the image on-device using HTML5 Canvas before uploading.
+ * Produces guaranteed 1:1 aspect ratio images (width === height) optimized for mobile/web.
  */
 export async function optimizeProductImage(
   file: File | Blob,
-  maxDimension: number = 1000,
-  quality: number = 0.85
+  maxDimensionOrOptions: number | ImageOptimizationOptions = 1000,
+  legacyQuality: number = 0.85
 ): Promise<ImageOptimizationResult> {
   const validation = validateImageFile(file);
   if (!validation.valid) {
     throw new Error(validation.error || 'Invalid image file.');
   }
+
+  const options: ImageOptimizationOptions =
+    typeof maxDimensionOrOptions === 'number'
+      ? { maxDimension: maxDimensionOrOptions, quality: legacyQuality, fitMode: 'crop' }
+      : { maxDimension: 1000, quality: 0.85, fitMode: 'crop', ...maxDimensionOrOptions };
+
+  const maxDimension = options.maxDimension || 1000;
+  const quality = options.quality !== undefined ? options.quality : 0.85;
+  const fitMode: SquareFitMode = options.fitMode || 'crop';
+  const backgroundColor = options.backgroundColor || '#FFFFFF';
 
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -79,43 +195,50 @@ export async function optimizeProductImage(
     img.onload = () => {
       URL.revokeObjectURL(objectUrl);
 
-      let { width, height } = img;
-      if (width <= 0 || height <= 0) {
+      const origWidth = img.naturalWidth || img.width;
+      const origHeight = img.naturalHeight || img.height;
+      if (origWidth <= 0 || origHeight <= 0) {
         return reject(new Error('Image has invalid dimensions.'));
       }
 
-      // Calculate proportional dimensions
-      if (width > maxDimension || height > maxDimension) {
-        if (width > height) {
-          height = Math.round((height * maxDimension) / width);
-          width = maxDimension;
-        } else {
-          width = Math.round((width * maxDimension) / height);
-          height = maxDimension;
-        }
-      }
+      const geom = calculateSquareGeometry(origWidth, origHeight, maxDimension, fitMode);
 
       const canvas = document.createElement('canvas');
-      canvas.width = width;
-      canvas.height = height;
+      canvas.width = geom.canvasSize;
+      canvas.height = geom.canvasSize;
       const ctx = canvas.getContext('2d');
       if (!ctx) {
         return reject(new Error('Failed to initialize canvas context for compression.'));
       }
 
-      // Use better smoothing
+      if (fitMode === 'contain') {
+        ctx.fillStyle = backgroundColor;
+        ctx.fillRect(0, 0, geom.canvasSize, geom.canvasSize);
+      }
+
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = 'high';
-      ctx.drawImage(img, 0, 0, width, height);
+      ctx.drawImage(
+        img,
+        geom.sx,
+        geom.sy,
+        geom.sw,
+        geom.sh,
+        geom.dx,
+        geom.dy,
+        geom.dw,
+        geom.dh
+      );
 
       // Determine output mime
       const inputMime = file.type ? file.type.toLowerCase() : 'image/jpeg';
-      const outputMime = inputMime === 'image/png' ? 'image/png' : 'image/jpeg';
+      // For square JPEG compression, use JPEG for small bandwidth footprint (~100-250KB)
+      const outputMime = inputMime === 'image/png' && fitMode !== 'contain' ? 'image/png' : 'image/jpeg';
 
       canvas.toBlob(
         (blob) => {
           if (!blob) {
-            return reject(new Error('Failed to encode optimized image.'));
+            return reject(new Error('Failed to encode optimized 1:1 square image.'));
           }
 
           const reader = new FileReader();
@@ -125,8 +248,8 @@ export async function optimizeProductImage(
               dataUrl: reader.result as string,
               originalSize: file.size,
               optimizedSize: blob.size,
-              width,
-              height,
+              width: geom.canvasSize,
+              height: geom.canvasSize,
               mimeType: outputMime,
             });
           };

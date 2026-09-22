@@ -86,6 +86,7 @@ export interface ProductVariant {
   stockQuantity: number;
   maxOrderLimit: number;
   tieredPrices: TieredPrice[];
+  imageUrl?: string;
 }
 
 export interface Product {
