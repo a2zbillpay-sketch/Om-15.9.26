@@ -384,7 +384,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const checkAdminSession = useCallback(async (): Promise<boolean> => {
     try {
-      const res = await fetch('/api/auth/me', { method: 'GET' });
+      const res = await fetch('/api/auth/me', {
+        method: 'GET',
+        credentials: 'include',
+      });
       if (!res.ok) {
         setIsAdminSessionValid(false);
         return false;
@@ -401,7 +404,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const logoutAdminSession = useCallback(async () => {
     try {
-      await fetch('/api/auth/logout', { method: 'POST' });
+      await fetch('/api/auth/logout', {
+        method: 'POST',
+        credentials: 'include',
+      });
     } catch {
       // ignore network errors
     } finally {

@@ -11,22 +11,20 @@ export interface AdminSession {
 export const SESSION_COOKIE_NAME = 'om_admin_session';
 export const SESSION_MAX_AGE_MS = 1000 * 60 * 60 * 8; // 8 hours
 
-let ephemeralSessionSecret: string | null = null;
-
 /**
  * Retrieves the server-only secret for HMAC session signing.
- * Uses ADMIN_SESSION_SECRET if set (min 32 chars).
- * Falls back to an in-memory cryptographically random 256-bit secret for the server session lifetime.
+ * Requires persistent ADMIN_SESSION_SECRET (min 32 chars).
+ * Fails safely and does NOT fall back to an ephemeral random secret.
  */
 export function getSessionSecret(): string | null {
   const secret = process.env.ADMIN_SESSION_SECRET;
   if (secret && typeof secret === 'string' && secret.trim().length >= 32) {
     return secret.trim();
   }
-  if (!ephemeralSessionSecret) {
-    ephemeralSessionSecret = crypto.randomBytes(32).toString('hex');
-  }
-  return ephemeralSessionSecret;
+  console.error(
+    '[Auth Config Error] ADMIN_SESSION_SECRET environment variable is missing or shorter than 32 characters. Shopkeeper session signing is disabled.'
+  );
+  return null;
 }
 
 /**
@@ -159,16 +157,14 @@ export function verifyAdminSession(req: IncomingMessage): AdminSession | null {
 
 /**
  * Sets the secure HttpOnly cookie on the ServerResponse.
+ * Uses SameSite=None; Secure for cross-site iframe operation in AI Studio preview.
  */
 export function setAdminSessionCookie(res: ServerResponse, session: AdminSession): boolean {
   const token = createSessionToken(session);
   if (!token) return false;
 
   const maxAgeSeconds = Math.floor(SESSION_MAX_AGE_MS / 1000);
-  const isProduction = process.env.NODE_ENV === 'production';
-  const secureFlag = isProduction ? '; Secure' : '';
-
-  const cookieStr = `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSeconds}${secureFlag}`;
+  const cookieStr = `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=None; Secure; Max-Age=${maxAgeSeconds}`;
   res.setHeader('Set-Cookie', cookieStr);
   return true;
 }
@@ -177,8 +173,6 @@ export function setAdminSessionCookie(res: ServerResponse, session: AdminSession
  * Clears the secure session cookie on logout.
  */
 export function clearAdminSessionCookie(res: ServerResponse): void {
-  const isProduction = process.env.NODE_ENV === 'production';
-  const secureFlag = isProduction ? '; Secure' : '';
-  const cookieStr = `${SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT${secureFlag}`;
+  const cookieStr = `${SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=None; Secure; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT`;
   res.setHeader('Set-Cookie', cookieStr);
 }

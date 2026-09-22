@@ -48,7 +48,11 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
   if (!getSessionSecret()) {
     res.statusCode = 503;
     res.setHeader('Content-Type', 'application/json');
-    res.end(JSON.stringify({ error: 'Authentication service unavailable' }));
+    res.end(
+      JSON.stringify({
+        error: 'Server authentication configuration error: ADMIN_SESSION_SECRET is not configured on the server.',
+      })
+    );
     return;
   }
 
