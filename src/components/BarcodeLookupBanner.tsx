@@ -52,7 +52,12 @@ export const BarcodeLookupBanner: React.FC<BarcodeLookupBannerProps> = ({
                 </span>
               </div>
               <h3 className="text-base font-extrabold text-gray-950 mt-1">
-                <span className="text-[#FF6B00] font-black">{product.brand}</span> — {product.name}
+                {product.brand ? (
+                  <>
+                    <span className="text-[#FF6B00] font-black">{product.brand}</span> —{' '}
+                  </>
+                ) : null}
+                {product.name}
               </h3>
               <p className="text-xs text-gray-600 mt-0.5">
                 {product.variants.length} pack size(s) available in catalog. Product card highlighted in inventory below.
@@ -286,7 +291,9 @@ export const BarcodeLookupBanner: React.FC<BarcodeLookupBannerProps> = ({
               className="bg-white p-3 rounded-xl border border-red-200/80 shadow-2xs flex items-center justify-between gap-2"
             >
               <div className="min-w-0 flex-1">
-                <span className="text-[10px] font-bold text-[#FF6B00] uppercase block truncate">{p.brand}</span>
+                {p.brand ? (
+                  <span className="text-[10px] font-bold text-[#FF6B00] uppercase block truncate">{p.brand}</span>
+                ) : null}
                 <span className="text-xs font-bold text-gray-900 block truncate">{p.name}</span>
                 <span className="text-[10px] text-gray-500 font-mono block">
                   {p.variants.length} variant(s) · ID: {p.id.slice(0, 8)}...

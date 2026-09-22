@@ -35,7 +35,7 @@ export const CustomerStore: React.FC<CustomerStoreProps> = ({
       const matchesSearch =
         !searchQuery.trim() ||
         p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        p.brand.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (p.brand && p.brand.toLowerCase().includes(searchQuery.toLowerCase())) ||
         p.description.toLowerCase().includes(searchQuery.toLowerCase());
       return matchesCategory && matchesSearch;
     });

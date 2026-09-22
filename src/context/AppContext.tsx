@@ -434,9 +434,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!newProd.name || !newProd.name.trim()) {
       return { success: false, error: 'Product name is required.' };
     }
-    if (!newProd.brand || !newProd.brand.trim()) {
-      return { success: false, error: 'Brand is required.' };
-    }
     if (!newProd.variants || newProd.variants.length === 0) {
       return { success: false, error: 'At least one variant is required.' };
     }
@@ -444,6 +441,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const id = `prod-${Date.now()}`;
     const product: Product = {
       ...newProd,
+      brand: newProd.brand ? newProd.brand.trim() : '',
       id,
       createdAt: new Date().toISOString(),
       variants: (newProd.variants || []).map((v, idx) => ({

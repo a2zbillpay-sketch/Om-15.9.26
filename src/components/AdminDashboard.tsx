@@ -356,7 +356,7 @@ export const AdminDashboard: React.FC = () => {
   const filteredProducts = products.filter(
     (p) =>
       p.name.toLowerCase().includes(inventorySearch.toLowerCase()) ||
-      p.brand.toLowerCase().includes(inventorySearch.toLowerCase()) ||
+      (p.brand && p.brand.toLowerCase().includes(inventorySearch.toLowerCase())) ||
       (p.barcode && p.barcode.toLowerCase().includes(inventorySearch.toLowerCase()))
   );
 
@@ -387,11 +387,7 @@ export const AdminDashboard: React.FC = () => {
       return;
     }
 
-    const trimmedBrand = newProductData.brand.trim();
-    if (!trimmedBrand) {
-      setFormValidationError('Please enter brand name.');
-      return;
-    }
+    const trimmedBrand = newProductData.brand ? newProductData.brand.trim() : '';
 
     if (!newProductData.categoryId) {
       setFormValidationError('Please select a category.');
@@ -410,7 +406,7 @@ export const AdminDashboard: React.FC = () => {
       );
       if (conflict) {
         setFormValidationError(
-          `Barcode "${barcodeValidation.barcode}" is already assigned to "${conflict.name}" (${conflict.brand}). Barcodes must be unique.`
+          `Barcode "${barcodeValidation.barcode}" is already assigned to "${conflict.name}"${conflict.brand ? ` (${conflict.brand})` : ''}. Barcodes must be unique.`
         );
         return;
       }
@@ -958,7 +954,11 @@ export const AdminDashboard: React.FC = () => {
                       )}
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center justify-between gap-1">
-                          <span className="text-[10px] font-bold text-[#FF6B00] uppercase truncate">{p.brand}</span>
+                          {p.brand ? (
+                            <span className="text-[10px] font-bold text-[#FF6B00] uppercase truncate">{p.brand}</span>
+                          ) : (
+                            <span />
+                          )}
                           {p.barcode && (
                             <span className="text-[9px] font-mono bg-gray-100 text-gray-700 px-1.5 py-0.5 rounded border border-gray-200 shrink-0" title={`Barcode: ${p.barcode}`}>
                               {p.barcode}
@@ -1200,11 +1200,13 @@ export const AdminDashboard: React.FC = () => {
                   </div>
 
                   <div>
-                    <label className="font-bold text-gray-700 block mb-1">Brand Name</label>
+                    <label className="font-bold text-gray-700 block mb-1">
+                      Brand Name <span className="text-xs text-gray-400 font-normal">(Optional)</span>
+                    </label>
                     <input
                       type="text"
                       id="new-product-brand-input"
-                      placeholder="e.g. Om Premium / Tata / Fortune"
+                      placeholder="e.g. Om Premium / Tata / Fortune (Optional)"
                       value={newProductData.brand}
                       onChange={(e) => setNewProductData({ ...newProductData, brand: e.target.value })}
                       className="w-full p-2.5 border border-gray-300 rounded-xl outline-none focus:border-[#0F2C59] focus:ring-1 focus:ring-[#0F2C59] text-gray-900 bg-white"
@@ -1274,7 +1276,7 @@ export const AdminDashboard: React.FC = () => {
                     {newBarcodeConflict && (
                       <p className="text-[11px] text-amber-700 mt-1 flex items-center gap-1">
                         <AlertCircle className="w-3.5 h-3.5 shrink-0 text-amber-600" />
-                        Already used by &quot;{newBarcodeConflict.name}&quot; ({newBarcodeConflict.brand})
+                        Already used by &quot;{newBarcodeConflict.name}&quot;{newBarcodeConflict.brand ? ` (${newBarcodeConflict.brand})` : ''}
                       </p>
                     )}
                   </div>

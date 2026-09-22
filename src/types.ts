@@ -90,7 +90,7 @@ export interface ProductVariant {
 export interface Product {
   id: string;
   name: string;
-  brand: string;
+  brand?: string;
   description: string;
   categoryId: string;
   imageUrl?: string;

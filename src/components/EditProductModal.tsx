@@ -99,7 +99,7 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
       }
       if (barcodeConflict) {
         setBarcodeError(
-          `Barcode "${barcodeValidation.barcode}" is already assigned to "${barcodeConflict.name}" (${barcodeConflict.brand}). Barcodes must be unique.`
+          `Barcode "${barcodeValidation.barcode}" is already assigned to "${barcodeConflict.name}"${barcodeConflict.brand ? ` (${barcodeConflict.brand})` : ''}. Barcodes must be unique.`
         );
         return;
       }
@@ -108,7 +108,7 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
 
     onSave(product.id, {
       name: name.trim(),
-      brand: brand.trim() || 'General',
+      brand: brand.trim(),
       categoryId,
       imageUrl: imageUrl.trim(),
       barcode: validatedBarcode,
@@ -189,16 +189,15 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
 
             <div>
               <label className="font-bold text-gray-700 block mb-1">
-                Brand Name <span className="text-red-500">*</span>
+                Brand Name <span className="text-xs text-gray-400 font-normal">(Optional)</span>
               </label>
               <input
                 type="text"
-                required
                 id="edit-product-brand-input"
                 value={brand}
                 onChange={(e) => setBrand(e.target.value)}
                 className="w-full p-2.5 border border-gray-300 rounded-xl text-gray-900 focus:border-[#0F2C59] focus:ring-1 focus:ring-[#0F2C59] outline-none"
-                placeholder="e.g. Tata Salt"
+                placeholder="e.g. Tata Salt (Optional)"
               />
             </div>
 
@@ -264,7 +263,7 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
               {barcodeConflict && (
                 <p className="text-[11px] text-amber-700 mt-1 flex items-center gap-1">
                   <AlertCircle className="w-3.5 h-3.5 shrink-0 text-amber-600" />
-                  Already used by &quot;{barcodeConflict.name}&quot; ({barcodeConflict.brand})
+                  Already used by &quot;{barcodeConflict.name}&quot;{barcodeConflict.brand ? ` (${barcodeConflict.brand})` : ''}
                 </p>
               )}
               {barcodeError && (

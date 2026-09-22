@@ -227,7 +227,7 @@ export const AddVariantModal: React.FC<AddVariantModalProps> = ({
         <div className="bg-blue-50 border-b border-blue-200 px-4 py-2.5 flex items-center gap-2 text-xs text-blue-900">
           <Info size={15} className="text-[#0F2C59] shrink-0" />
           <span>
-            Adding new pack variant directly to <strong>{product.name}</strong> ({product.brand}). The main product will not be duplicated.
+            Adding new pack variant directly to <strong>{product.name}</strong>{product.brand ? ` (${product.brand})` : ''}. The main product will not be duplicated.
           </span>
         </div>
 

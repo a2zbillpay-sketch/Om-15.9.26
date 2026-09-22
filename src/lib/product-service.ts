@@ -325,10 +325,7 @@ export function normalizeAndValidateProduct(raw: any): ProductValidationResult {
     return { valid: false, error: 'Product name is required.' };
   }
 
-  const brand = String(raw.brand || '').trim();
-  if (!brand) {
-    return { valid: false, error: 'Brand name is required.' };
-  }
+  const brand = raw.brand ? String(raw.brand).trim() : '';
 
   const productId = raw.id || `prod-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
   const description = String(raw.description || '').trim();
@@ -564,18 +561,14 @@ export function processBulkProductRows(rows: BulkUploadRow[]): BulkUploadResult 
     const rowNum = i + 2; // Excel row numbering typically starts at 2 (with row 1 as header)
 
     const pName = String(row.productName || row.name || '').trim();
-    const pBrand = String(row.brand || '').trim();
+    const pBrand = row.brand ? String(row.brand).trim() : '';
 
     if (!pName) {
       errors.push({ row: rowNum, error: 'Missing product name.' });
       continue;
     }
-    if (!pBrand) {
-      errors.push({ row: rowNum, error: 'Missing brand.' });
-      continue;
-    }
 
-    const key = `${pBrand.toLowerCase()}:::${pName.toLowerCase()}`;
+    const key = pBrand ? `${pBrand.toLowerCase()}:::${pName.toLowerCase()}` : `:::${pName.toLowerCase()}`;
     if (!grouped.has(key)) {
       grouped.set(key, []);
     }
@@ -605,7 +598,7 @@ export function processBulkProductRows(rows: BulkUploadRow[]): BulkUploadResult 
     const rawProduct = {
       id: productId,
       name: firstRow.productName || firstRow.name,
-      brand: firstRow.brand,
+      brand: firstRow.brand ? String(firstRow.brand).trim() : '',
       description: firstRow.description || '',
       categoryId: firstRow.categoryId || '',
       imageUrl: firstRow.imageUrl || undefined,

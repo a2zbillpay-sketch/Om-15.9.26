@@ -198,7 +198,12 @@ export const StockAdjustmentModal: React.FC<StockAdjustmentModalProps> = ({
               )}
             </div>
             <h3 className="font-extrabold text-base sm:text-lg text-white mt-1.5 truncate">
-              <span className="text-[#D4AF37]">{product.brand}</span> — {product.name}
+              {product.brand ? (
+                <>
+                  <span className="text-[#D4AF37]">{product.brand}</span> —{' '}
+                </>
+              ) : null}
+              {product.name}
             </h3>
             <p className="text-[11px] text-gray-300 mt-0.5">
               Update inventory stock quantities for each pack size.

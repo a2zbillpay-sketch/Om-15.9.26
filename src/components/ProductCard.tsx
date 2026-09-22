@@ -68,7 +68,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
           ) : (
             <div className="w-full h-full flex flex-col items-center justify-center text-gray-400 bg-gray-50/80">
               <Package size={36} className="text-gray-300 stroke-[1.5]" />
-              <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mt-1.5">{product.brand}</span>
+              <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mt-1.5">{product.brand || product.name}</span>
             </div>
           )}
 
@@ -93,9 +93,11 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
 
         {/* Content Details */}
         <div className="p-4">
-          <div className="text-[11px] font-bold text-[#FF6B00] uppercase tracking-wider mb-0.5">
-            {product.brand}
-          </div>
+          {product.brand ? (
+            <div className="text-[11px] font-bold text-[#FF6B00] uppercase tracking-wider mb-0.5">
+              {product.brand}
+            </div>
+          ) : null}
           <h3 className="font-extrabold text-sm text-gray-900 line-clamp-1 leading-snug">
             {product.name}
           </h3>
