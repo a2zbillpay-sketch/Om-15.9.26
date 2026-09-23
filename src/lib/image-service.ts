@@ -281,15 +281,17 @@ const FALLBACK_BUCKET = 'products';
  */
 export async function uploadProductImageToStorage(
   fileBlob: Blob,
-  originalFileName: string = 'product.jpg'
+  originalFileName: string = 'product.jpg',
+  folder: string = 'catalog'
 ): Promise<ImageUploadResult> {
   // If Supabase is configured and connected
   if (isSupabaseConfigured && supabase) {
     try {
       const ext = originalFileName.split('.').pop()?.toLowerCase() || 'jpg';
       const cleanExt = ['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext) ? ext : 'jpg';
-      const uniqueFileName = `prod_${Date.now()}_${Math.random().toString(36).substring(2, 9)}.${cleanExt}`;
-      const filePath = `catalog/${uniqueFileName}`;
+      const prefix = folder === 'categories' ? 'cat' : 'prod';
+      const uniqueFileName = `${prefix}_${Date.now()}_${Math.random().toString(36).substring(2, 9)}.${cleanExt}`;
+      const filePath = `${folder}/${uniqueFileName}`;
 
       let targetBucket = PRIMARY_BUCKET;
       let uploadResult = await supabase.storage.from(targetBucket).upload(filePath, fileBlob, {
@@ -389,3 +391,14 @@ export function validateImageUrl(url: string): { valid: boolean; error?: string;
     return { valid: false, error: 'Please enter a valid web URL (e.g. https://example.com/product.jpg).' };
   }
 }
+
+/**
+ * Uploads an optimized category image blob to cloud storage or local data URL.
+ */
+export async function uploadCategoryImageToStorage(
+  fileBlob: Blob,
+  originalFileName: string = 'category.jpg'
+): Promise<ImageUploadResult> {
+  return uploadProductImageToStorage(fileBlob, originalFileName, 'categories');
+}
+

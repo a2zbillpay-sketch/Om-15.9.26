@@ -30,6 +30,7 @@ export interface ProductImageUploaderProps {
   label?: string;
   subLabel?: string;
   idPrefix?: string;
+  storageFolder?: string;
 }
 
 interface PendingCropFile {
@@ -48,6 +49,7 @@ export const ProductImageUploader: React.FC<ProductImageUploaderProps> = ({
   label = 'Product Photo',
   subLabel = '(1:1 Square Format)',
   idPrefix = 'product',
+  storageFolder = 'catalog',
 }) => {
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const galleryInputRef = useRef<HTMLInputElement>(null);
@@ -169,7 +171,7 @@ export const ProductImageUploader: React.FC<ProductImageUploaderProps> = ({
       setProcessingStage('Uploading 1:1 square photo to cloud storage...');
 
       // Upload square blob to storage
-      const uploadResult = await uploadProductImageToStorage(optimized.blob, file.name);
+      const uploadResult = await uploadProductImageToStorage(optimized.blob, file.name, storageFolder);
 
       if (!uploadResult.success || !uploadResult.url) {
         throw new Error(uploadResult.error || 'Failed to upload photo to storage.');

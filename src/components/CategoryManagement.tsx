@@ -16,11 +16,49 @@ import {
 import { useApp } from '../context/AppContext';
 import { Category } from '../types';
 import { ImageLightboxModal } from './ImageLightboxModal';
+import { ProductImageUploader } from './ProductImageUploader';
 
 interface CategoryFormData {
   name: string;
   imageUrl: string;
 }
+
+const CategoryPhotoThumbnail: React.FC<{
+  imageUrl?: string;
+  name: string;
+  onZoom: () => void;
+}> = ({ imageUrl, name, onZoom }) => {
+  const [hasError, setHasError] = useState(false);
+
+  if (!imageUrl || !imageUrl.trim() || hasError) {
+    return (
+      <div className="w-16 h-16 rounded-xl bg-orange-50 border border-orange-100 shrink-0 flex flex-col items-center justify-center text-[#FF6B00]">
+        <Tag size={22} />
+      </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={onZoom}
+      className="relative w-16 h-16 rounded-xl overflow-hidden border border-gray-200 shrink-0 cursor-pointer group/thumb focus:outline-hidden"
+      title={`Click to preview full photo of ${name}`}
+      aria-label={`View photo of ${name}`}
+    >
+      <img
+        src={imageUrl}
+        alt={name}
+        onError={() => setHasError(true)}
+        className="w-full h-full object-cover group-hover/thumb:scale-105 transition-transform duration-200"
+        loading="lazy"
+      />
+      <span className="absolute inset-0 bg-black/25 opacity-0 group-hover/thumb:opacity-100 flex items-center justify-center text-white transition-opacity">
+        <ZoomIn size={14} />
+      </span>
+    </button>
+  );
+};
 
 export const CategoryManagement: React.FC = () => {
   const { categories, products, addCategory, updateCategory, deleteCategory } = useApp();
@@ -302,30 +340,16 @@ export const CategoryManagement: React.FC = () => {
               >
                 <div>
                   <div className="flex gap-3 items-center">
-                    {/* Category Image */}
-                    {cat.imageUrl && cat.imageUrl.trim() ? (
-                      <button
-                        type="button"
-                        onClick={() => setZoomImage({ url: cat.imageUrl, title: cat.name })}
-                        className="relative w-16 h-16 rounded-xl overflow-hidden border border-gray-200 shrink-0 cursor-pointer group/thumb focus:outline-hidden"
-                        title={`Click to preview full photo of ${cat.name}`}
-                        aria-label={`View photo of ${cat.name}`}
-                      >
-                        <img
-                          src={cat.imageUrl}
-                          alt={cat.name}
-                          className="w-full h-full object-cover group-hover/thumb:scale-105 transition-transform duration-200"
-                          loading="lazy"
-                        />
-                        <span className="absolute inset-0 bg-black/25 opacity-0 group-hover/thumb:opacity-100 flex items-center justify-center text-white transition-opacity">
-                          <ZoomIn size={14} />
-                        </span>
-                      </button>
-                    ) : (
-                      <div className="w-16 h-16 rounded-xl bg-orange-50 border border-orange-100 shrink-0 flex flex-col items-center justify-center text-[#FF6B00]">
-                        <Tag size={22} />
-                      </div>
-                    )}
+                    {/* Category Image Preview & Lightbox */}
+                    <CategoryPhotoThumbnail
+                      imageUrl={cat.imageUrl}
+                      name={cat.name}
+                      onZoom={() => {
+                        if (cat.imageUrl && cat.imageUrl.trim()) {
+                          setZoomImage({ url: cat.imageUrl, title: cat.name });
+                        }
+                      }}
+                    />
 
                     {/* Category Title & Stats */}
                     <div className="flex-1 min-w-0">
@@ -414,10 +438,10 @@ export const CategoryManagement: React.FC = () => {
             role="dialog"
             aria-modal="true"
             aria-labelledby="category-modal-title"
-            className="bg-white rounded-3xl max-w-md w-full overflow-hidden shadow-2xl border border-gray-100 animate-in fade-in zoom-in-95 duration-150"
+            className="bg-white rounded-3xl max-w-lg w-full max-h-[92vh] overflow-y-auto shadow-2xl border border-gray-100 animate-in fade-in zoom-in-95 duration-150"
           >
             {/* Modal Header */}
-            <div className="bg-[#0F2C59] p-4 text-white flex items-center justify-between">
+            <div className="bg-[#0F2C59] p-4 text-white flex items-center justify-between sticky top-0 z-10">
               <div className="flex items-center gap-2">
                 <Tag size={18} className="text-[#D4AF37]" />
                 <h3 id="category-modal-title" className="font-extrabold text-sm sm:text-base text-white">
@@ -466,40 +490,18 @@ export const CategoryManagement: React.FC = () => {
                 </p>
               </div>
 
-              {/* Category Image URL Input */}
-              <div>
-                <label className="block text-xs font-black text-gray-700 uppercase tracking-wider mb-1">
-                  Image URL <span className="text-gray-400 font-normal text-[11px]">(Optional)</span>
-                </label>
-                <input
-                  type="url"
-                  id="category-image-url-input"
-                  placeholder="https://images.unsplash.com/..."
-                  value={formData.imageUrl}
-                  onChange={(e) => {
-                    setFormData({ ...formData, imageUrl: e.target.value });
-                  }}
-                  className="w-full p-2.5 text-xs font-mono border border-gray-300 rounded-xl outline-none focus:border-[#0F2C59] focus:ring-1 focus:ring-[#0F2C59] bg-white text-gray-900 placeholder:text-gray-400"
+              {/* Category Photo Uploader */}
+              <div className="pt-1">
+                <ProductImageUploader
+                  currentImageUrl={formData.imageUrl}
+                  onImageChange={(newUrl) => setFormData((prev) => ({ ...prev, imageUrl: newUrl }))}
+                  productName={formData.name || 'Category'}
+                  label="Category Photo"
+                  subLabel="(Optional, 1:1 Square)"
+                  idPrefix="category"
+                  storageFolder="categories"
                 />
               </div>
-
-              {/* Image Preview if provided */}
-              {formData.imageUrl.trim() && (
-                <div className="flex items-center gap-3 p-2.5 bg-gray-50 rounded-xl border border-gray-200">
-                  <img
-                    src={formData.imageUrl}
-                    alt="Category Preview"
-                    onError={(e) => {
-                      (e.target as HTMLElement).style.display = 'none';
-                    }}
-                    className="w-12 h-12 rounded-lg object-cover border border-gray-200 shrink-0"
-                  />
-                  <div className="text-xs text-gray-500 flex-1 min-w-0">
-                    <span className="font-bold text-gray-700 block">Image Preview</span>
-                    <span className="truncate block text-[11px]">{formData.imageUrl}</span>
-                  </div>
-                </div>
-              )}
 
               {/* Modal Actions */}
               <div className="pt-2 flex items-center justify-end gap-2">
