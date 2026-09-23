@@ -10,17 +10,6 @@ interface AddVariantModalProps {
   onAddVariant: (productId: string, newVariant: ProductVariant) => void;
 }
 
-const UNIT_OPTIONS: { value: UnitType; label: string }[] = [
-  { value: UnitType.G, label: 'G (Grams - e.g. 500 G, 250 G, 100 G)' },
-  { value: UnitType.KG, label: 'KG (Kilograms - e.g. 1 KG, 5 KG, 10 KG)' },
-  { value: UnitType.ML, label: 'ML (Milliliters - e.g. 200 ML, 500 ML)' },
-  { value: UnitType.LITER, label: 'LITER (Liters - e.g. 1 LITER, 5 LITER)' },
-  { value: UnitType.BOX, label: 'BOX (Box / Pack)' },
-  { value: UnitType.CAN, label: 'CAN (Can / Tin / Pipa)' },
-  { value: UnitType.KATTA, label: 'KATTA (Bori / Sack - Wholesale)' },
-  { value: UnitType.NOS, label: 'NOS (Pieces / Units)' },
-];
-
 export const AddVariantModal: React.FC<AddVariantModalProps> = ({
   product,
   isOpen,
@@ -47,7 +36,7 @@ export const AddVariantModal: React.FC<AddVariantModalProps> = ({
 
   useEffect(() => {
     if (product && isOpen) {
-      // Always open completely blank without pre-filling any default numbers or units
+      // UNIT TYPE field must be completely empty before selection
       setUnit('');
       setPackSize('');
       setPackLabel('');
@@ -178,12 +167,7 @@ export const AddVariantModal: React.FC<AddVariantModalProps> = ({
     };
 
     onAddVariant(product.id, newVariant);
-    setSavedSuccess(true);
-
-    setTimeout(() => {
-      setSavedSuccess(false);
-      onClose();
-    }, 400);
+    onClose();
   };
 
   return (
@@ -259,10 +243,10 @@ export const AddVariantModal: React.FC<AddVariantModalProps> = ({
                 onChange={(e) => handleUnitChange(e.target.value as UnitType | '')}
                 className="w-full p-2.5 border border-gray-300 rounded-xl text-gray-900 focus:border-[#0F2C59] focus:ring-1 focus:ring-[#0F2C59] outline-none bg-white font-bold"
               >
-                <option value="">-- Select Unit (Blank) --</option>
-                {UNIT_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
+                <option value="" hidden></option>
+                {Object.values(UnitType).map((u) => (
+                  <option key={u} value={u}>
+                    {u}
                   </option>
                 ))}
               </select>

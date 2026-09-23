@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
-import { Plus, Minus, Check, Layers, AlertCircle, Sparkles, Package } from 'lucide-react';
+import { Plus, Minus, Check, Layers, AlertCircle, Sparkles, Package, ZoomIn } from 'lucide-react';
 import { Product, ProductVariant } from '../types';
 import { useApp } from '../context/AppContext';
 import { getActiveUnitPrice } from '../lib/engine/checkout-calculator';
 import { formatVariantPack } from '../utils/variantFormatter';
+import { ImageLightboxModal } from './ImageLightboxModal';
 
 interface ProductCardProps {
   product: Product;
@@ -14,6 +15,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
   const [selectedVariantId, setSelectedVariantId] = useState<string>(
     product.variants[0]?.id || ''
   );
+  const [isZoomOpen, setIsZoomOpen] = useState(false);
 
   const currentVariant =
     product.variants.find((v) => v.id === selectedVariantId) || product.variants[0];
@@ -57,14 +59,40 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
     >
       <div>
         {/* Product Image & Badges */}
-        <div className="relative h-44 bg-gray-100 overflow-hidden flex items-center justify-center">
+        <div
+          onClick={() => {
+            if (product.imageUrl && product.imageUrl.trim()) {
+              setIsZoomOpen(true);
+            }
+          }}
+          onKeyDown={(e) => {
+            if ((e.key === 'Enter' || e.key === ' ') && product.imageUrl && product.imageUrl.trim()) {
+              e.preventDefault();
+              setIsZoomOpen(true);
+            }
+          }}
+          role={product.imageUrl && product.imageUrl.trim() ? 'button' : undefined}
+          tabIndex={product.imageUrl && product.imageUrl.trim() ? 0 : undefined}
+          aria-label={product.imageUrl && product.imageUrl.trim() ? `Zoom photo for ${product.name}` : undefined}
+          className={`relative w-full aspect-square bg-gray-100 overflow-hidden flex items-center justify-center ${
+            product.imageUrl && product.imageUrl.trim() ? 'cursor-pointer' : ''
+          }`}
+        >
           {product.imageUrl && product.imageUrl.trim() ? (
-            <img
-              src={product.imageUrl}
-              alt={product.name}
-              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-              loading="lazy"
-            />
+            <>
+              <img
+                src={product.imageUrl}
+                alt={product.name}
+                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                loading="lazy"
+              />
+              <div
+                className="absolute bottom-2 right-2 bg-black/45 hover:bg-black/60 text-white p-1.5 rounded-lg backdrop-blur-xs opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none shadow-xs"
+                aria-hidden="true"
+              >
+                <ZoomIn size={13} />
+              </div>
+            </>
           ) : (
             <div className="w-full h-full flex flex-col items-center justify-center text-gray-400 bg-gray-50/80">
               <Package size={36} className="text-gray-300 stroke-[1.5]" />
@@ -74,18 +102,18 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
 
           {/* Discount Badge */}
           {discountPercent > 0 && (
-            <div className="absolute top-2.5 left-2.5 bg-emerald-600 text-white font-black text-[10px] px-2 py-0.5 rounded-full uppercase tracking-wider shadow-sm">
+            <div className="absolute top-2.5 left-2.5 bg-emerald-600 text-white font-black text-[10px] px-2 py-0.5 rounded-full uppercase tracking-wider shadow-sm pointer-events-none">
               {discountPercent}% OFF
             </div>
           )}
 
           {/* Excluded from advance discount badge or wholesale badge */}
           {product.isDiscountExcluded ? (
-            <div className="absolute top-2.5 right-2.5 bg-amber-500 text-white font-bold text-[9px] px-2 py-0.5 rounded-full shadow-sm">
+            <div className="absolute top-2.5 right-2.5 bg-amber-500 text-white font-bold text-[9px] px-2 py-0.5 rounded-full shadow-sm pointer-events-none">
               Regulated
             </div>
           ) : (
-            <div className="absolute top-2.5 right-2.5 bg-[#0F2C59]/90 backdrop-blur-sm text-[#D4AF37] font-extrabold text-[9px] px-2 py-0.5 rounded-full border border-[#D4AF37]/30">
+            <div className="absolute top-2.5 right-2.5 bg-[#0F2C59]/90 backdrop-blur-sm text-[#D4AF37] font-extrabold text-[9px] px-2 py-0.5 rounded-full border border-[#D4AF37]/30 pointer-events-none">
               Wholesale Eligible
             </div>
           )}
@@ -210,6 +238,16 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
           )}
         </div>
       </div>
+
+      {product.imageUrl && (
+        <ImageLightboxModal
+          isOpen={isZoomOpen}
+          onClose={() => setIsZoomOpen(false)}
+          imageUrl={product.imageUrl}
+          title={product.name}
+          subtitle={product.brand}
+        />
+      )}
     </div>
   );
 };

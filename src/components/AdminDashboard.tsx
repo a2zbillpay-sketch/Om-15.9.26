@@ -31,6 +31,7 @@ import {
   AlertTriangle,
   Boxes,
   Banknote,
+  ZoomIn,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { Order, OrderStatus, PaymentMethod, Product, ProductVariant, TieredPrice, UnitType, Role } from '../types';
@@ -43,6 +44,7 @@ import { BarcodeScannerModal } from './BarcodeScannerModal';
 import { BarcodeLookupBanner } from './BarcodeLookupBanner';
 import { CodCollectionModal } from './CodCollectionModal';
 import { ProductImageUploader } from './ProductImageUploader';
+import { ImageLightboxModal } from './ImageLightboxModal';
 import { formatVariantPack } from '../utils/variantFormatter';
 import {
   normalizeAndValidateBarcode,
@@ -126,6 +128,8 @@ export const AdminDashboard: React.FC = () => {
   const [addingVariantProduct, setAddingVariantProduct] = useState<Product | null>(null);
   // Barcode-assisted stock management modal state
   const [stockAdjustProduct, setStockAdjustProduct] = useState<Product | null>(null);
+  // Fullscreen photo preview lightbox state
+  const [zoomImageProduct, setZoomImageProduct] = useState<Product | null>(null);
 
   const handleSaveEditProduct = (productId: string, updates: Partial<Product>) => {
     updateProduct(productId, updates);
@@ -134,6 +138,7 @@ export const AdminDashboard: React.FC = () => {
   const handleAddVariantToProduct = (productId: string, newVariant: ProductVariant) => {
     const target = products.find((p) => p.id === productId);
     if (!target) return;
+    setAddingVariantProduct(null);
     updateProduct(productId, {
       variants: [...target.variants, newVariant],
     });
@@ -1004,12 +1009,23 @@ export const AdminDashboard: React.FC = () => {
                     )}
                     <div className="flex gap-3">
                       {p.imageUrl && p.imageUrl.trim() ? (
-                        <img
-                          src={p.imageUrl}
-                          alt={p.name}
-                          loading="lazy"
-                          className="w-16 h-16 rounded-lg object-cover border shrink-0"
-                        />
+                        <button
+                          type="button"
+                          onClick={() => setZoomImageProduct(p)}
+                          className="w-16 h-16 rounded-lg overflow-hidden border border-gray-200 shrink-0 relative group/thumb cursor-pointer focus:outline-hidden focus:ring-2 focus:ring-[#0F2C59]"
+                          title={`Click to preview full photo of ${p.name}`}
+                          aria-label={`View larger photo of ${p.name}`}
+                        >
+                          <img
+                            src={p.imageUrl}
+                            alt={p.name}
+                            loading="lazy"
+                            className="w-full h-full object-cover group-hover/thumb:scale-105 transition-transform duration-200"
+                          />
+                          <span className="absolute inset-0 bg-black/30 opacity-0 group-hover/thumb:opacity-100 flex items-center justify-center text-white transition-opacity">
+                            <ZoomIn size={14} />
+                          </span>
+                        </button>
                       ) : (
                         <div className="w-16 h-16 rounded-lg bg-gray-100 border border-gray-200 shrink-0 flex items-center justify-center text-gray-400">
                           <Package size={24} />
@@ -1737,6 +1753,15 @@ export const AdminDashboard: React.FC = () => {
         onSave={(orderId, amount, markDelivered) => {
           return recordCodCollection(orderId, amount, markDelivered);
         }}
+      />
+
+      {/* Product Image Lightbox Preview */}
+      <ImageLightboxModal
+        isOpen={Boolean(zoomImageProduct && zoomImageProduct.imageUrl)}
+        onClose={() => setZoomImageProduct(null)}
+        imageUrl={zoomImageProduct?.imageUrl}
+        title={zoomImageProduct?.name}
+        subtitle={zoomImageProduct?.brand}
       />
     </div>
   );

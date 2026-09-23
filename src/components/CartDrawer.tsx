@@ -1,8 +1,9 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { X, Trash2, Plus, Minus, ArrowRight, ShieldCheck, Truck, Sparkles, Package } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { getActiveUnitPrice } from '../lib/engine/checkout-calculator';
 import { formatVariantPack } from '../utils/variantFormatter';
+import { ImageLightboxModal } from './ImageLightboxModal';
 
 interface CartDrawerProps {
   isOpen: boolean;
@@ -16,6 +17,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
   onProceedToCheckout,
 }) => {
   const { cart, updateCartQty, removeFromCart, clearCart, checkoutBreakdown, settings } = useApp();
+  const [zoomImage, setZoomImage] = useState<{ url: string; name: string; brand?: string } | null>(null);
 
   if (!isOpen) return null;
 
@@ -114,11 +116,25 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
               return (
                 <div key={item.variantId} className="pt-3 first:pt-0 flex gap-3 items-center">
                   {item.product.imageUrl && item.product.imageUrl.trim() ? (
-                    <img
-                      src={item.product.imageUrl}
-                      alt={item.product.name}
-                      className="w-16 h-16 rounded-xl object-cover border border-gray-200 shrink-0"
-                    />
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setZoomImage({
+                          url: item.product.imageUrl!,
+                          name: item.product.name,
+                          brand: item.product.brand,
+                        })
+                      }
+                      className="w-16 h-16 rounded-xl overflow-hidden border border-gray-200 shrink-0 cursor-pointer group/thumb relative focus:outline-hidden focus:ring-1 focus:ring-[#0F2C59]"
+                      title={`Preview full image for ${item.product.name}`}
+                      aria-label={`View larger photo of ${item.product.name}`}
+                    >
+                      <img
+                        src={item.product.imageUrl}
+                        alt={item.product.name}
+                        className="w-full h-full object-cover group-hover/thumb:scale-105 transition-transform"
+                      />
+                    </button>
                   ) : (
                     <div className="w-16 h-16 rounded-xl bg-gray-100 border border-gray-200 shrink-0 flex items-center justify-center text-gray-400">
                       <Package size={22} className="stroke-[1.5]" />
@@ -239,6 +255,15 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
           </div>
         )}
       </div>
+
+      {/* Cart Image Lightbox Modal */}
+      <ImageLightboxModal
+        isOpen={Boolean(zoomImage && zoomImage.url)}
+        onClose={() => setZoomImage(null)}
+        imageUrl={zoomImage?.url}
+        title={zoomImage?.name}
+        subtitle={zoomImage?.brand}
+      />
     </div>
   );
 };
