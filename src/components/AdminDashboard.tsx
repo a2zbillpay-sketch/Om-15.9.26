@@ -355,7 +355,10 @@ export const AdminDashboard: React.FC = () => {
     .reduce((sum, o) => sum + o.finalAmount, 0);
 
   const pendingOrdersCount = orders.filter(
-    (o) => o.status === OrderStatus.ORDER_ACCEPTED || o.status === OrderStatus.PACKING_IN_PROGRESS
+    (o) =>
+      o.status === OrderStatus.ORDER_PENDING ||
+      o.status === OrderStatus.ORDER_ACCEPTED ||
+      o.status === OrderStatus.PACKING_IN_PROGRESS
   ).length;
 
   const deliveredCount = orders.filter((o) => o.status === OrderStatus.DELIVERED).length;
@@ -836,10 +839,28 @@ export const AdminDashboard: React.FC = () => {
                                 ? 'bg-emerald-100 text-emerald-800'
                                 : order.status === OrderStatus.ON_THE_WAY
                                 ? 'bg-blue-100 text-blue-800'
-                                : 'bg-amber-100 text-amber-800'
+                                : order.status === OrderStatus.READY_FOR_DELIVERY
+                                ? 'bg-purple-100 text-purple-800'
+                                : order.status === OrderStatus.PACKING_IN_PROGRESS
+                                ? 'bg-amber-100 text-amber-800'
+                                : order.status === OrderStatus.ORDER_ACCEPTED
+                                ? 'bg-[#FF6B00]/15 text-[#FF6B00]'
+                                : 'bg-gray-100 text-gray-800'
                             }`}
                           >
-                            {order.status.replace(/_/g, ' ')}
+                            {order.status === OrderStatus.ORDER_PENDING
+                              ? 'Order Pending'
+                              : order.status === OrderStatus.ORDER_ACCEPTED
+                              ? 'Order Accepted'
+                              : order.status === OrderStatus.PACKING_IN_PROGRESS
+                              ? 'Packing'
+                              : order.status === OrderStatus.READY_FOR_DELIVERY
+                              ? 'Ready'
+                              : order.status === OrderStatus.ON_THE_WAY
+                              ? 'On The Way'
+                              : order.status === OrderStatus.DELIVERED
+                              ? 'Delivered'
+                              : order.status.replace(/_/g, ' ')}
                           </span>
                         </td>
                         <td className="p-3 text-right">
@@ -860,9 +881,10 @@ export const AdminDashboard: React.FC = () => {
                               }}
                               className="bg-white border border-gray-300 text-gray-800 text-[11px] font-bold rounded-lg p-1.5 outline-none focus:ring-1 focus:ring-[#0F2C59]"
                             >
+                              <option value={OrderStatus.ORDER_PENDING}>Order Pending</option>
                               <option value={OrderStatus.ORDER_ACCEPTED}>Order Accepted</option>
-                              <option value={OrderStatus.PACKING_IN_PROGRESS}>Packing In Progress</option>
-                              <option value={OrderStatus.READY_FOR_DELIVERY}>Ready for Delivery</option>
+                              <option value={OrderStatus.PACKING_IN_PROGRESS}>Packing</option>
+                              <option value={OrderStatus.READY_FOR_DELIVERY}>Ready</option>
                               <option value={OrderStatus.ON_THE_WAY}>On The Way</option>
                               <option value={OrderStatus.DELIVERED}>Mark Delivered</option>
                             </select>

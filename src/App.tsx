@@ -236,7 +236,11 @@ const MainLayout: React.FC = () => {
 
       <OrderTrackingModal
         isOpen={!!selectedTrackingOrder}
-        order={selectedTrackingOrder}
+        order={
+          selectedTrackingOrder
+            ? orders.find((o) => o.id === selectedTrackingOrder.id) || selectedTrackingOrder
+            : null
+        }
         onClose={() => setSelectedTrackingOrder(null)}
       />
 

@@ -3,6 +3,10 @@ import { X, Clock, CheckCircle2, AlertTriangle, ChevronRight, Package, Truck, Ar
 import { useApp } from '../context/AppContext';
 import { Order, OrderStatus, PaymentMethod } from '../types';
 import { canCancelOrder, getRemainingCancellationMinutes } from '../lib/engine/checkout-calculator';
+import {
+  SIX_FULFILLMENT_STEPS,
+  getFulfillmentStepIndex,
+} from './OrderFulfillmentProgress';
 
 interface CustomerOrdersDrawerProps {
   isOpen: boolean;
@@ -58,6 +62,9 @@ export const CustomerOrdersDrawer: React.FC<CustomerOrdersDrawerProps> = ({
                 canCancelOrder(order.createdAt);
               const remainingMins = getRemainingCancellationMinutes(order.createdAt);
 
+              const stepIdx = getFulfillmentStepIndex(order.status);
+              const matchedStep = stepIdx >= 0 ? SIX_FULFILLMENT_STEPS[stepIdx] : null;
+
               return (
                 <div
                   key={order.id}
@@ -90,9 +97,44 @@ export const CustomerOrdersDrawer: React.FC<CustomerOrdersDrawerProps> = ({
                           : 'bg-[#FF6B00]/15 text-[#FF6B00]'
                       }`}
                     >
-                      {order.status.replace(/_/g, ' ')}
+                      {order.status === OrderStatus.CANCELLED
+                        ? 'Cancelled'
+                        : matchedStep
+                        ? matchedStep.label
+                        : order.status.replace(/_/g, ' ')}
                     </span>
                   </div>
+
+                  {/* 6-Step Mini Progress Tracker */}
+                  {order.status !== OrderStatus.CANCELLED && (
+                    <div className="bg-white/80 p-2 rounded-lg border border-gray-200/80">
+                      <div className="flex items-center justify-between text-[10px] font-bold text-gray-700 mb-1">
+                        <span className="text-gray-500">Fulfillment:</span>
+                        <span className="text-[#0F2C59] font-black">
+                          Step {stepIdx + 1}/6 • {matchedStep?.label}
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-6 gap-1">
+                        {SIX_FULFILLMENT_STEPS.map((s, i) => {
+                          const isDone = i <= stepIdx;
+                          const isCurr = i === stepIdx && order.status !== OrderStatus.DELIVERED;
+                          return (
+                            <div
+                              key={s.key}
+                              title={`Step ${s.stepNumber}: ${s.label}`}
+                              className={`h-1.5 rounded-full transition-all ${
+                                isDone
+                                  ? isCurr
+                                    ? 'bg-[#FF6B00] animate-pulse'
+                                    : 'bg-emerald-500'
+                                  : 'bg-gray-200'
+                              }`}
+                            />
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
 
                   {isCancellable && (
                     <div className="bg-amber-100/70 border border-amber-300 text-amber-900 text-[10px] font-bold px-2 py-1 rounded flex items-center gap-1">
