@@ -40,6 +40,11 @@ import {
   fetchProductsFromSupabase,
   deleteProductFromSupabase,
 } from '../lib/supabase';
+import {
+  fetchCategoriesFromDb,
+  saveCategoryToDb,
+  deleteCategoryFromDb,
+} from '../lib/category-service';
 
 export type CustomerFlowStep = 'AUTH' | 'PROFILE' | 'SHOP';
 
@@ -110,6 +115,15 @@ interface AppContextType {
   settings: SystemSetting;
   updateSettings: (newSettings: Partial<SystemSetting>) => void;
   categories: Category[];
+  addCategory: (categoryData: {
+    name: string;
+    imageUrl?: string;
+  }) => Promise<{ success: boolean; error?: string; category?: Category }>;
+  updateCategory: (
+    id: string,
+    updates: { name?: string; imageUrl?: string }
+  ) => Promise<{ success: boolean; error?: string; category?: Category }>;
+  deleteCategory: (id: string) => Promise<{ success: boolean; error?: string }>;
   products: Product[];
   addProduct: (product: Omit<Product, 'id' | 'createdAt'>) => Promise<{ success: boolean; error?: string }>;
   updateProduct: (id: string, updates: Partial<Product>) => Promise<{ success: boolean; error?: string }>;
@@ -174,7 +188,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return INITIAL_SETTINGS;
   });
 
-  const [categories] = useState<Category[]>(INITIAL_CATEGORIES);
+  const [categories, setCategories] = useState<Category[]>(() => {
+    const saved = localStorage.getItem('om_categories');
+    if (!saved) return INITIAL_CATEGORIES;
+    try {
+      const parsed: Category[] = JSON.parse(saved);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        const existingIds = new Set(parsed.map((c) => c.id));
+        const missingInitials = INITIAL_CATEGORIES.filter((c) => !existingIds.has(c.id));
+        return [...parsed, ...missingInitials];
+      }
+      return INITIAL_CATEGORIES;
+    } catch {
+      return INITIAL_CATEGORIES;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('om_categories', JSON.stringify(categories));
+    } catch (e) {
+      console.warn('Failed to persist categories to localStorage', e);
+    }
+  }, [categories]);
 
   const [products, setProducts] = useState<Product[]>(() => {
     const saved = localStorage.getItem('om_products');
@@ -368,6 +404,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  // Synchronize categories with Supabase
+  const refreshCategories = async () => {
+    if (!isSupabaseConfigured) return;
+    try {
+      const dbCategories = await fetchCategoriesFromDb();
+      if (dbCategories !== null && dbCategories.length > 0) {
+        const dbIds = new Set(dbCategories.map((c) => c.id));
+        const remainingInitials = INITIAL_CATEGORIES.filter((c) => !dbIds.has(c.id));
+        setCategories([...dbCategories, ...remainingInitials]);
+      }
+    } catch (err) {
+      console.warn('Error refreshing categories from Supabase:', err);
+    }
+  };
+
   useEffect(() => {
     if (isSupabaseConfigured) {
       refreshOrders();
@@ -377,6 +428,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     if (isSupabaseConfigured) {
       refreshProducts();
+      refreshCategories();
     }
   }, [isSupabaseConfigured]);
 
@@ -567,6 +619,108 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       await deleteProductFromSupabase(id);
     }
     setProducts((prev) => prev.filter((p) => p.id !== id));
+  };
+
+  // Category management operations
+  const addCategory = async (categoryData: {
+    name: string;
+    imageUrl?: string;
+  }): Promise<{ success: boolean; error?: string; category?: Category }> => {
+    const trimmedName = categoryData.name ? categoryData.name.trim() : '';
+    if (!trimmedName) {
+      return { success: false, error: 'Category name is required and cannot be empty.' };
+    }
+
+    // Case-insensitive duplicate check
+    const isDuplicate = categories.some(
+      (c) => c.name.trim().toLowerCase() === trimmedName.toLowerCase()
+    );
+    if (isDuplicate) {
+      return { success: false, error: `A category named "${trimmedName}" already exists.` };
+    }
+
+    const newCategory: Category = {
+      id: `cat-${Date.now()}`,
+      name: trimmedName,
+      imageUrl: categoryData.imageUrl ? categoryData.imageUrl.trim() : '',
+    };
+
+    if (isSupabaseConfigured) {
+      const dbResult = await saveCategoryToDb(newCategory);
+      if (!dbResult.success) {
+        console.warn('Failed to sync new category to Supabase:', dbResult.error);
+      }
+    }
+
+    setCategories((prev) => [...prev, newCategory]);
+    return { success: true, category: newCategory };
+  };
+
+  const updateCategory = async (
+    id: string,
+    updates: { name?: string; imageUrl?: string }
+  ): Promise<{ success: boolean; error?: string; category?: Category }> => {
+    const existing = categories.find((c) => c.id === id);
+    if (!existing) {
+      return { success: false, error: 'Category not found.' };
+    }
+
+    const trimmedName = updates.name !== undefined ? updates.name.trim() : undefined;
+    if (trimmedName !== undefined && !trimmedName) {
+      return { success: false, error: 'Category name is required and cannot be empty.' };
+    }
+
+    // Case-insensitive duplicate check among other categories
+    if (trimmedName !== undefined) {
+      const isDuplicate = categories.some(
+        (c) => c.id !== id && c.name.trim().toLowerCase() === trimmedName.toLowerCase()
+      );
+      if (isDuplicate) {
+        return { success: false, error: `A category named "${trimmedName}" already exists.` };
+      }
+    }
+
+    const updatedCategory: Category = {
+      ...existing,
+      name: trimmedName !== undefined ? trimmedName : existing.name,
+      imageUrl: updates.imageUrl !== undefined ? updates.imageUrl.trim() : existing.imageUrl,
+    };
+
+    if (isSupabaseConfigured) {
+      const dbResult = await saveCategoryToDb(updatedCategory);
+      if (!dbResult.success) {
+        console.warn('Failed to sync category update to Supabase:', dbResult.error);
+      }
+    }
+
+    setCategories((prev) => prev.map((c) => (c.id === id ? updatedCategory! : c)));
+    return { success: true, category: updatedCategory };
+  };
+
+  const deleteCategory = async (id: string): Promise<{ success: boolean; error?: string }> => {
+    const target = categories.find((c) => c.id === id);
+    if (!target) {
+      return { success: false, error: 'Category not found.' };
+    }
+
+    // Check if products are currently assigned to this category
+    const assignedProducts = products.filter((p) => p.categoryId === id);
+    if (assignedProducts.length > 0) {
+      return {
+        success: false,
+        error: `Cannot delete "${target.name}". There are currently ${assignedProducts.length} product(s) assigned to this category. Please reassign or delete these products first.`,
+      };
+    }
+
+    if (isSupabaseConfigured) {
+      const dbResult = await deleteCategoryFromDb(id);
+      if (!dbResult.success) {
+        console.warn('Failed to delete category in Supabase:', dbResult.error);
+      }
+    }
+
+    setCategories((prev) => prev.filter((c) => c.id !== id));
+    return { success: true };
   };
 
   // Cart operations (scoped to active customer)
@@ -1142,6 +1296,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         settings,
         updateSettings,
         categories,
+        addCategory,
+        updateCategory,
+        deleteCategory,
         products,
         addProduct,
         updateProduct,

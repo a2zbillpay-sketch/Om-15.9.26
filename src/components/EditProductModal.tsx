@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, Save, Layers, Check, Trash2, AlertCircle, Scan } from 'lucide-react';
 import { Product, ProductVariant } from '../types';
+import { useApp } from '../context/AppContext';
 import { INITIAL_CATEGORIES } from '../data/seedData';
 import { formatVariantPack } from '../utils/variantFormatter';
 import { BarcodeScannerModal } from './BarcodeScannerModal';
@@ -22,6 +23,8 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
   onSave,
   existingProducts = [],
 }) => {
+  const { categories } = useApp();
+  const availableCategories = categories && categories.length > 0 ? categories : INITIAL_CATEGORIES;
   const [name, setName] = useState('');
   const [brand, setBrand] = useState('');
   const [categoryId, setCategoryId] = useState('');
@@ -210,7 +213,7 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
                 onChange={(e) => setCategoryId(e.target.value)}
                 className="w-full p-2.5 border border-gray-300 rounded-xl text-gray-900 focus:border-[#0F2C59] focus:ring-1 focus:ring-[#0F2C59] outline-none bg-white"
               >
-                {INITIAL_CATEGORIES.map((cat) => (
+                {availableCategories.map((cat) => (
                   <option key={cat.id} value={cat.id}>
                     {cat.name}
                   </option>

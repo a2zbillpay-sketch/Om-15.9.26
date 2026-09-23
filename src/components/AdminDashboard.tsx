@@ -32,10 +32,12 @@ import {
   Boxes,
   Banknote,
   ZoomIn,
+  Tag,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { Order, OrderStatus, PaymentMethod, Product, ProductVariant, TieredPrice, UnitType, Role } from '../types';
 import { AdminSettingsControl } from './AdminSettingsControl';
+import { CategoryManagement } from './CategoryManagement';
 import { LogoUploadModal } from './LogoUploadModal';
 import { EditProductModal } from './EditProductModal';
 import { AddVariantModal } from './AddVariantModal';
@@ -112,7 +114,7 @@ export const AdminDashboard: React.FC = () => {
     recordCodCollection,
   } = useApp();
 
-  const [activeTab, setActiveTab] = useState<'ORDERS' | 'INVENTORY' | 'SETTINGS' | 'CUSTOMERS'>('ORDERS');
+  const [activeTab, setActiveTab] = useState<'ORDERS' | 'INVENTORY' | 'CATEGORIES' | 'SETTINGS' | 'CUSTOMERS'>('ORDERS');
   const [orderFilter, setOrderFilter] = useState<string>('ALL');
   const [inventorySearch, setInventorySearch] = useState<string>('');
   const [customerSearch, setCustomerSearch] = useState<string>('');
@@ -615,6 +617,16 @@ export const AdminDashboard: React.FC = () => {
                 <span>Inventory</span>
               </button>
               <button
+                id="tab-categories-btn"
+                onClick={() => setActiveTab('CATEGORIES')}
+                className={`px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition ${
+                  activeTab === 'CATEGORIES' ? 'bg-[#FF6B00] text-white shadow' : 'text-gray-300 hover:text-white'
+                }`}
+              >
+                <Tag size={14} />
+                <span>Categories ({categories.length})</span>
+              </button>
+              <button
                 onClick={() => setActiveTab('CUSTOMERS')}
                 className={`px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition ${
                   activeTab === 'CUSTOMERS' ? 'bg-[#FF6B00] text-white shadow' : 'text-gray-300 hover:text-white'
@@ -945,14 +957,27 @@ export const AdminDashboard: React.FC = () => {
                 </button>
               </div>
 
-              <button
-                id="open-add-product-btn"
-                onClick={handleOpenAddProductModal}
-                className="bg-[#0F2C59] hover:bg-[#153e7d] text-white px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow transition shrink-0"
-              >
-                <Plus size={14} className="text-[#D4AF37]" />
-                <span>Add New Product & Tier Slabs</span>
-              </button>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  id="btn-inventory-manage-categories"
+                  onClick={() => setActiveTab('CATEGORIES')}
+                  className="bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition border border-gray-200"
+                  title="Manage product categories"
+                >
+                  <Tag size={13} className="text-[#FF6B00]" />
+                  <span>Categories</span>
+                </button>
+
+                <button
+                  id="open-add-product-btn"
+                  onClick={handleOpenAddProductModal}
+                  className="bg-[#0F2C59] hover:bg-[#153e7d] text-white px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow transition"
+                >
+                  <Plus size={14} className="text-[#D4AF37]" />
+                  <span>Add New Product & Tier Slabs</span>
+                </button>
+              </div>
             </div>
 
             {/* Inline validation feedback if manual input has errors */}
@@ -1131,6 +1156,11 @@ export const AdminDashboard: React.FC = () => {
               ))}
             </div>
           </div>
+        )}
+
+        {/* TAB: CATEGORY MANAGEMENT */}
+        {activeTab === 'CATEGORIES' && (
+          <CategoryManagement />
         )}
 
         {/* TAB 3: ENGINE SETTINGS */}
