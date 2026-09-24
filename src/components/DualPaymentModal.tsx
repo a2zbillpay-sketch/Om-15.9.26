@@ -173,14 +173,44 @@ export const DualPaymentModal: React.FC<DualPaymentModalProps> = ({
                   <span>Delivery Fee:</span>
                   <span>{breakdown.deliveryFee === 0 ? <span className="text-emerald-600 font-bold">FREE</span> : `₹${breakdown.deliveryFee}`}</span>
                 </div>
+                <div className="flex justify-between font-bold text-gray-800 pt-1 border-t border-gray-100">
+                  <span>New Order Amount:</span>
+                  <span>₹{breakdown.codFinalTotal}</span>
+                </div>
               </div>
+
+              {breakdown.previousOutstanding && breakdown.previousOutstanding > 0 ? (
+                <div className="bg-amber-50/90 border border-amber-200 rounded-lg p-2.5 mt-2.5 space-y-1 text-xs">
+                  <div className="flex justify-between text-gray-700">
+                    <span>Previous Outstanding:</span>
+                    <span className="font-extrabold text-amber-900">+₹{breakdown.previousOutstanding}</span>
+                  </div>
+                  <div className="flex justify-between text-gray-700">
+                    <span>+ New Order Amount:</span>
+                    <span className="font-extrabold text-gray-900">₹{breakdown.codFinalTotal}</span>
+                  </div>
+                  <div className="border-t border-amber-300 pt-1 flex justify-between font-black text-xs text-[#0F2C59]">
+                    <span>= Total Payable:</span>
+                    <span className="text-sm font-black">
+                      ₹{breakdown.codTotalPayable ?? (breakdown.codFinalTotal + breakdown.previousOutstanding)}
+                    </span>
+                  </div>
+                </div>
+              ) : null}
             </div>
 
             <div>
               <div className="mt-4 pt-3 border-t border-gray-200 flex justify-between items-center">
                 <div>
-                  <span className="text-[11px] font-bold text-gray-500 block">Payable Amount:</span>
-                  <span className="text-lg font-black text-[#0F2C59]">₹{breakdown.codFinalTotal}</span>
+                  <span className="text-[11px] font-bold text-gray-500 block">Total Payable:</span>
+                  <span className="text-lg font-black text-[#0F2C59]">
+                    ₹{breakdown.codTotalPayable ?? (breakdown.codFinalTotal + (breakdown.previousOutstanding || 0))}
+                  </span>
+                  {breakdown.previousOutstanding && breakdown.previousOutstanding > 0 ? (
+                    <span className="text-[9px] text-amber-800 font-bold block">
+                      (Includes ₹{breakdown.previousOutstanding} previous balance)
+                    </span>
+                  ) : null}
                 </div>
                 {selectedMethod === 'COD' ? (
                   <span className="text-[10px] font-bold text-amber-800 bg-amber-100 px-2 py-0.5 rounded">

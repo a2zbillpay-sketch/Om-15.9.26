@@ -783,8 +783,8 @@ export const AdminDashboard: React.FC = () => {
                             </span>
                             {order.paymentMethod === PaymentMethod.COD && (
                               <div className="text-[10px] space-y-0.5">
-                                {order.codCollectedAmount !== undefined ? (
-                                  order.codCollectedAmount === order.finalAmount ? (
+                                {order.codCollectedAmount !== undefined && order.codCollectedAmount > 0 ? (
+                                  order.codCollectedAmount >= (order.totalPayable || order.finalAmount) ? (
                                     <span className="text-emerald-700 font-bold block">
                                       Full: ₹{order.codCollectedAmount}
                                     </span>
@@ -794,7 +794,7 @@ export const AdminDashboard: React.FC = () => {
                                         Partial: ₹{order.codCollectedAmount}
                                       </span>
                                       <span className="text-red-600 font-semibold block text-[9px]">
-                                        Short: ₹{order.finalAmount - order.codCollectedAmount}
+                                        Short: ₹{(order.totalPayable || order.finalAmount) - order.codCollectedAmount}
                                       </span>
                                     </div>
                                   )
@@ -808,7 +808,7 @@ export const AdminDashboard: React.FC = () => {
                                   title="Record or Adjust COD Collection"
                                 >
                                   <Banknote size={11} />
-                                  <span>{order.codCollectedAmount !== undefined ? 'Adjust COD' : 'Collect COD'}</span>
+                                  <span>{order.codCollectedAmount !== undefined && order.codCollectedAmount > 0 ? 'Adjust COD' : 'Collect COD'}</span>
                                 </button>
                               </div>
                             )}
@@ -824,9 +824,23 @@ export const AdminDashboard: React.FC = () => {
                         </td>
                         <td className="p-3">
                           <div className="font-black text-gray-900">₹{order.finalAmount}</div>
-                          {order.paymentMethod === PaymentMethod.COD && order.codCollectedAmount !== undefined && (
-                            <div className="text-[10px] text-gray-500 font-medium mt-0.5">
-                              Dep: <span className="font-bold text-[#0F2C59]">₹{order.codCollectedAmount}</span>
+                          {order.paymentMethod === PaymentMethod.COD && (
+                            <div className="text-[10px] space-y-0.5 mt-0.5">
+                              {order.previousOutstanding !== undefined && order.previousOutstanding > 0 && (
+                                <div className="text-amber-800 font-semibold">
+                                  Prev Debt: +₹{order.previousOutstanding}
+                                </div>
+                              )}
+                              {order.totalPayable && order.totalPayable !== order.finalAmount && (
+                                <div className="font-extrabold text-[#0F2C59]">
+                                  Payable: ₹{order.totalPayable}
+                                </div>
+                              )}
+                              {order.codCollectedAmount !== undefined && order.codCollectedAmount > 0 && (
+                                <div className="text-gray-500 font-medium">
+                                  Collected: <span className="font-bold text-emerald-700">₹{order.codCollectedAmount}</span>
+                                </div>
+                              )}
                             </div>
                           )}
                         </td>

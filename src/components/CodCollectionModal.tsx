@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Banknote, CheckCircle2, AlertCircle, Lock, ArrowRight } from 'lucide-react';
+import { X, Banknote, CheckCircle2, AlertCircle, Lock, ArrowRight, History } from 'lucide-react';
 import { Order, OrderStatus } from '../types';
 
 export interface CodCollectionModalProps {
@@ -10,7 +10,7 @@ export interface CodCollectionModalProps {
     orderId: string,
     collectedAmount: number,
     markAsDelivered: boolean
-  ) => { success: boolean; error?: string };
+  ) => { success: boolean; error?: string } | Promise<{ success: boolean; error?: string }>;
 }
 
 export const CodCollectionModal: React.FC<CodCollectionModalProps> = ({
@@ -23,30 +23,44 @@ export const CodCollectionModal: React.FC<CodCollectionModalProps> = ({
   const [markDelivered, setMarkDelivered] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState<boolean>(false);
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+
+  const prevDebt = Math.max(0, Number(order?.previousOutstanding) || 0);
+  const billAmount = Math.max(0, Number(order?.finalAmount) || 0);
+  const totalPayable = order?.totalPayable ?? (billAmount + prevDebt);
 
   useEffect(() => {
     if (order && isOpen) {
       const initialAmount =
-        order.codCollectedAmount !== undefined
+        order.codCollectedAmount !== undefined && order.codCollectedAmount > 0
           ? order.codCollectedAmount
-          : order.finalAmount;
+          : totalPayable;
       setAmountStr(String(initialAmount));
       setMarkDelivered(order.status !== OrderStatus.DELIVERED);
       setError(null);
       setSaveSuccess(false);
+      setIsSubmitting(false);
     }
-  }, [order, isOpen]);
+  }, [order, isOpen, totalPayable]);
 
   if (!isOpen || !order) return null;
 
   const parsedAmount = parseFloat(amountStr.trim());
   const isValidNumber = !isNaN(parsedAmount) && isFinite(parsedAmount);
   const isNegative = isValidNumber && parsedAmount < 0;
-  const exceedsBill = isValidNumber && parsedAmount > order.finalAmount;
-  const shortfall = isValidNumber && !isNegative && !exceedsBill ? Math.max(0, order.finalAmount - parsedAmount) : 0;
-  const isFullCollection = isValidNumber && parsedAmount === order.finalAmount;
-  const isPartial = isValidNumber && parsedAmount > 0 && parsedAmount < order.finalAmount;
+  const exceedsPayable = isValidNumber && parsedAmount > totalPayable;
+  const shortfall = isValidNumber && !isNegative && !exceedsPayable ? Math.max(0, totalPayable - parsedAmount) : 0;
+  const isFullCollection = isValidNumber && parsedAmount === totalPayable;
+  const isPartial = isValidNumber && parsedAmount > 0 && parsedAmount < totalPayable;
   const isZero = isValidNumber && parsedAmount === 0;
+
+  // Breakdown of allocation for this entered amount
+  const allocatedToPrevious = isValidNumber && !isNegative
+    ? Math.min(parsedAmount, prevDebt)
+    : 0;
+  const allocatedToOrder = isValidNumber && !isNegative
+    ? Math.min(Math.max(0, parsedAmount - prevDebt), billAmount)
+    : 0;
 
   const handleInputChange = (val: string) => {
     setError(null);
@@ -55,7 +69,12 @@ export const CodCollectionModal: React.FC<CodCollectionModalProps> = ({
 
   const handleSetFull = () => {
     setError(null);
-    setAmountStr(String(order.finalAmount));
+    setAmountStr(String(totalPayable));
+  };
+
+  const handleSetOrderOnly = () => {
+    setError(null);
+    setAmountStr(String(billAmount));
   };
 
   const handleSetZero = () => {
@@ -63,7 +82,7 @@ export const CodCollectionModal: React.FC<CodCollectionModalProps> = ({
     setAmountStr('0');
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!amountStr.trim()) {
       setError('Please enter the collected amount.');
@@ -80,20 +99,27 @@ export const CodCollectionModal: React.FC<CodCollectionModalProps> = ({
       return;
     }
 
-    if (exceedsBill) {
-      setError(`Collected amount (₹${parsedAmount}) cannot exceed the bill amount (₹${order.finalAmount}).`);
+    if (exceedsPayable) {
+      setError(`Collected amount (₹${parsedAmount}) cannot exceed the total payable amount (₹${totalPayable}).`);
       return;
     }
 
-    const res = onSave(order.id, parsedAmount, markDelivered);
-    if (res.success) {
-      setSaveSuccess(true);
-      setTimeout(() => {
-        setSaveSuccess(false);
-        onClose();
-      }, 400);
-    } else {
-      setError(res.error || 'Failed to record COD collection.');
+    setIsSubmitting(true);
+    try {
+      const res = await onSave(order.id, parsedAmount, markDelivered);
+      if (res.success) {
+        setSaveSuccess(true);
+        setTimeout(() => {
+          setSaveSuccess(false);
+          onClose();
+        }, 500);
+      } else {
+        setError(res.error || 'Failed to record COD collection.');
+      }
+    } catch (err: any) {
+      setError(err?.message || 'Failed to record COD collection.');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -124,17 +150,29 @@ export const CodCollectionModal: React.FC<CodCollectionModalProps> = ({
 
         {/* Form Body */}
         <form onSubmit={handleSubmit} className="p-5 space-y-4">
-          {/* Bill Amount vs Collection Separation Banner */}
-          <div className="bg-blue-50/70 border border-blue-100 rounded-xl p-3 text-xs text-[#0F2C59] flex items-start gap-2.5">
-            <Lock size={15} className="text-[#0F2C59] shrink-0 mt-0.5" />
-            <div>
-              <div className="font-bold flex items-center justify-between">
-                <span>Original Bill Amount (Fixed):</span>
-                <span className="text-sm font-black text-[#0F2C59]">₹{order.finalAmount}</span>
+          {/* Outstanding Balance Breakdown Banner */}
+          <div className="bg-amber-50/80 border border-amber-200 rounded-xl p-3 text-xs text-[#0F2C59] space-y-1.5">
+            <div className="flex items-center justify-between font-bold text-gray-700">
+              <span className="flex items-center gap-1.5">
+                <Lock size={13} className="text-gray-500" />
+                <span>New Order Bill (Fixed):</span>
+              </span>
+              <span className="font-extrabold text-gray-900">₹{billAmount}</span>
+            </div>
+
+            {prevDebt > 0 && (
+              <div className="flex items-center justify-between font-bold text-amber-900">
+                <span className="flex items-center gap-1.5">
+                  <History size={13} className="text-amber-700" />
+                  <span>Previous Outstanding:</span>
+                </span>
+                <span className="font-extrabold text-amber-900">+₹{prevDebt}</span>
               </div>
-              <p className="text-[11px] text-gray-600 mt-0.5">
-                The original bill is preserved and will never be overwritten. Record the actual cash collected below.
-              </p>
+            )}
+
+            <div className="border-t border-amber-200/80 pt-1.5 flex items-center justify-between font-black text-sm text-[#0F2C59]">
+              <span>Total Payable Amount:</span>
+              <span className="text-base text-[#0F2C59]">₹{totalPayable}</span>
             </div>
           </div>
 
@@ -150,14 +188,23 @@ export const CodCollectionModal: React.FC<CodCollectionModalProps> = ({
                   onClick={handleSetFull}
                   className="text-[10px] font-bold text-[#0F2C59] hover:text-[#FF6B00] bg-gray-100 hover:bg-orange-50 px-2 py-0.5 rounded transition cursor-pointer"
                 >
-                  Full (₹{order.finalAmount})
+                  Full Total (₹{totalPayable})
                 </button>
+                {prevDebt > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleSetOrderOnly}
+                    className="text-[10px] font-bold text-gray-700 hover:text-[#0F2C59] bg-gray-100 hover:bg-blue-50 px-2 py-0.5 rounded transition cursor-pointer"
+                  >
+                    Order (₹{billAmount})
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={handleSetZero}
                   className="text-[10px] font-bold text-gray-600 hover:text-red-600 bg-gray-100 hover:bg-red-50 px-2 py-0.5 rounded transition cursor-pointer"
                 >
-                  ₹0 (Uncollected)
+                  ₹0
                 </button>
               </div>
             </div>
@@ -171,12 +218,12 @@ export const CodCollectionModal: React.FC<CodCollectionModalProps> = ({
                 type="number"
                 step="0.01"
                 min="0"
-                max={order.finalAmount}
+                max={totalPayable}
                 value={amountStr}
                 onChange={(e) => handleInputChange(e.target.value)}
-                placeholder="e.g. 700"
+                placeholder="e.g. 1100"
                 className={`w-full pl-8 pr-4 py-2.5 bg-white border text-base font-bold text-gray-900 rounded-xl outline-none transition focus:ring-2 ${
-                  exceedsBill || isNegative
+                  exceedsPayable || isNegative
                     ? 'border-red-400 focus:ring-red-200'
                     : 'border-gray-300 focus:border-[#0F2C59] focus:ring-blue-100'
                 }`}
@@ -185,21 +232,35 @@ export const CodCollectionModal: React.FC<CodCollectionModalProps> = ({
             </div>
           </div>
 
-          {/* Breakdown summary card */}
-          {isValidNumber && !isNegative && !exceedsBill && (
+          {/* Allocation summary card */}
+          {isValidNumber && !isNegative && !exceedsPayable && (
             <div className="bg-gray-50 rounded-xl p-3 border border-gray-200 text-xs space-y-1.5">
-              <div className="flex justify-between text-gray-600">
-                <span>Total Invoice Bill:</span>
-                <span className="font-semibold text-gray-900">₹{order.finalAmount}</span>
-              </div>
-              <div className="flex justify-between text-gray-600">
-                <span>Amount Deposited / Collected:</span>
-                <span className="font-bold text-[#0F2C59]">₹{parsedAmount}</span>
-              </div>
+              {prevDebt > 0 ? (
+                <>
+                  <div className="flex justify-between text-gray-600">
+                    <span>Applied to Previous Outstanding:</span>
+                    <span className="font-bold text-amber-900">
+                      ₹{allocatedToPrevious} / ₹{prevDebt}
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-gray-600">
+                    <span>Applied to Current Order Bill:</span>
+                    <span className="font-bold text-[#0F2C59]">
+                      ₹{allocatedToOrder} / ₹{billAmount}
+                    </span>
+                  </div>
+                </>
+              ) : (
+                <div className="flex justify-between text-gray-600">
+                  <span>Applied to Order Bill:</span>
+                  <span className="font-bold text-[#0F2C59]">₹{parsedAmount} / ₹{billAmount}</span>
+                </div>
+              )}
+
               <div className="pt-1.5 border-t border-gray-200 flex justify-between items-center font-bold">
-                <span>Shortfall / Balance:</span>
-                <span className={shortfall > 0 ? 'text-amber-700' : 'text-emerald-700'}>
-                  ₹{shortfall}
+                <span>Remaining Customer Outstanding:</span>
+                <span className={shortfall > 0 ? 'text-amber-700' : 'text-emerald-700 font-black'}>
+                  {shortfall > 0 ? `₹${shortfall}` : '₹0 (All Cleared)'}
                 </span>
               </div>
 
@@ -208,19 +269,19 @@ export const CodCollectionModal: React.FC<CodCollectionModalProps> = ({
                 {isFullCollection && (
                   <div className="flex items-center gap-1.5 text-[11px] font-bold text-emerald-800 bg-emerald-100/80 px-2.5 py-1 rounded-lg">
                     <CheckCircle2 size={13} className="text-emerald-700 shrink-0" />
-                    <span>Full Payment Collected (₹{order.finalAmount})</span>
+                    <span>Full Total Cleared (₹{totalPayable})</span>
                   </div>
                 )}
                 {isPartial && (
                   <div className="flex items-center gap-1.5 text-[11px] font-bold text-amber-900 bg-amber-100/80 px-2.5 py-1 rounded-lg">
                     <AlertCircle size={13} className="text-amber-700 shrink-0" />
-                    <span>Partial / Short COD: ₹{parsedAmount} collected (₹{shortfall} short)</span>
+                    <span>Partial COD: ₹{parsedAmount} collected (₹{shortfall} remaining debt)</span>
                   </div>
                 )}
                 {isZero && (
                   <div className="flex items-center gap-1.5 text-[11px] font-bold text-red-800 bg-red-100/80 px-2.5 py-1 rounded-lg">
                     <AlertCircle size={13} className="text-red-700 shrink-0" />
-                    <span>₹0 Cash Collected (Entire bill ₹{order.finalAmount} pending)</span>
+                    <span>₹0 Cash Collected (Entire ₹{totalPayable} remains unpaid)</span>
                   </div>
                 )}
               </div>
@@ -239,7 +300,7 @@ export const CodCollectionModal: React.FC<CodCollectionModalProps> = ({
           {saveSuccess && (
             <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-800 flex items-center gap-2">
               <CheckCircle2 size={15} className="shrink-0 text-emerald-600" />
-              <span>Collection record saved successfully!</span>
+              <span>Collection record permanently saved to database!</span>
             </div>
           )}
 
@@ -267,10 +328,10 @@ export const CodCollectionModal: React.FC<CodCollectionModalProps> = ({
             </button>
             <button
               type="submit"
-              disabled={Boolean(error) || exceedsBill || isNegative || !isValidNumber}
+              disabled={Boolean(error) || exceedsPayable || isNegative || !isValidNumber || isSubmitting}
               className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-[#0F2C59] hover:bg-[#163a6e] disabled:opacity-50 disabled:cursor-not-allowed rounded-xl shadow-xs transition active:scale-95 cursor-pointer"
             >
-              <span>Save Collection</span>
+              <span>{isSubmitting ? 'Saving...' : 'Save Collection'}</span>
               <ArrowRight size={13} />
             </button>
           </div>

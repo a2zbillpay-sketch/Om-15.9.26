@@ -45,6 +45,12 @@ import {
   saveCategoryToDb,
   deleteCategoryFromDb,
 } from '../lib/category-service';
+import {
+  calculateCustomerOutstanding,
+  allocateCodCollection,
+  recordCodCollectionViaApi,
+  fetchCodCollectionsFromApi,
+} from '../lib/cod-storage';
 
 export type CustomerFlowStep = 'AUTH' | 'PROFILE' | 'SHOP';
 
@@ -135,6 +141,8 @@ interface AppContextType {
   clearCart: () => void;
   checkoutBreakdown: CheckoutBreakdown;
   orders: Order[];
+  customerOutstanding: number;
+  getCustomerOutstanding: (phoneOrId?: string) => number;
   createOrder: (data: {
     address: Address;
     paymentMethod: PaymentMethod;
@@ -146,7 +154,7 @@ interface AppContextType {
     orderId: string,
     collectedAmount: number,
     markAsDelivered?: boolean
-  ) => { success: boolean; error?: string };
+  ) => Promise<{ success: boolean; error?: string }> | { success: boolean; error?: string };
   userAddresses: Address[];
   addAddress: (address: Omit<Address, 'id' | 'userId'>) => void;
   selectedAddressId: string | null;
@@ -367,25 +375,82 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     localStorage.setItem('om_orders', JSON.stringify(orders));
   }, [orders]);
 
-  // Synchronize orders with Supabase
+  // Synchronize orders with Supabase and persistent COD ledger
   const refreshOrders = async () => {
-    if (!isSupabaseConfigured) return;
     try {
-      if (activeRole === Role.SHOPKEEPER) {
-        const adminOrders = await fetchAllOrdersForAdmin();
-        if (adminOrders && adminOrders.length > 0) {
-          setOrders(adminOrders);
-        }
-      } else {
-        const userOrders = await fetchCustomerOrdersFromSupabase(currentUser.id, currentUser.phone);
-        if (userOrders && userOrders.length > 0) {
-          setOrders(userOrders);
+      let fetchedOrders: Order[] | null = null;
+      if (isSupabaseConfigured) {
+        if (activeRole === Role.SHOPKEEPER) {
+          fetchedOrders = await fetchAllOrdersForAdmin();
+        } else {
+          fetchedOrders = await fetchCustomerOrdersFromSupabase(currentUser.id, currentUser.phone);
         }
       }
+
+      // Fetch persistent COD transactions and allocations from backend API
+      const apiData = await fetchCodCollectionsFromApi(
+        activeRole === Role.SHOPKEEPER ? undefined : currentUser.phone
+      );
+
+      const baseOrders = fetchedOrders && fetchedOrders.length > 0 ? fetchedOrders : orders;
+
+      if (apiData && apiData.success && apiData.ordersMap) {
+        const merged = baseOrders.map((o) => {
+          const persisted = apiData.ordersMap[o.id];
+          if (persisted) {
+            return {
+              ...o,
+              codCollectedAmount: persisted.codCollectedAmount ?? o.codCollectedAmount ?? 0,
+              previousOutstanding: persisted.previousOutstanding ?? o.previousOutstanding ?? 0,
+              totalPayable:
+                persisted.totalPayable ??
+                o.totalPayable ??
+                o.finalAmount + (persisted.previousOutstanding ?? o.previousOutstanding ?? 0),
+              paymentStatus: (persisted.paymentStatus as PaymentStatus) || o.paymentStatus,
+              status: ((persisted as any).status as OrderStatus) || o.status,
+            };
+          }
+          return o;
+        });
+        setOrders(merged);
+      } else if (fetchedOrders && fetchedOrders.length > 0) {
+        setOrders(fetchedOrders);
+      }
     } catch (err) {
-      console.warn('Error refreshing orders from Supabase:', err);
+      console.warn('Error refreshing orders and COD ledger:', err);
     }
   };
+
+  // Synchronize with persistent database on initial mount
+  useEffect(() => {
+    fetchCodCollectionsFromApi()
+      .then((apiData) => {
+        if (apiData && apiData.success && apiData.ordersMap) {
+          setOrders((prev) =>
+            prev.map((o) => {
+              const persisted = apiData.ordersMap[o.id];
+              if (persisted) {
+                return {
+                  ...o,
+                  codCollectedAmount: persisted.codCollectedAmount ?? o.codCollectedAmount ?? 0,
+                  previousOutstanding: persisted.previousOutstanding ?? o.previousOutstanding ?? 0,
+                  totalPayable:
+                    persisted.totalPayable ??
+                    o.totalPayable ??
+                    o.finalAmount + (persisted.previousOutstanding ?? o.previousOutstanding ?? 0),
+                  paymentStatus: (persisted.paymentStatus as PaymentStatus) || o.paymentStatus,
+                  status: ((persisted as any).status as OrderStatus) || o.status,
+                };
+              }
+              return o;
+            })
+          );
+        }
+      })
+      .catch((err) => {
+        console.warn('Initial COD ledger sync notice:', err);
+      });
+  }, []);
 
   // Synchronize central product catalog with Supabase
   const refreshProducts = async () => {
@@ -786,6 +851,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  // Customer outstanding balance calculation
+  const customerOutstanding = useMemo(() => {
+    const phoneOrId = currentUser.phone || currentUser.id;
+    if (!phoneOrId) return 0;
+    return calculateCustomerOutstanding(orders, phoneOrId);
+  }, [orders, currentUser.phone, currentUser.id]);
+
+  const getCustomerOutstanding = useCallback(
+    (phoneOrId?: string): number => {
+      const target = phoneOrId || currentUser.phone || currentUser.id;
+      if (!target) return 0;
+      return calculateCustomerOutstanding(orders, target);
+    },
+    [orders, currentUser.phone, currentUser.id]
+  );
+
   // Dynamic Checkout Breakdown calculation using the engine
   const checkoutBreakdown = useMemo(() => {
     const variantItems = cart.map((item) => ({
@@ -804,9 +885,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         codBaseCharge: settings.codBaseCharge,
         freeShippingMinAmount: settings.freeShippingMinAmount,
         baseDeliveryFee: settings.baseDeliveryFee,
-      }
+      },
+      customerOutstanding
     );
-  }, [cart, currentUser.codOrderCount, settings]);
+  }, [cart, currentUser.codOrderCount, settings, customerOutstanding]);
 
   // Order Management
   const createOrder = async (data: {
@@ -820,6 +902,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       : checkoutBreakdown.codFinalTotal;
     const discountAmount = isAdvance ? checkoutBreakdown.advanceDiscountAmount : 0;
     const codCharge = isAdvance ? 0 : checkoutBreakdown.codCharge;
+
+    const previousOutstanding = isAdvance ? 0 : customerOutstanding;
+    const totalPayable = isAdvance ? finalAmount : finalAmount + previousOutstanding;
 
     const orderNumber = `OM-${Math.floor(10000 + Math.random() * 90000)}`;
 
@@ -839,7 +924,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       discountAmount,
       deliveryFee: checkoutBreakdown.deliveryFee,
       codCharge,
-      finalAmount,
+      finalAmount, // Original bill / final amount of this new order is preserved unchanged!
+      previousOutstanding,
+      totalPayable,
+      codCollectedAmount: 0,
       razorpayOrderId: isAdvance ? `rzp_ord_${Date.now()}` : undefined,
       razorpayPaymentId: isAdvance ? `pay_${Date.now()}` : undefined,
       createdAt: new Date().toISOString(),
@@ -987,11 +1075,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  const recordCodCollection = (
+  const recordCodCollection = async (
     orderId: string,
     collectedAmount: number,
     markAsDelivered: boolean = false
-  ): { success: boolean; error?: string } => {
+  ): Promise<{ success: boolean; error?: string }> => {
     const order = orders.find((o) => o.id === orderId);
     if (!order) {
       return { success: false, error: 'Order not found.' };
@@ -1008,45 +1096,47 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, error: 'Collected amount cannot be negative.' };
     }
 
-    if (collectedAmount > order.finalAmount) {
+    const orderPayable = order.totalPayable ?? (order.finalAmount + (order.previousOutstanding || 0));
+    if (collectedAmount > orderPayable) {
       return {
         success: false,
-        error: `Collected amount (₹${collectedAmount}) cannot exceed the bill amount (₹${order.finalAmount}).`,
+        error: `Collected amount (₹${collectedAmount}) cannot exceed the total payable amount (₹${orderPayable}).`,
       };
     }
 
     const cleanAmount = Math.round(collectedAmount * 100) / 100;
 
-    let newPaymentStatus: PaymentStatus;
-    if (cleanAmount === order.finalAmount) {
-      newPaymentStatus = PaymentStatus.RECEIVED;
-    } else if (cleanAmount > 0) {
-      newPaymentStatus = PaymentStatus.PARTIALLY_COLLECTED;
-    } else {
-      newPaymentStatus = PaymentStatus.PENDING;
-    }
-
-    setOrders((prev) =>
-      prev.map((o) => {
-        if (o.id === orderId) {
-          return {
-            ...o,
-            codCollectedAmount: cleanAmount,
-            paymentStatus: newPaymentStatus,
-            status: markAsDelivered ? OrderStatus.DELIVERED : o.status,
-          };
-        }
-        return o;
-      })
+    // Allocate cash across previous unpaid/partially paid orders (FIFO) and current order
+    const targetCustomer = order.userPhone || order.userId;
+    const allocationResult = allocateCodCollection(
+      orders,
+      targetCustomer,
+      orderId,
+      cleanAmount,
+      markAsDelivered
     );
 
-    if (isSupabaseConfigured) {
-      const isPaid = cleanAmount === order.finalAmount;
-      const nextStatus = markAsDelivered ? OrderStatus.DELIVERED : order.status;
-      updateOrderStatusInSupabase(orderId, nextStatus, isPaid).catch((err) => {
-        console.warn('Background Supabase status update error:', err);
-      });
-    }
+    // Update React state with all affected orders
+    setOrders(allocationResult.updatedOrders);
+
+    // Persist permanently to backend database API and Supabase
+    recordCodCollectionViaApi({
+      orderId,
+      orderNumber: order.orderNumber,
+      customerPhone: order.userPhone,
+      customerId: order.userId,
+      customerName: order.userName,
+      collectedAmount: cleanAmount,
+      previousOutstanding: order.previousOutstanding || 0,
+      orderAmount: order.finalAmount,
+      totalPayable: orderPayable,
+      markAsDelivered,
+      allCustomerOrders: allocationResult.updatedOrders.filter(
+        (o) => o.userPhone === order.userPhone || o.userId === order.userId
+      ),
+    }).catch((err) => {
+      console.warn('Persistent COD API save notice:', err);
+    });
 
     return { success: true };
   };
@@ -1310,6 +1400,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         clearCart,
         checkoutBreakdown,
         orders,
+        customerOutstanding,
+        getCustomerOutstanding,
         createOrder,
         cancelOrder,
         updateOrderStatus,

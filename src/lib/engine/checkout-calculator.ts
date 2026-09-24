@@ -28,6 +28,8 @@ export interface CheckoutBreakdown {
   advanceDiscountAmount: number;
   codFinalTotal: number;
   advanceFinalTotal: number;
+  previousOutstanding?: number;
+  codTotalPayable?: number;
 }
 
 /**
@@ -53,7 +55,8 @@ export function getActiveUnitPrice(
 export function calculateCheckoutTotals(
   items: VariantCartItem[],
   user: UserContext,
-  settings: SystemSettings
+  settings: SystemSettings,
+  previousOutstanding: number = 0
 ): CheckoutBreakdown {
   let subtotal = 0;
   let eligibleSubtotal = 0;
@@ -82,6 +85,8 @@ export function calculateCheckoutTotals(
   // Final Calculations
   const codFinalTotal = Math.max(0, subtotal + deliveryFee + codCharge);
   const advanceFinalTotal = Math.max(0, subtotal + deliveryFee - advanceDiscountAmount);
+  const cleanOutstanding = Math.max(0, Number(previousOutstanding) || 0);
+  const codTotalPayable = codFinalTotal + cleanOutstanding;
 
   return {
     subtotal,
@@ -92,6 +97,8 @@ export function calculateCheckoutTotals(
     advanceDiscountAmount,
     codFinalTotal,
     advanceFinalTotal,
+    previousOutstanding: cleanOutstanding,
+    codTotalPayable,
   };
 }
 

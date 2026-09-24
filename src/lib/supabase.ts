@@ -550,9 +550,43 @@ export async function fetchCustomerOrdersFromSupabase(
       const subtotal = Number(o.subtotal ?? finalAmount);
       const discountAmount = Number(o.discount_amount ?? 0);
       const deliveryFee = Math.max(0, finalAmount - (subtotal - discountAmount));
-      const orderNumber = (o.notes || '').replace(/^Order\s*#?/i, '').trim() || o.id.replace(/^ord[-_]/i, '').slice(0, 8);
       const items = parseOrderItemsFromProductName(o['Product Name'], o.id, finalAmount);
       const parsedAddress = parseCustomerAddress(o.delivery_address);
+
+      let orderNumber = '';
+      let codCollectedAmount = 0;
+      let previousOutstanding = 0;
+      let totalPayable = finalAmount;
+
+      const rawNotes = o.notes || '';
+      if (rawNotes.includes('COD_META:')) {
+        const parts = rawNotes.split('COD_META:');
+        orderNumber = parts[0].replace(/\|/g, '').replace(/^Order\s*#?/i, '').trim();
+        try {
+          const meta = JSON.parse(parts[1].trim());
+          codCollectedAmount = Number(meta.codCollected) || 0;
+          previousOutstanding = Number(meta.prevOutstanding) || 0;
+          totalPayable = Number(meta.totalPayable) || (finalAmount + previousOutstanding);
+        } catch {
+          // ignore parsing error
+        }
+      } else {
+        orderNumber = rawNotes.replace(/^Order\s*#?/i, '').trim() || o.id.replace(/^ord[-_]/i, '').slice(0, 8);
+      }
+      if (!orderNumber) {
+        orderNumber = o.id.replace(/^ord[-_]/i, '').slice(0, 8);
+      }
+
+      if (o.is_paid && codCollectedAmount === 0) {
+        codCollectedAmount = finalAmount;
+      }
+
+      let paymentStatus: PaymentStatus = PaymentStatus.PENDING;
+      if (o.is_paid || codCollectedAmount >= finalAmount) {
+        paymentStatus = PaymentStatus.RECEIVED;
+      } else if (codCollectedAmount > 0) {
+        paymentStatus = PaymentStatus.PARTIALLY_COLLECTED;
+      }
 
       return {
         id: o.id,
@@ -571,13 +605,16 @@ export async function fetchCustomerOrdersFromSupabase(
         },
         status: (o.status as OrderStatus) || OrderStatus.ORDER_ACCEPTED,
         paymentMethod: (o.payment_method as PaymentMethod) || PaymentMethod.COD,
-        paymentStatus: o.is_paid ? PaymentStatus.RECEIVED : PaymentStatus.PENDING,
+        paymentStatus,
         deliveryDate: o.preferred_slot || (o.created_at ? o.created_at.split('T')[0] : new Date().toISOString().split('T')[0]),
         subtotal,
         discountAmount,
         deliveryFee,
         codCharge: 0,
         finalAmount,
+        previousOutstanding,
+        totalPayable,
+        codCollectedAmount,
         createdAt: o.created_at || new Date().toISOString(),
         items,
       };
@@ -596,6 +633,13 @@ export async function saveOrderToSupabase(order: Order): Promise<boolean> {
   if (!supabase) return false;
 
   try {
+    const metaPayload = JSON.stringify({
+      codCollected: order.codCollectedAmount || 0,
+      prevOutstanding: order.previousOutstanding || 0,
+      totalPayable: order.totalPayable || order.finalAmount,
+    });
+    const orderNotes = `Order #${order.orderNumber} | COD_META:${metaPayload}`;
+
     const orderPayload = {
       id: order.id,
       customer_id: order.userId,
@@ -614,7 +658,7 @@ export async function saveOrderToSupabase(order: Order): Promise<boolean> {
           ? order.address
           : order.address?.fullAddress || '',
       preferred_slot: order.deliveryDate || order.createdAt?.split('T')[0] || '',
-      notes: order.orderNumber ? `Order #${order.orderNumber}` : '',
+      notes: orderNotes,
       weight_kg: (order as any).weightKg || null,
       created_at: order.createdAt || new Date().toISOString(),
       updated_at: new Date().toISOString(),
@@ -657,9 +701,43 @@ export async function fetchAllOrdersForAdmin(): Promise<Order[] | null> {
       const subtotal = Number(o.subtotal ?? finalAmount);
       const discountAmount = Number(o.discount_amount ?? 0);
       const deliveryFee = Math.max(0, finalAmount - (subtotal - discountAmount));
-      const orderNumber = (o.notes || '').replace(/^Order\s*#?/i, '').trim() || o.id.replace(/^ord[-_]/i, '').slice(0, 8);
       const items = parseOrderItemsFromProductName(o['Product Name'], o.id, finalAmount);
       const parsedAddress = parseCustomerAddress(o.delivery_address);
+
+      let orderNumber = '';
+      let codCollectedAmount = 0;
+      let previousOutstanding = 0;
+      let totalPayable = finalAmount;
+
+      const rawNotes = o.notes || '';
+      if (rawNotes.includes('COD_META:')) {
+        const parts = rawNotes.split('COD_META:');
+        orderNumber = parts[0].replace(/\|/g, '').replace(/^Order\s*#?/i, '').trim();
+        try {
+          const meta = JSON.parse(parts[1].trim());
+          codCollectedAmount = Number(meta.codCollected) || 0;
+          previousOutstanding = Number(meta.prevOutstanding) || 0;
+          totalPayable = Number(meta.totalPayable) || (finalAmount + previousOutstanding);
+        } catch {
+          // ignore parsing error
+        }
+      } else {
+        orderNumber = rawNotes.replace(/^Order\s*#?/i, '').trim() || o.id.replace(/^ord[-_]/i, '').slice(0, 8);
+      }
+      if (!orderNumber) {
+        orderNumber = o.id.replace(/^ord[-_]/i, '').slice(0, 8);
+      }
+
+      if (o.is_paid && codCollectedAmount === 0) {
+        codCollectedAmount = finalAmount;
+      }
+
+      let paymentStatus: PaymentStatus = PaymentStatus.PENDING;
+      if (o.is_paid || codCollectedAmount >= finalAmount) {
+        paymentStatus = PaymentStatus.RECEIVED;
+      } else if (codCollectedAmount > 0) {
+        paymentStatus = PaymentStatus.PARTIALLY_COLLECTED;
+      }
 
       return {
         id: o.id,
@@ -678,13 +756,16 @@ export async function fetchAllOrdersForAdmin(): Promise<Order[] | null> {
         },
         status: (o.status as OrderStatus) || OrderStatus.ORDER_ACCEPTED,
         paymentMethod: (o.payment_method as PaymentMethod) || PaymentMethod.COD,
-        paymentStatus: o.is_paid ? PaymentStatus.RECEIVED : PaymentStatus.PENDING,
+        paymentStatus,
         deliveryDate: o.preferred_slot || (o.created_at ? o.created_at.split('T')[0] : new Date().toISOString().split('T')[0]),
         subtotal,
         discountAmount,
         deliveryFee,
         codCharge: 0,
         finalAmount,
+        previousOutstanding,
+        totalPayable,
+        codCollectedAmount,
         createdAt: o.created_at || new Date().toISOString(),
         items,
       };
@@ -701,7 +782,8 @@ export async function fetchAllOrdersForAdmin(): Promise<Order[] | null> {
 export async function updateOrderStatusInSupabase(
   orderId: string,
   newStatus: OrderStatus,
-  isPaid?: boolean
+  isPaid?: boolean,
+  meta?: { codCollected?: number; prevOutstanding?: number; totalPayable?: number; orderNumber?: string }
 ): Promise<boolean> {
   if (!supabase) return false;
 
@@ -713,6 +795,16 @@ export async function updateOrderStatusInSupabase(
 
     if (typeof isPaid === 'boolean') {
       updatePayload.is_paid = isPaid;
+    }
+
+    if (meta) {
+      const orderNum = meta.orderNumber || orderId.slice(0, 8);
+      const metaString = JSON.stringify({
+        codCollected: meta.codCollected || 0,
+        prevOutstanding: meta.prevOutstanding || 0,
+        totalPayable: meta.totalPayable || 0,
+      });
+      updatePayload.notes = `Order #${orderNum} | COD_META:${metaString}`;
     }
 
     const { error } = await supabase
@@ -727,6 +819,59 @@ export async function updateOrderStatusInSupabase(
     return true;
   } catch (err) {
     console.error('Exception in updateOrderStatusInSupabase:', err);
+    return false;
+  }
+}
+
+/**
+ * Permanently logs a COD Collection transaction in Supabase's ledger and updates the customer's balance.
+ */
+export async function recordCodCollectionInSupabase(tx: {
+  id: string;
+  orderId: string;
+  orderNumber: string;
+  customerId: string;
+  customerPhone: string;
+  customerName: string;
+  amount: number;
+  remainingOutstanding: number;
+  createdAt: string;
+}): Promise<boolean> {
+  if (!supabase) return false;
+
+  try {
+    // 1. Insert into Supabase 'ledger' table
+    const { error: ledgerError } = await supabase.from('ledger').insert({
+      id: tx.id,
+      customer_id: tx.customerId || tx.customerPhone,
+      customer_name: tx.customerName || 'Customer',
+      order_id: tx.orderId,
+      date: tx.createdAt,
+      type: 'CREDIT',
+      amount: tx.amount,
+      description: `COD Collection for Order #${tx.orderNumber}`,
+      balance_after: tx.remainingOutstanding,
+    });
+
+    if (ledgerError) {
+      console.warn('Error inserting to Supabase ledger:', ledgerError.message);
+    }
+
+    // 2. Update Supabase 'users.outstanding_balance'
+    if (tx.customerPhone) {
+      const cleanPhone = tx.customerPhone.replace(/\D/g, '').slice(-10);
+      await supabase
+        .from('users')
+        .update({
+          outstanding_balance: tx.remainingOutstanding,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('phone', cleanPhone);
+    }
+
+    return true;
+  } catch (err) {
+    console.warn('Exception in recordCodCollectionInSupabase:', err);
     return false;
   }
 }

@@ -145,8 +145,13 @@ export const CustomerOrdersDrawer: React.FC<CustomerOrdersDrawerProps> = ({
 
                   <div className="flex justify-between items-center pt-2 border-t border-gray-200 text-xs">
                     <div>
-                      <span className="text-gray-500 text-[10px]">Total: </span>
-                      <span className="font-black text-[#0F2C59]">₹{order.finalAmount}</span>
+                      <span className="text-gray-500 text-[10px]">Order: </span>
+                      <span className="font-bold text-gray-800">₹{order.finalAmount}</span>
+                      {order.previousOutstanding !== undefined && order.previousOutstanding > 0 && (
+                        <span className="ml-1 text-[10px] font-black text-amber-900 bg-amber-100/70 px-1.5 py-0.5 rounded">
+                          Payable: ₹{order.totalPayable || (order.finalAmount + order.previousOutstanding)}
+                        </span>
+                      )}
                       <span className="text-[10px] text-gray-400 ml-1.5">
                         ({order.paymentMethod === PaymentMethod.ADVANCE_ONLINE ? 'UPI' : 'COD'})
                       </span>

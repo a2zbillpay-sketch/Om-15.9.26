@@ -135,9 +135,36 @@ export interface Order {
   deliveryFee: number;
   codCharge: number;
   finalAmount: number;
+  previousOutstanding?: number;
+  totalPayable?: number;
   codCollectedAmount?: number;
   razorpayOrderId?: string;
   razorpayPaymentId?: string;
+  createdAt: string;
+}
+
+export interface CodTransactionAllocation {
+  orderId: string;
+  orderNumber: string;
+  amountAllocated: number;
+  orderRemainingUnpaid: number;
+}
+
+export interface CodPaymentTransaction {
+  id: string;
+  orderId: string;
+  orderNumber: string;
+  customerId: string;
+  customerPhone: string;
+  customerName: string;
+  amount: number;
+  previousOutstanding: number;
+  orderAmount: number;
+  totalPayable: number;
+  collectedAmount: number;
+  remainingOutstanding: number;
+  allocations: CodTransactionAllocation[];
+  notes?: string;
   createdAt: string;
 }
 
