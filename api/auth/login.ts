@@ -69,14 +69,30 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
     const body = await readJsonBody(req);
     const password = body?.password;
 
-    if (!password || typeof password !== 'string' || !password.trim()) {
-      res.statusCode = 400;
-      res.setHeader('Content-Type', 'application/json');
-      res.end(JSON.stringify({ error: 'Invalid credentials' }));
-      return;
-    }
+    /* ===== TEMPORARY DEV ADMIN LOGIN BYPASS (REMOVE TO RESTORE STRICT DEV PW) ===== */
+    const isDevEnvironment = process.env.NODE_ENV !== 'production';
+    const isDevBypass =
+      isDevEnvironment &&
+      (body?.bypassDev === true ||
+        !password ||
+        (typeof password === 'string' && !password.trim()) ||
+        password === 'dev');
+    /* ===== END TEMPORARY DEV ADMIN LOGIN BYPASS ===== */
 
-    const isValid = await verifyAdminPassword(password);
+    let isValid = false;
+
+    if (isDevBypass) {
+      isValid = true;
+    } else {
+      if (!password || typeof password !== 'string' || !password.trim()) {
+        res.statusCode = 400;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ error: 'Invalid credentials' }));
+        return;
+      }
+
+      isValid = await verifyAdminPassword(password);
+    }
 
     if (!isValid) {
       res.statusCode = 401;

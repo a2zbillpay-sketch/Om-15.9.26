@@ -17,6 +17,27 @@ export const RoleSwitcher: React.FC = () => {
       // Must verify server session before activating Shopkeeper UI
       const isValid = isAdminSessionValid || (await checkAdminSession());
       if (!isValid) {
+        /* ===== TEMPORARY DEV ADMIN LOGIN BYPASS (REMOVE TO RESTORE STRICT DEV PW) ===== */
+        if (import.meta.env.DEV) {
+          try {
+            const res = await fetch('/api/auth/login', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              credentials: 'include',
+              body: JSON.stringify({ bypassDev: true }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (data.authenticated) {
+              await checkAdminSession();
+              setActiveRole(Role.SHOPKEEPER);
+              return;
+            }
+          } catch {
+            // fallback to modal if network fails
+          }
+        }
+        /* ===== END TEMPORARY DEV ADMIN LOGIN BYPASS ===== */
+
         setIsLoginModalOpen(true);
         return;
       }

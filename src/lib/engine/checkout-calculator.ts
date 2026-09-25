@@ -22,6 +22,7 @@ export interface SystemSettings {
 export interface CheckoutBreakdown {
   subtotal: number;
   eligibleSubtotal: number;
+  excludedSubtotal: number;
   appliedUnitPriceSum: number;
   deliveryFee: number;
   codCharge: number;
@@ -60,6 +61,7 @@ export function calculateCheckoutTotals(
 ): CheckoutBreakdown {
   let subtotal = 0;
   let eligibleSubtotal = 0;
+  let excludedSubtotal = 0;
 
   items.forEach((item) => {
     // 1. Determine Tiered / Slab Price
@@ -67,9 +69,11 @@ export function calculateCheckoutTotals(
     const itemTotal = activePrice * item.quantity;
     subtotal += itemTotal;
 
-    // Track subtotal of items eligible for dynamic discounts
+    // Track subtotal of items eligible for dynamic discounts vs price-regulated excluded items
     if (!item.isDiscountExcluded) {
       eligibleSubtotal += itemTotal;
+    } else {
+      excludedSubtotal += itemTotal;
     }
   });
 
@@ -79,10 +83,11 @@ export function calculateCheckoutTotals(
   // 3. COD Charge Calculation (First 3 COD orders are FREE)
   const codCharge = user.codOrderCount < 3 ? 0 : settings.codBaseCharge;
 
-  // 4. Advance Payment Discount Calculation (Applied only to non-excluded items)
-  const advanceDiscountAmount = Math.round((eligibleSubtotal * settings.advancePaymentDiscountPct) / 100);
+  // 4. Advance Payment Discount Calculation (Applied STRICTLY and ONLY to eligible items; NEVER on excluded items)
+  const discountPct = Math.max(0, Number(settings.advancePaymentDiscountPct) || 0);
+  const advanceDiscountAmount = Math.round((eligibleSubtotal * discountPct) / 100);
 
-  // Final Calculations
+  // Final Calculations: Original product price and bill amount remain unchanged
   const codFinalTotal = Math.max(0, subtotal + deliveryFee + codCharge);
   const advanceFinalTotal = Math.max(0, subtotal + deliveryFee - advanceDiscountAmount);
   const cleanOutstanding = Math.max(0, Number(previousOutstanding) || 0);
@@ -91,6 +96,7 @@ export function calculateCheckoutTotals(
   return {
     subtotal,
     eligibleSubtotal,
+    excludedSubtotal,
     appliedUnitPriceSum: subtotal,
     deliveryFee,
     codCharge,

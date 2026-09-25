@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Trash2, Plus, Minus, ArrowRight, ShieldCheck, Truck, Sparkles, Package } from 'lucide-react';
+import { X, Trash2, Plus, Minus, ArrowRight, ShieldCheck, Truck, Sparkles, Package, AlertCircle } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { getActiveUnitPrice } from '../lib/engine/checkout-calculator';
 import { formatVariantPack } from '../utils/variantFormatter';
@@ -149,13 +149,18 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                       {formatVariantPack(item.variant)}
                     </p>
 
-                    <div className="flex items-center gap-2 mt-1">
+                    <div className="flex flex-wrap items-center gap-1.5 mt-1">
                       <span className="text-xs font-black text-[#0F2C59]">
                         ₹{activePrice}
                       </span>
                       {hasTierDiscount && (
                         <span className="text-[9px] bg-emerald-100 text-emerald-800 font-bold px-1.5 py-0.2 rounded">
                           Bulk Tier Applied
+                        </span>
+                      )}
+                      {(item.product.isDiscountExcluded === true || (item.product.isDiscountExcluded as any) === 'true') && (
+                        <span className="text-[9px] bg-amber-100 text-amber-900 border border-amber-300 font-bold px-1.5 py-0.2 rounded">
+                          Price Regulated (No UPI Discount)
                         </span>
                       )}
                     </div>
@@ -196,15 +201,26 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
         {cart.length > 0 && (
           <div className="p-4 bg-gray-50 border-t border-gray-200 space-y-3">
             {/* Advance Payment Promo Banner */}
-            <div className="bg-emerald-50 border border-emerald-200 p-2.5 rounded-xl text-emerald-800 flex items-center justify-between text-xs">
-              <div className="flex items-center gap-1.5">
-                <Sparkles size={14} className="text-emerald-600 shrink-0" />
-                <span>
-                  Save extra <strong className="text-emerald-700 font-black">₹{checkoutBreakdown.advanceDiscountAmount}</strong> with Advance Online UPI!
-                </span>
+            {checkoutBreakdown.advanceDiscountAmount > 0 ? (
+              <div className="bg-emerald-50 border border-emerald-200 p-2.5 rounded-xl text-emerald-800 flex items-center justify-between text-xs">
+                <div className="flex items-center gap-1.5">
+                  <Sparkles size={14} className="text-emerald-600 shrink-0" />
+                  <span>
+                    Save extra <strong className="text-emerald-700 font-black">₹{checkoutBreakdown.advanceDiscountAmount}</strong> with Advance Online UPI (on eligible items)!
+                  </span>
+                </div>
+                <ShieldCheck size={16} className="text-emerald-600 shrink-0" />
               </div>
-              <ShieldCheck size={16} className="text-emerald-600 shrink-0" />
-            </div>
+            ) : checkoutBreakdown.excludedSubtotal > 0 ? (
+              <div className="bg-amber-50 border border-amber-200 p-2.5 rounded-xl text-amber-900 flex items-center justify-between text-xs">
+                <div className="flex items-center gap-1.5">
+                  <AlertCircle size={14} className="text-amber-600 shrink-0" />
+                  <span className="text-[11px]">
+                    Cart contains <strong>Price Regulated items</strong> (excluded from online advance discount).
+                  </span>
+                </div>
+              </div>
+            ) : null}
 
             {/* Breakdown Summary */}
             <div className="space-y-1 text-xs text-gray-600 border-t border-gray-200 pt-2">
@@ -212,6 +228,30 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                 <span>Items Subtotal:</span>
                 <span className="font-bold text-gray-900">₹{checkoutBreakdown.subtotal}</span>
               </div>
+              {checkoutBreakdown.excludedSubtotal > 0 && checkoutBreakdown.eligibleSubtotal > 0 && (
+                <>
+                  <div className="flex justify-between text-[11px] text-gray-500 pl-2">
+                    <span>• Eligible for Discount:</span>
+                    <span>₹{checkoutBreakdown.eligibleSubtotal}</span>
+                  </div>
+                  <div className="flex justify-between text-[11px] text-amber-800 pl-2 font-medium">
+                    <span>• Price Regulated (No Discount):</span>
+                    <span>₹{checkoutBreakdown.excludedSubtotal}</span>
+                  </div>
+                </>
+              )}
+              {checkoutBreakdown.advanceDiscountAmount > 0 && (
+                <div className="flex justify-between text-emerald-700 font-bold">
+                  <span>Advance UPI Discount ({settings.advancePaymentDiscountPct}% on eligible):</span>
+                  <span>-₹{checkoutBreakdown.advanceDiscountAmount}</span>
+                </div>
+              )}
+              {checkoutBreakdown.advanceDiscountAmount === 0 && checkoutBreakdown.excludedSubtotal > 0 && (
+                <div className="flex justify-between text-gray-500 text-[11px]">
+                  <span>Advance UPI Discount:</span>
+                  <span>₹0 (Price Regulated items)</span>
+                </div>
+              )}
               <div className="flex justify-between">
                 <span>Delivery Fee:</span>
                 <span>
@@ -222,7 +262,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                   )}
                 </span>
               </div>
-              <div className="flex justify-between text-emerald-700 font-bold">
+              <div className="flex justify-between text-emerald-700 font-bold pt-1 border-t border-gray-200">
                 <span>Advance UPI Payable:</span>
                 <span className="text-sm font-black text-emerald-800">
                   ₹{checkoutBreakdown.advanceFinalTotal}

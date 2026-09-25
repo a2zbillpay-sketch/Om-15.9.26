@@ -291,7 +291,11 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
               <div className="text-[11px] text-emerald-800 font-semibold">Advance Payment Amount</div>
               <div className="text-2xl font-black text-emerald-800">₹{checkoutBreakdown.advanceFinalTotal}</div>
               <div className="text-[10px] text-emerald-700 font-bold mt-0.5">
-                Includes {checkoutBreakdown.advanceDiscountAmount > 0 ? `₹${checkoutBreakdown.advanceDiscountAmount} Instant Advance Discount` : ''}
+                {checkoutBreakdown.advanceDiscountAmount > 0
+                  ? `Includes ₹${checkoutBreakdown.advanceDiscountAmount} Instant Advance Discount (Applied on eligible items)`
+                  : checkoutBreakdown.excludedSubtotal > 0
+                  ? 'Price Regulated items in cart (Discount excluded)'
+                  : ''}
               </div>
             </div>
 

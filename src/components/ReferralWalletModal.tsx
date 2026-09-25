@@ -8,10 +8,14 @@ interface ReferralWalletModalProps {
 }
 
 export const ReferralWalletModal: React.FC<ReferralWalletModalProps> = ({ isOpen, onClose }) => {
-  const { currentUser, settings } = useApp();
+  const { currentUser, settings, customerOutstanding } = useApp();
   const [copied, setCopied] = useState(false);
 
   if (!isOpen) return null;
+
+  const hasDebt = customerOutstanding > 0 || (currentUser.walletBalance !== undefined && currentUser.walletBalance < 0);
+  const debtAmount = customerOutstanding > 0 ? customerOutstanding : Math.abs(currentUser.walletBalance || 0);
+  const displayAmount = hasDebt ? `-₹${Math.round(debtAmount)}` : `₹${currentUser.walletBalance >= 0 ? currentUser.walletBalance : 0}`;
 
   const referralMessage = `Get wholesale and retail groceries delivered fast from ${settings.appName}! Use my referral code *${currentUser.referralCode}* to get ₹${settings.referralRewardAmount} wallet cash on your first order.`;
 
@@ -28,12 +32,14 @@ export const ReferralWalletModal: React.FC<ReferralWalletModalProps> = ({ isOpen
 
   return (
     <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn">
-      <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden border-t-4 border-emerald-600 max-h-[90vh] flex flex-col justify-between">
+      <div className={`bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden border-t-4 max-h-[90vh] flex flex-col justify-between ${hasDebt ? 'border-rose-600' : 'border-emerald-600'}`}>
         {/* Header */}
         <div className="p-4 bg-[#0F2C59] text-white flex justify-between items-center">
           <div className="flex items-center gap-2">
-            <Wallet size={20} className="text-[#D4AF37]" />
-            <h2 className="font-extrabold text-base text-[#D4AF37]">Store Wallet & Referrals</h2>
+            <Wallet size={20} className={hasDebt ? "text-rose-400" : "text-[#D4AF37]"} />
+            <h2 className="font-extrabold text-base text-[#D4AF37]">
+              {hasDebt ? 'Store Balance & COD Debt' : 'Store Wallet & Referrals'}
+            </h2>
           </div>
           <button
             onClick={onClose}
@@ -45,14 +51,28 @@ export const ReferralWalletModal: React.FC<ReferralWalletModalProps> = ({ isOpen
 
         <div className="p-5 overflow-y-auto space-y-5 flex-1">
           {/* Balance Card */}
-          <div className="bg-gradient-to-br from-emerald-600 to-[#0F2C59] text-white p-5 rounded-2xl shadow-lg relative overflow-hidden">
+          <div
+            className={`text-white p-5 rounded-2xl shadow-lg relative overflow-hidden ${
+              hasDebt
+                ? 'bg-gradient-to-br from-rose-700 via-rose-900 to-[#0F2C59]'
+                : 'bg-gradient-to-br from-emerald-600 to-[#0F2C59]'
+            }`}
+          >
             <div className="relative z-10">
-              <div className="text-xs text-emerald-200 font-semibold">Available Wallet Cash</div>
-              <div className="text-3xl font-black tracking-tight text-white mt-1">
-                ₹{currentUser.walletBalance}
+              <div
+                className={`text-xs font-semibold uppercase tracking-wider ${
+                  hasDebt ? 'text-rose-200' : 'text-emerald-200'
+                }`}
+              >
+                {hasDebt ? 'COD Outstanding Debt' : 'Available Wallet Cash'}
               </div>
-              <p className="text-[11px] text-emerald-100 mt-2">
-                100% usable on your next checkout! Automatically credited from refunds and referrals.
+              <div className="text-3xl font-black tracking-tight text-white mt-1">
+                {displayAmount}
+              </div>
+              <p className={`text-[11px] mt-2 ${hasDebt ? 'text-rose-100' : 'text-emerald-100'}`}>
+                {hasDebt
+                  ? 'Unpaid balance on past Cash on Delivery orders. This will be automatically added to your next order payable.'
+                  : '100% usable on your next checkout! Automatically credited from refunds and referrals.'}
               </p>
             </div>
             <div className="absolute right-[-10px] bottom-[-20px] opacity-15 text-white text-8xl font-black">

@@ -1,0 +1,251 @@
+{
+  "version": 1,
+  "transactions": [
+    {
+      "id": "cod_tx_1790340641988_h7wc8",
+      "orderId": "ord-2",
+      "orderNumber": "OM-00002",
+      "customerId": "usr-1",
+      "customerPhone": "9820123456",
+      "customerName": "Rajesh Gupta",
+      "amount": 394,
+      "previousOutstanding": 99,
+      "orderAmount": 295,
+      "totalPayable": 394,
+      "collectedAmount": 394,
+      "remainingOutstanding": 0,
+      "allocations": [
+        {
+          "orderId": "ord-1",
+          "orderNumber": "OM-00001",
+          "amountAllocated": 99,
+          "orderRemainingUnpaid": 0
+        },
+        {
+          "orderId": "ord-2",
+          "orderNumber": "OM-00002",
+          "amountAllocated": 295,
+          "orderRemainingUnpaid": 0
+        }
+      ],
+      "notes": "",
+      "createdAt": "2026-09-25T12:50:41.988Z"
+    },
+    {
+      "id": "cod_tx_1790339738732_8s4ll",
+      "orderId": "ord-1790335927467",
+      "orderNumber": "OM-52742",
+      "customerId": "usr_1790237084424",
+      "customerPhone": "9999999999",
+      "customerName": "विठ्ठल",
+      "amount": 394,
+      "previousOutstanding": 99,
+      "orderAmount": 295,
+      "totalPayable": 394,
+      "collectedAmount": 394,
+      "remainingOutstanding": 0,
+      "allocations": [
+        {
+          "orderId": "ord-1790335927467",
+          "orderNumber": "OM-52742",
+          "amountAllocated": 295,
+          "orderRemainingUnpaid": 0
+        }
+      ],
+      "notes": "",
+      "createdAt": "2026-09-25T12:35:38.732Z"
+    },
+    {
+      "id": "cod_tx_1790339319167_x8ye3",
+      "orderId": "ord-1790335927467",
+      "orderNumber": "OM-52742",
+      "customerId": "usr_1790237084424",
+      "customerPhone": "9999999999",
+      "customerName": "विठ्ठल",
+      "amount": 300,
+      "previousOutstanding": 99,
+      "orderAmount": 295,
+      "totalPayable": 394,
+      "collectedAmount": 300,
+      "remainingOutstanding": 94,
+      "allocations": [
+        {
+          "orderId": "ord-1790335927467",
+          "orderNumber": "OM-52742",
+          "amountAllocated": 295,
+          "orderRemainingUnpaid": 94
+        }
+      ],
+      "notes": "",
+      "createdAt": "2026-09-25T12:28:39.167Z"
+    },
+    {
+      "id": "cod_tx_1790338761433_pi4j0",
+      "orderId": "ord-1790335927467",
+      "orderNumber": "OM-52742",
+      "customerId": "usr_1790237084424",
+      "customerPhone": "9999999999",
+      "customerName": "विठ्ठल",
+      "amount": 300,
+      "previousOutstanding": 99,
+      "orderAmount": 295,
+      "totalPayable": 394,
+      "collectedAmount": 300,
+      "remainingOutstanding": 0,
+      "allocations": [
+        {
+          "orderId": "ord-1790335927467",
+          "orderNumber": "OM-52742",
+          "amountAllocated": 295,
+          "orderRemainingUnpaid": 0
+        }
+      ],
+      "notes": "",
+      "createdAt": "2026-09-25T12:19:21.433Z"
+    },
+    {
+      "id": "cod_tx_1790338647869_8w7w7",
+      "orderId": "ord-1790335927467",
+      "orderNumber": "OM-52742",
+      "customerId": "usr_1790237084424",
+      "customerPhone": "9999999999",
+      "customerName": "विठ्ठल",
+      "amount": 300,
+      "previousOutstanding": 99,
+      "orderAmount": 295,
+      "totalPayable": 394,
+      "collectedAmount": 300,
+      "remainingOutstanding": 0,
+      "allocations": [
+        {
+          "orderId": "ord-1790335927467",
+          "orderNumber": "OM-52742",
+          "amountAllocated": 295,
+          "orderRemainingUnpaid": 0
+        }
+      ],
+      "notes": "",
+      "createdAt": "2026-09-25T12:17:27.869Z"
+    },
+    {
+      "id": "cod_tx_1790336108920_8nba2",
+      "orderId": "ord-1790335927467",
+      "orderNumber": "OM-52742",
+      "customerId": "usr_1790237084424",
+      "customerPhone": "9999999999",
+      "customerName": "विठ्ठल",
+      "amount": 300,
+      "previousOutstanding": 99,
+      "orderAmount": 295,
+      "totalPayable": 394,
+      "collectedAmount": 300,
+      "remainingOutstanding": 0,
+      "allocations": [
+        {
+          "orderId": "ord-1790335927467",
+          "orderNumber": "OM-52742",
+          "amountAllocated": 295,
+          "orderRemainingUnpaid": 0
+        }
+      ],
+      "notes": "",
+      "createdAt": "2026-09-25T11:35:08.920Z"
+    }
+  ],
+  "orders": {
+    "ord-1790335927467": {
+      "id": "ord-1790335927467",
+      "orderNumber": "OM-52742",
+      "customerPhone": "9999999999",
+      "customerId": "usr_1790237084424",
+      "customerName": "विठ्ठल",
+      "finalAmount": 295,
+      "previousOutstanding": 99,
+      "totalPayable": 394,
+      "codCollectedAmount": 394,
+      "paymentStatus": "RECEIVED",
+      "status": "DELIVERED",
+      "createdAt": "2026-09-25T11:32:07.467+00:00",
+      "updatedAt": "2026-09-25T12:35:38.732Z"
+    },
+    "ord-1790332026212": {
+      "id": "ord-1790332026212",
+      "orderNumber": "OM-24408",
+      "customerPhone": "9999999999",
+      "customerId": "usr_1790237084424",
+      "customerName": "विठ्ठल",
+      "finalAmount": 199,
+      "previousOutstanding": 0,
+      "totalPayable": 199,
+      "codCollectedAmount": 199,
+      "paymentStatus": "RECEIVED",
+      "status": "DELIVERED",
+      "createdAt": "2026-09-25T10:27:06.212+00:00",
+      "updatedAt": "2026-09-25T12:35:38.732Z"
+    },
+    "ord-1790261163658": {
+      "id": "ord-1790261163658",
+      "orderNumber": "OM-59199",
+      "customerPhone": "9999999999",
+      "customerId": "usr_1790237084424",
+      "customerName": "विठ्ठल",
+      "finalAmount": 881,
+      "previousOutstanding": 0,
+      "totalPayable": 881,
+      "codCollectedAmount": 881,
+      "paymentStatus": "RECEIVED",
+      "status": "DELIVERED",
+      "createdAt": "2026-09-24T14:46:03.658+00:00",
+      "updatedAt": "2026-09-25T12:35:38.732Z"
+    },
+    "ord-1790237274775": {
+      "id": "ord-1790237274775",
+      "orderNumber": "OM-37143",
+      "customerPhone": "9999999999",
+      "customerId": "usr_1790237084424",
+      "customerName": "विठ्ठल",
+      "finalAmount": 372,
+      "previousOutstanding": 0,
+      "totalPayable": 372,
+      "codCollectedAmount": 372,
+      "paymentStatus": "RECEIVED",
+      "status": "DELIVERED",
+      "createdAt": "2026-09-24T08:07:54.775+00:00",
+      "updatedAt": "2026-09-25T12:35:38.732Z"
+    },
+    "ord-1": {
+      "id": "ord-1",
+      "orderNumber": "OM-00001",
+      "customerPhone": "9820123456",
+      "customerId": "usr-1",
+      "customerName": "Rajesh Gupta",
+      "finalAmount": 199,
+      "previousOutstanding": 0,
+      "totalPayable": 199,
+      "codCollectedAmount": 199,
+      "paymentStatus": "RECEIVED",
+      "status": "ORDER_ACCEPTED",
+      "createdAt": "2026-09-25T01:00:00.000Z",
+      "updatedAt": "2026-09-25T12:50:41.988Z"
+    },
+    "ord-2": {
+      "id": "ord-2",
+      "orderNumber": "OM-00002",
+      "customerPhone": "9820123456",
+      "customerId": "usr-1",
+      "customerName": "Rajesh Gupta",
+      "finalAmount": 295,
+      "previousOutstanding": 99,
+      "totalPayable": 394,
+      "codCollectedAmount": 394,
+      "paymentStatus": "RECEIVED",
+      "status": "ORDER_ACCEPTED",
+      "createdAt": "2026-09-25T02:00:00.000Z",
+      "updatedAt": "2026-09-25T12:50:41.988Z"
+    }
+  },
+  "customerBalances": {
+    "9999999999": 0,
+    "9820123456": 0
+  }
+}

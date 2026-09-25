@@ -56,6 +56,7 @@ export interface User {
   referralCode: string;
   referredById?: string | null;
   walletBalance: number;
+  outstandingBalance?: number;
   codOrderCount: number;
   addresses: Address[];
   createdAt: string;
@@ -115,6 +116,7 @@ export interface OrderItem {
   quantity: number;
   unitPrice: number;
   price: number;
+  isDiscountExcluded?: boolean;
 }
 
 export interface Order {

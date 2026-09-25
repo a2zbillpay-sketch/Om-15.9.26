@@ -43,6 +43,7 @@ export const Navbar: React.FC<NavbarProps> = ({
     checkoutBreakdown,
     settings,
     orders,
+    customerOutstanding,
     logout,
     logoutAdminSession,
     setIsAuthModalOpen,
@@ -57,6 +58,12 @@ export const Navbar: React.FC<NavbarProps> = ({
   const activeOrdersCount = orders.filter(
     (o) => o.userId === currentUser.id && o.status !== 'DELIVERED' && o.status !== 'CANCELLED'
   ).length;
+
+  const hasDebt = customerOutstanding > 0;
+  const debtAmount = customerOutstanding;
+  const formattedBalance = hasDebt
+    ? `-₹${Math.round(debtAmount)}`
+    : `₹${currentUser.walletBalance && currentUser.walletBalance > 0 ? currentUser.walletBalance : 0}`;
 
   const currentAddress = currentUser.addresses.find((a) => a.isDefault) || currentUser.addresses[0];
 
@@ -161,11 +168,15 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <button
                   id="open-wallet-btn"
                   onClick={onOpenWallet}
-                  className="flex items-center gap-1.5 bg-emerald-950/70 hover:bg-emerald-900/80 border border-emerald-500/40 text-emerald-300 px-2.5 py-1.5 rounded-lg text-xs font-bold transition shadow-sm"
-                  title="Your Wallet Balance & Referrals"
+                  className={`flex items-center gap-1.5 border px-2.5 py-1.5 rounded-lg text-xs font-bold transition shadow-sm ${
+                    hasDebt
+                      ? 'bg-rose-950/80 hover:bg-rose-900 border-rose-500/40 text-rose-300'
+                      : 'bg-emerald-950/70 hover:bg-emerald-900/80 border-emerald-500/40 text-emerald-300'
+                  }`}
+                  title={hasDebt ? `COD Outstanding Debt: ${formattedBalance}` : "Your Wallet Balance & Referrals"}
                 >
-                  <Wallet size={14} className="text-emerald-400" />
-                  <span>₹{currentUser.walletBalance}</span>
+                  <Wallet size={14} className={hasDebt ? "text-rose-400" : "text-emerald-400"} />
+                  <span>{formattedBalance}</span>
                 </button>
 
                 {/* My Orders Button */}

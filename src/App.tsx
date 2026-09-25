@@ -52,6 +52,27 @@ const MainLayout: React.FC = () => {
   const handleShopkeeperClick = async () => {
     const isValid = isAdminSessionValid || (await checkAdminSession());
     if (!isValid) {
+      /* ===== TEMPORARY DEV ADMIN LOGIN BYPASS (REMOVE TO RESTORE STRICT DEV PW) ===== */
+      if (import.meta.env.DEV) {
+        try {
+          const res = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ bypassDev: true }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (data.authenticated) {
+            await checkAdminSession();
+            setActiveRole(Role.SHOPKEEPER);
+            return;
+          }
+        } catch {
+          // fallback to modal
+        }
+      }
+      /* ===== END TEMPORARY DEV ADMIN LOGIN BYPASS ===== */
+
       setIsAdminLoginModalOpen(true);
       return;
     }

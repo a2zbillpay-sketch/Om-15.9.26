@@ -127,13 +127,17 @@ export async function getOrCreateCustomerByPhone(
           ]
         : [];
 
+      const dbOutstanding = Number(existingUser.outstanding_balance || 0);
+      const dbCredits = Number(existingUser.wallet_balance || 0);
+
       return {
         id: existingUser.id,
         name: existingUser.name || name || '',
         phone: existingUser.phone,
         role: (existingUser.role as Role) || role,
         referralCode: existingUser.referral_code || `OM${cleanPhone.slice(-4)}`,
-        walletBalance: Number(existingUser.outstanding_balance || existingUser.wallet_balance || 0),
+        walletBalance: dbOutstanding > 0 ? -dbOutstanding : dbCredits,
+        outstandingBalance: dbOutstanding,
         codOrderCount: Number(existingUser.cod_order_count || 0),
         addresses: formattedAddresses,
         createdAt: existingUser.updated_at || existingUser.created_at || new Date().toISOString(),
@@ -278,13 +282,17 @@ export async function saveCustomerProfileToSupabase(
       isDefault: true,
     };
 
+    const dbOutstanding = Number(targetUser?.outstanding_balance || 0);
+    const dbCredits = Number(targetUser?.wallet_balance || 0);
+
     return {
       id: targetUser?.id || userId,
       name: targetUser?.name || name.trim(),
       phone: cleanPhone,
       role: Role.CUSTOMER,
       referralCode: `OM${cleanPhone.slice(-4)}`,
-      walletBalance: Number(targetUser?.outstanding_balance || 0),
+      walletBalance: dbOutstanding > 0 ? -dbOutstanding : dbCredits,
+      outstandingBalance: dbOutstanding,
       codOrderCount: 0,
       addresses: [finalAddressObj],
       createdAt: targetUser?.updated_at || new Date().toISOString(),
@@ -368,13 +376,17 @@ export async function fetchCustomerProfileFromSupabase(phone: string): Promise<U
         ]
       : [];
 
+    const dbOutstanding = Number(dbUser.outstanding_balance || 0);
+    const dbCredits = Number(dbUser.wallet_balance || 0);
+
     return {
       id: dbUser.id,
       name: dbUser.name || '',
       phone: dbUser.phone,
       role: Role.CUSTOMER,
       referralCode: dbUser.referral_code || `OM${cleanPhone.slice(-4)}`,
-      walletBalance: Number(dbUser.outstanding_balance || 0),
+      walletBalance: dbOutstanding > 0 ? -dbOutstanding : dbCredits,
+      outstandingBalance: dbOutstanding,
       codOrderCount: Number(dbUser.cod_order_count || 0),
       addresses: formattedAddresses,
       createdAt: dbUser.updated_at || new Date().toISOString(),
@@ -582,7 +594,7 @@ export async function fetchCustomerOrdersFromSupabase(
       }
 
       let paymentStatus: PaymentStatus = PaymentStatus.PENDING;
-      if (o.is_paid || codCollectedAmount >= finalAmount) {
+      if (o.is_paid || codCollectedAmount >= totalPayable) {
         paymentStatus = PaymentStatus.RECEIVED;
       } else if (codCollectedAmount > 0) {
         paymentStatus = PaymentStatus.PARTIALLY_COLLECTED;
@@ -733,7 +745,7 @@ export async function fetchAllOrdersForAdmin(): Promise<Order[] | null> {
       }
 
       let paymentStatus: PaymentStatus = PaymentStatus.PENDING;
-      if (o.is_paid || codCollectedAmount >= finalAmount) {
+      if (o.is_paid || codCollectedAmount >= totalPayable) {
         paymentStatus = PaymentStatus.RECEIVED;
       } else if (codCollectedAmount > 0) {
         paymentStatus = PaymentStatus.PARTIALLY_COLLECTED;
@@ -1056,7 +1068,7 @@ export async function fetchProductsFromSupabase(): Promise<Product[] | null> {
         categoryId,
         imageUrl: p.image_url && String(p.image_url).trim() ? String(p.image_url).trim() : undefined,
         barcode: p.barcode ? String(p.barcode).trim() : null,
-        isDiscountExcluded: Boolean(p.is_discount_excluded),
+        isDiscountExcluded: p.is_discount_excluded ?? false,
         variants,
         createdAt: p.created_at || p.updated_at || new Date().toISOString(),
       };

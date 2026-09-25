@@ -194,7 +194,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
         collectedAmount,
         previousOutstanding = 0,
         orderAmount,
-        totalPayable,
+        totalPayable: inputTotalPayable,
         markAsDelivered = false,
         notes = '',
         allCustomerOrders = [], // Optional full order list passed from frontend
@@ -211,7 +211,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
       if (allCustomerOrders && Array.isArray(allCustomerOrders)) {
         for (const o of allCustomerOrders) {
           if (o.id) {
-            const existing = ledger.orders[o.id] || {};
+            const existing: Partial<OrderRecord> = ledger.orders[o.id] || {};
             ledger.orders[o.id] = {
               ...existing,
               id: o.id,
@@ -242,7 +242,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
           customerName,
           finalAmount: Number(orderAmount) || 0,
           previousOutstanding: Number(previousOutstanding) || 0,
-          totalPayable: Number(totalPayable) || Number(orderAmount) || 0,
+          totalPayable: Number(inputTotalPayable) || Number(orderAmount) || 0,
           codCollectedAmount: 0,
           paymentStatus: 'PENDING',
           status: 'ORDER_ACCEPTED',
@@ -267,74 +267,138 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
       const olderOrders = customerOrdersList.filter((o) => o.id !== orderId);
       const targetOrder = customerOrdersList.find((o) => o.id === orderId);
 
-      const allocationQueue = [...olderOrders];
-      if (targetOrder) {
-        allocationQueue.push(targetOrder);
-      }
-
-      let cashToAllocate = cleanCollected;
       const allocations: CodTransactionAllocation[] = [];
       const updatedOrdersMap: Record<string, any> = {};
 
-      for (const ord of allocationQueue) {
-        const bill = Number(ord.finalAmount) || 0;
-        const currentCollected = Number(ord.codCollectedAmount) || 0;
-        const unpaid = Math.max(0, bill - currentCollected);
+      const bill = Number(targetOrder?.finalAmount) || 0;
+      const prevDebt = Number(targetOrder?.previousOutstanding) || 0;
+      const totalPayable = Number(targetOrder?.totalPayable) || (bill + prevDebt);
 
-        if (unpaid <= 0) {
+      const newCollected = cleanCollected;
+      const remainingUnpaid = Math.max(0, Math.round((totalPayable - newCollected) * 100) / 100);
+
+      let nextPaymentStatus = 'PENDING';
+      if (newCollected >= totalPayable) {
+        nextPaymentStatus = 'RECEIVED';
+      } else if (newCollected > 0) {
+        nextPaymentStatus = 'PARTIALLY_COLLECTED';
+      }
+
+      // 1. Allocate cash across older orders first (FIFO) up to prevDebt
+      let cashForOlder = Math.min(cleanCollected, prevDebt);
+      for (const ord of olderOrders) {
+        const oBill = Number(ord.finalAmount) || 0;
+        const oAlready = Number(ord.codCollectedAmount) || 0;
+        const oUnpaid = Math.max(0, oBill - oAlready);
+
+        // If newCollected pays the entire totalPayable, all older debt rolled into it is 100% satisfied
+        if (newCollected >= totalPayable) {
+          ord.codCollectedAmount = oBill;
+          ord.paymentStatus = 'RECEIVED';
+          ord.updatedAt = new Date().toISOString();
+
+          updatedOrdersMap[ord.id] = {
+            codCollectedAmount: oBill,
+            paymentStatus: 'RECEIVED',
+            status: ord.status,
+          };
+
+          allocations.push({
+            orderId: ord.id,
+            orderNumber: ord.orderNumber,
+            amountAllocated: oUnpaid,
+            orderRemainingUnpaid: 0,
+          });
           continue;
         }
 
-        const alloc = Math.min(cashToAllocate, unpaid);
-        const newCollected = Math.round((currentCollected + alloc) * 100) / 100;
-        const remainingUnpaid = Math.max(0, Math.round((bill - newCollected) * 100) / 100);
+        if (oUnpaid <= 0) {
+          continue;
+        }
 
-        let nextPaymentStatus = 'PENDING';
-        if (newCollected >= bill) {
-          nextPaymentStatus = 'RECEIVED';
-        } else if (newCollected > 0) {
-          nextPaymentStatus = 'PARTIALLY_COLLECTED';
+        const alloc = Math.min(cashForOlder, oUnpaid);
+        const updatedCollected = Math.round((oAlready + alloc) * 100) / 100;
+        const remUnpaid = Math.max(0, Math.round((oBill - updatedCollected) * 100) / 100);
+
+        let status = 'PENDING';
+        if (updatedCollected >= oBill) {
+          status = 'RECEIVED';
+        } else if (updatedCollected > 0) {
+          status = 'PARTIALLY_COLLECTED';
         }
 
         allocations.push({
           orderId: ord.id,
           orderNumber: ord.orderNumber,
           amountAllocated: alloc,
-          orderRemainingUnpaid: remainingUnpaid,
+          orderRemainingUnpaid: remUnpaid,
         });
 
-        const isCurrent = ord.id === orderId;
-        const nextStatus = isCurrent && markAsDelivered ? 'DELIVERED' : ord.status;
-
-        ord.codCollectedAmount = newCollected;
-        ord.paymentStatus = nextPaymentStatus;
-        ord.status = nextStatus;
+        ord.codCollectedAmount = updatedCollected;
+        ord.paymentStatus = status;
         ord.updatedAt = new Date().toISOString();
 
         updatedOrdersMap[ord.id] = {
+          codCollectedAmount: updatedCollected,
+          paymentStatus: status,
+          status: ord.status,
+        };
+
+        cashForOlder = Math.round((cashForOlder - alloc) * 100) / 100;
+      }
+
+      // 2. Allocate to targetOrder: exact entered amount stored as collected
+      if (targetOrder) {
+        const nextStatus = markAsDelivered ? 'DELIVERED' : targetOrder.status;
+        const allocToBill = Math.min(Math.max(0, cleanCollected - prevDebt), bill);
+
+        allocations.push({
+          orderId: targetOrder.id,
+          orderNumber: targetOrder.orderNumber,
+          amountAllocated: allocToBill,
+          orderRemainingUnpaid: remainingUnpaid,
+        });
+
+        targetOrder.codCollectedAmount = newCollected;
+        targetOrder.paymentStatus = nextPaymentStatus;
+        targetOrder.status = nextStatus;
+        targetOrder.updatedAt = new Date().toISOString();
+
+        updatedOrdersMap[targetOrder.id] = {
           codCollectedAmount: newCollected,
           paymentStatus: nextPaymentStatus,
           status: nextStatus,
         };
-
-        cashToAllocate = Math.round((cashToAllocate - alloc) * 100) / 100;
       }
 
-      // Calculate new remaining customer balance across all unpaid orders
-      let remainingCustomerDebt = 0;
-      for (const ord of Object.values(ledger.orders)) {
-        if (
-          ord.status !== 'CANCELLED' &&
-          (!cleanPhone || normalizePhone(ord.customerPhone) === cleanPhone)
-        ) {
-          const b = Number(ord.finalAmount) || 0;
-          const c = Number(ord.codCollectedAmount) || 0;
-          if (ord.paymentStatus !== 'RECEIVED' || c < b) {
-            remainingCustomerDebt += Math.max(0, b - c);
-          }
+      // 3. Recalculate customer debt across all chronological orders without recreating/duplicating debt
+      const sortedCustomerOrders = Object.values(ledger.orders)
+        .filter(
+          (o) =>
+            o.status !== 'CANCELLED' &&
+            (!cleanPhone || normalizePhone(o.customerPhone) === cleanPhone)
+        )
+        .sort(
+          (a, b) =>
+            new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime()
+        );
+
+      let runningCustomerDebt = 0;
+      for (const ord of sortedCustomerOrders) {
+        const b = Number(ord.finalAmount) || 0;
+        const p = Number(ord.previousOutstanding || 0);
+        const pay = Number(ord.totalPayable) || (b + (p || runningCustomerDebt));
+        const c = Number(ord.codCollectedAmount) || 0;
+        const isRecv = ord.paymentStatus === 'RECEIVED';
+
+        if (isRecv || c >= pay) {
+          runningCustomerDebt = 0;
+        } else {
+          runningCustomerDebt = Math.max(0, Math.round((pay - c) * 100) / 100);
         }
       }
-      remainingCustomerDebt = Math.round(remainingCustomerDebt * 100) / 100;
+
+      const remainingCustomerDebt = Math.round(runningCustomerDebt * 100) / 100;
       ledger.customerBalances[cleanPhone] = remainingCustomerDebt;
 
       // Create permanent transaction record

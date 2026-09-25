@@ -434,6 +434,7 @@ export async function saveProductWithCascadeSync(
       image_url: product.imageUrl && product.imageUrl.trim() ? product.imageUrl.trim() : null,
       wholesale_tier_discount: product.variants || [],
       barcode: product.barcode && product.barcode.trim() ? product.barcode.trim() : null,
+      is_discount_excluded: product.isDiscountExcluded ?? false,
       updated_at: new Date().toISOString(),
     };
 
@@ -441,10 +442,22 @@ export async function saveProductWithCascadeSync(
       .from('products')
       .upsert(productPayload, { onConflict: 'id' });
 
-    // Graceful fallback: If barcode column has not yet been migrated in Supabase table
+    // Graceful fallback: If barcode or is_discount_excluded column has not yet been migrated in Supabase table
     if (prodInsertResult.error && prodInsertResult.error.message?.includes('barcode')) {
       const fallbackPayload = { ...productPayload };
       delete fallbackPayload.barcode;
+      prodInsertResult = await supabaseClient
+        .from('products')
+        .upsert(fallbackPayload, { onConflict: 'id' });
+    }
+
+    if (
+      prodInsertResult.error &&
+      (prodInsertResult.error.message?.includes('is_discount_excluded') ||
+        prodInsertResult.error.message?.toLowerCase().includes("could not find the 'is_discount_excluded' column"))
+    ) {
+      const fallbackPayload = { ...productPayload };
+      delete fallbackPayload.is_discount_excluded;
       prodInsertResult = await supabaseClient
         .from('products')
         .upsert(fallbackPayload, { onConflict: 'id' });

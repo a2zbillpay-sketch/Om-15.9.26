@@ -50,6 +50,7 @@ import {
   allocateCodCollection,
   recordCodCollectionViaApi,
   fetchCodCollectionsFromApi,
+  isSameCustomer,
 } from '../lib/cod-storage';
 
 export type CustomerFlowStep = 'AUTH' | 'PROFILE' | 'SHOP';
@@ -539,7 +540,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // If switching role, find matching user or switch current user's role
     const matchingUser = users.find((u) => u.role === role);
     if (matchingUser) {
-      setCurrentUser(matchingUser);
+      const userDebt = calculateCustomerOutstanding(orders, matchingUser.phone || matchingUser.id);
+      const updatedUser = {
+        ...matchingUser,
+        walletBalance: userDebt > 0 ? -userDebt : (matchingUser.walletBalance < 0 ? 0 : matchingUser.walletBalance),
+        outstandingBalance: userDebt,
+      };
+      setCurrentUser(updatedUser);
       setSelectedAddressId(matchingUser.addresses[0]?.id || null);
     } else {
       const updatedUser = { ...currentUser, role };
@@ -851,21 +858,67 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Customer outstanding balance calculation
+  // Customer outstanding balance calculation (Source of truth: persistent orders & DB)
   const customerOutstanding = useMemo(() => {
     const phoneOrId = currentUser.phone || currentUser.id;
     if (!phoneOrId) return 0;
-    return calculateCustomerOutstanding(orders, phoneOrId);
-  }, [orders, currentUser.phone, currentUser.id]);
+    const fromOrders = calculateCustomerOutstanding(orders, phoneOrId);
+    const hasCustomerOrders = orders.some(
+      (o) => o.paymentMethod === PaymentMethod.COD && isSameCustomer(o, phoneOrId)
+    );
+    if (hasCustomerOrders) {
+      return fromOrders;
+    }
+    if (currentUser.outstandingBalance && currentUser.outstandingBalance > 0) {
+      return currentUser.outstandingBalance;
+    }
+    return 0;
+  }, [orders, currentUser.phone, currentUser.id, currentUser.outstandingBalance]);
 
   const getCustomerOutstanding = useCallback(
     (phoneOrId?: string): number => {
       const target = phoneOrId || currentUser.phone || currentUser.id;
       if (!target) return 0;
-      return calculateCustomerOutstanding(orders, target);
+      const fromOrders = calculateCustomerOutstanding(orders, target);
+      const hasCustomerOrders = orders.some(
+        (o) => o.paymentMethod === PaymentMethod.COD && isSameCustomer(o, target)
+      );
+      if (hasCustomerOrders) {
+        return fromOrders;
+      }
+      if (target === currentUser.phone || target === currentUser.id) {
+        if (currentUser.outstandingBalance && currentUser.outstandingBalance > 0) {
+          return currentUser.outstandingBalance;
+        }
+      }
+      return 0;
     },
-    [orders, currentUser.phone, currentUser.id]
+    [orders, currentUser.phone, currentUser.id, currentUser.outstandingBalance]
   );
+
+  // Ensure customer COD outstanding debt is persistently represented as a negative balance
+  useEffect(() => {
+    if (activeRole === Role.CUSTOMER && (currentUser.phone || currentUser.id)) {
+      if (customerOutstanding > 0) {
+        const targetDebtBalance = -customerOutstanding;
+        if (currentUser.walletBalance !== targetDebtBalance || currentUser.outstandingBalance !== customerOutstanding) {
+          setCurrentUser((prev) => ({
+            ...prev,
+            walletBalance: targetDebtBalance,
+            outstandingBalance: customerOutstanding,
+          }));
+        }
+      } else if (customerOutstanding === 0) {
+        if (currentUser.walletBalance < 0 || (currentUser.outstandingBalance && currentUser.outstandingBalance > 0)) {
+          setCurrentUser((prev) => ({
+            ...prev,
+            walletBalance: 0,
+            outstandingBalance: 0,
+          }));
+        }
+      }
+    }
+  }, [activeRole, customerOutstanding, currentUser.phone, currentUser.id, currentUser.walletBalance, currentUser.outstandingBalance]);
 
   // Dynamic Checkout Breakdown calculation using the engine
   const checkoutBreakdown = useMemo(() => {
@@ -873,7 +926,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       variantId: item.variantId,
       quantity: item.quantity,
       baseSellingPrice: item.variant.baseSellingPrice,
-      isDiscountExcluded: item.product.isDiscountExcluded,
+      isDiscountExcluded: item.product.isDiscountExcluded === true || (item.product.isDiscountExcluded as any) === 'true',
       tieredPrices: item.variant.tieredPrices || [],
     }));
 
@@ -949,6 +1002,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           quantity: item.quantity,
           unitPrice,
           price: unitPrice * item.quantity,
+          isDiscountExcluded: item.product.isDiscountExcluded === true || (item.product.isDiscountExcluded as any) === 'true',
         };
       }),
     };
@@ -1119,6 +1173,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // Update React state with all affected orders
     setOrders(allocationResult.updatedOrders);
 
+    // Update customer in users list and currentUser if matching
+    const newDebt = allocationResult.remainingOutstanding;
+    setUsers((prev) =>
+      prev.map((u) => {
+        if (isSameCustomer({ userPhone: u.phone, userId: u.id }, targetCustomer)) {
+          return {
+            ...u,
+            walletBalance: newDebt > 0 ? -newDebt : (u.walletBalance < 0 ? 0 : u.walletBalance),
+            outstandingBalance: newDebt,
+          };
+        }
+        return u;
+      })
+    );
+
+    if (isSameCustomer({ userPhone: currentUser.phone, userId: currentUser.id }, targetCustomer)) {
+      setCurrentUser((prev) => ({
+        ...prev,
+        walletBalance: newDebt > 0 ? -newDebt : (prev.walletBalance < 0 ? 0 : prev.walletBalance),
+        outstandingBalance: newDebt,
+      }));
+    }
+
     // Persist permanently to backend database API and Supabase
     recordCodCollectionViaApi({
       orderId,
@@ -1132,7 +1209,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       totalPayable: orderPayable,
       markAsDelivered,
       allCustomerOrders: allocationResult.updatedOrders.filter(
-        (o) => o.userPhone === order.userPhone || o.userId === order.userId
+        (o) => isSameCustomer(o, order.userPhone || order.userId)
       ),
     }).catch((err) => {
       console.warn('Persistent COD API save notice:', err);
@@ -1285,10 +1362,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         );
       }
 
+      const userDebt = Number(
+        resolvedUser.outstandingBalance ?? calculateCustomerOutstanding(orders, cleanPhone)
+      );
+
       const finalUser: User = {
         ...resolvedUser,
         phone: cleanPhone,
         role: Role.CUSTOMER,
+        walletBalance: userDebt > 0 ? -userDebt : (resolvedUser.walletBalance || 0),
+        outstandingBalance: userDebt,
       };
 
       setCurrentUser(finalUser);

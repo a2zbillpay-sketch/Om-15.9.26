@@ -53,10 +53,14 @@ export const CustomerAuthPage: React.FC<CustomerAuthPageProps> = ({ onSuccess })
     e.preventDefault();
     setError('');
 
-    if (!adminPassword.trim()) {
+    /* ===== TEMPORARY DEV ADMIN LOGIN BYPASS (REMOVE TO RESTORE STRICT DEV PW) ===== */
+    const isDev = import.meta.env.DEV;
+    const isBypass = isDev && !adminPassword.trim();
+    if (!adminPassword.trim() && !isDev) {
       setError('Please enter your shopkeeper admin password.');
       return;
     }
+    /* ===== END TEMPORARY DEV ADMIN LOGIN BYPASS ===== */
 
     setIsLoading(true);
 
@@ -65,7 +69,10 @@ export const CustomerAuthPage: React.FC<CustomerAuthPageProps> = ({ onSuccess })
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ password: adminPassword.trim() }),
+        body: JSON.stringify({
+          password: adminPassword.trim(),
+          bypassDev: isBypass,
+        }),
       });
 
       const data = await res.json().catch(() => ({}));
@@ -341,18 +348,64 @@ export const CustomerAuthPage: React.FC<CustomerAuthPageProps> = ({ onSuccess })
           ) : (
             /* Shopkeeper Login Form */
             <form onSubmit={handleAdminLogin} className="space-y-4">
+              {/* ===== TEMPORARY DEV ADMIN LOGIN BYPASS (REMOVE TO RESTORE STRICT DEV PW) ===== */}
+              {import.meta.env.DEV && (
+                <div className="p-3 bg-amber-50 border border-amber-300 rounded-xl text-xs">
+                  <div className="flex items-center justify-between text-amber-900 font-bold mb-1">
+                    <span>🛠️ Dev Mode: Password Bypass</span>
+                    <span className="text-[10px] bg-amber-200 text-amber-900 px-2 py-0.5 rounded font-black">
+                      DEV ONLY
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-amber-800 leading-tight mb-2">
+                    Password check is bypassed for testing. Click below to enter instantly.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setIsLoading(true);
+                      setError('');
+                      try {
+                        const res = await fetch('/api/auth/login', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          credentials: 'include',
+                          body: JSON.stringify({ bypassDev: true }),
+                        });
+                        const data = await res.json().catch(() => ({}));
+                        if (data.authenticated) {
+                          loginWithPhone('9876543210', Role.SHOPKEEPER, 'Om Prakash Sharma');
+                          setActiveRole(Role.SHOPKEEPER);
+                          if (onSuccess) onSuccess();
+                        } else {
+                          setError('Dev bypass failed');
+                        }
+                      } catch {
+                        setError('Dev bypass network error');
+                      } finally {
+                        setIsLoading(false);
+                      }
+                    }}
+                    className="w-full bg-amber-600 hover:bg-amber-700 text-white font-extrabold py-2 px-3 rounded-lg text-xs flex items-center justify-center gap-1.5 shadow transition"
+                  >
+                    <span>⚡ 1-Click Shopkeeper Login (No Password)</span>
+                  </button>
+                </div>
+              )}
+              {/* ===== END TEMPORARY DEV ADMIN LOGIN BYPASS ===== */}
+
               <div>
                 <label className="block text-xs font-black text-gray-700 uppercase tracking-wider mb-1.5">
-                  Shopkeeper Admin Password
+                  Shopkeeper Admin Password {import.meta.env.DEV && <span className="text-amber-600 font-normal lowercase">(optional in dev)</span>}
                 </label>
                 <div className="relative">
                   <Lock size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" />
                   <input
                     type={showAdminPassword ? 'text' : 'password'}
-                    required
+                    required={!import.meta.env.DEV}
                     value={adminPassword}
                     onChange={(e) => setAdminPassword(e.target.value)}
-                    placeholder="Enter admin password"
+                    placeholder={import.meta.env.DEV ? "Enter password or leave blank for dev bypass" : "Enter admin password"}
                     className="w-full pl-9 pr-10 py-2.5 border border-gray-300 rounded-xl text-sm font-semibold text-gray-800 focus:ring-2 focus:ring-[#0F2C59] outline-none"
                   />
                   <button

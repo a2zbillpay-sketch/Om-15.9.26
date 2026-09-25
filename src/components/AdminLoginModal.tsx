@@ -64,10 +64,15 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
   // 1. Submit Login
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!password.trim()) {
+
+    /* ===== TEMPORARY DEV ADMIN LOGIN BYPASS (REMOVE TO RESTORE STRICT DEV PW) ===== */
+    const isDev = import.meta.env.DEV;
+    const isBypass = isDev && !password.trim();
+    if (!password.trim() && !isDev) {
       setError('Please enter the Admin password');
       return;
     }
+    /* ===== END TEMPORARY DEV ADMIN LOGIN BYPASS ===== */
 
     setError(null);
     setIsLoading(true);
@@ -77,7 +82,10 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ password: password.trim() }),
+        body: JSON.stringify({
+          password: password.trim(),
+          bypassDev: isBypass,
+        }),
       });
 
       const data = await res.json().catch(() => ({}));
@@ -270,9 +278,54 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
           {/* VIEW 1: LOGIN */}
           {mode === 'LOGIN' && (
             <form onSubmit={handleLoginSubmit} className="space-y-4">
+              {/* ===== TEMPORARY DEV ADMIN LOGIN BYPASS (REMOVE TO RESTORE STRICT DEV PW) ===== */}
+              {import.meta.env.DEV && (
+                <div className="p-3 bg-amber-50 border border-amber-300 rounded-xl text-xs">
+                  <div className="flex items-center justify-between text-amber-900 font-bold mb-1">
+                    <span>🛠️ Dev Mode: Password Bypass</span>
+                    <span className="text-[10px] bg-amber-200 text-amber-900 px-2 py-0.5 rounded font-black">
+                      DEV ONLY
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-amber-800 leading-tight mb-2">
+                    Admin password check is temporarily bypassed for development & testing.
+                  </p>
+                  <button
+                    type="button"
+                    id="quick-dev-admin-login-btn"
+                    onClick={async () => {
+                      setIsLoading(true);
+                      setError(null);
+                      try {
+                        const res = await fetch('/api/auth/login', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          credentials: 'include',
+                          body: JSON.stringify({ bypassDev: true }),
+                        });
+                        const data = await res.json().catch(() => ({}));
+                        if (data.authenticated) {
+                          onSuccess();
+                        } else {
+                          setError('Dev bypass failed');
+                        }
+                      } catch {
+                        setError('Dev bypass network error');
+                      } finally {
+                        setIsLoading(false);
+                      }
+                    }}
+                    className="w-full bg-amber-600 hover:bg-amber-700 text-white font-extrabold py-2 px-3 rounded-lg text-xs flex items-center justify-center gap-1.5 shadow transition"
+                  >
+                    <span>⚡ Quick 1-Click Admin Access (No Password)</span>
+                  </button>
+                </div>
+              )}
+              {/* ===== END TEMPORARY DEV ADMIN LOGIN BYPASS ===== */}
+
               <div>
                 <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-2">
-                  Admin Password
+                  Admin Password {import.meta.env.DEV && <span className="text-amber-600 font-normal lowercase">(optional in dev)</span>}
                 </label>
                 <div className="relative">
                   <input
@@ -280,7 +333,7 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
                     id="admin-password-input"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    placeholder="Enter password"
+                    placeholder={import.meta.env.DEV ? "Enter password or leave blank for dev bypass" : "Enter password"}
                     disabled={isLoading}
                     className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm font-medium text-gray-900 focus:outline-none focus:ring-2 focus:ring-[#0F2C59] focus:bg-white transition pr-10"
                     autoFocus

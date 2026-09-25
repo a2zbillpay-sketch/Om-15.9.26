@@ -819,11 +819,16 @@ export const AdminDashboard: React.FC = () => {
                             {order.items.length} {order.items.length === 1 ? 'item' : 'items'}
                           </span>
                           <div className="text-[10px] text-gray-500 truncate max-w-[150px]">
-                            {order.items.map((i) => i.productName).join(', ')}
+                            {order.items.map((i) => i.productName + (i.isDiscountExcluded ? ' (Regulated)' : '')).join(', ')}
                           </div>
                         </td>
                         <td className="p-3">
                           <div className="font-black text-gray-900">₹{order.finalAmount}</div>
+                          {order.paymentMethod === PaymentMethod.ADVANCE_ONLINE && order.discountAmount > 0 && (
+                            <div className="text-[10px] text-emerald-700 font-semibold mt-0.5">
+                              UPI Disc: -₹{order.discountAmount}
+                            </div>
+                          )}
                           {order.paymentMethod === PaymentMethod.COD && (
                             <div className="text-[10px] space-y-0.5 mt-0.5">
                               {order.previousOutstanding !== undefined && order.previousOutstanding > 0 && (

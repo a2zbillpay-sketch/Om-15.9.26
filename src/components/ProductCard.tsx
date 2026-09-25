@@ -11,11 +11,14 @@ interface ProductCardProps {
 }
 
 export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
-  const { cart, addToCart, updateCartQty } = useApp();
+  const { cart, addToCart, updateCartQty, settings } = useApp();
   const [selectedVariantId, setSelectedVariantId] = useState<string>(
     product.variants[0]?.id || ''
   );
   const [isZoomOpen, setIsZoomOpen] = useState(false);
+
+  const isExcluded =
+    product.isDiscountExcluded === true || (product.isDiscountExcluded as any) === 'true';
 
   const currentVariant =
     product.variants.find((v) => v.id === selectedVariantId) || product.variants[0];
@@ -108,9 +111,9 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
           )}
 
           {/* Excluded from advance discount badge or wholesale badge */}
-          {product.isDiscountExcluded ? (
-            <div className="absolute top-2.5 right-2.5 bg-amber-500 text-white font-bold text-[9px] px-2 py-0.5 rounded-full shadow-sm pointer-events-none">
-              Regulated
+          {isExcluded ? (
+            <div className="absolute top-2.5 right-2.5 bg-amber-600 text-white font-bold text-[9px] px-2.5 py-0.5 rounded-full shadow-sm pointer-events-none">
+              Price Regulated (No UPI Discount)
             </div>
           ) : (
             <div className="absolute top-2.5 right-2.5 bg-[#0F2C59]/90 backdrop-blur-sm text-[#D4AF37] font-extrabold text-[9px] px-2 py-0.5 rounded-full border border-[#D4AF37]/30 pointer-events-none">
@@ -195,6 +198,15 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
           <div className="text-[10px] text-gray-500 font-medium">
             Per {formatVariantPack(currentVariant)}
           </div>
+          {isExcluded ? (
+            <div className="text-[9px] font-bold text-amber-800 bg-amber-50 border border-amber-200/80 px-1.5 py-0.5 rounded mt-1 inline-block">
+              Price Regulated • Discount Excluded
+            </div>
+          ) : (
+            <div className="text-[9px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200/60 px-1.5 py-0.5 rounded mt-1 inline-block">
+              Online UPI: Save extra {settings.advancePaymentDiscountPct}%
+            </div>
+          )}
         </div>
 
         {/* Action Button */}

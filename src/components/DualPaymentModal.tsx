@@ -96,10 +96,32 @@ export const DualPaymentModal: React.FC<DualPaymentModalProps> = ({
                   <span>Subtotal:</span>
                   <span>₹{breakdown.subtotal}</span>
                 </div>
+                {breakdown.excludedSubtotal > 0 && breakdown.eligibleSubtotal > 0 && (
+                  <>
+                    <div className="flex justify-between text-[11px] text-gray-500 pl-1.5">
+                      <span>• Eligible Items:</span>
+                      <span>₹{breakdown.eligibleSubtotal}</span>
+                    </div>
+                    <div className="flex justify-between text-[11px] text-amber-800 pl-1.5 font-medium">
+                      <span>• Price Regulated:</span>
+                      <span>₹{breakdown.excludedSubtotal}</span>
+                    </div>
+                  </>
+                )}
                 <div className="flex justify-between text-emerald-700 font-bold">
                   <span>Advance Discount:</span>
-                  <span>-₹{breakdown.advanceDiscountAmount}</span>
+                  <span>{breakdown.advanceDiscountAmount > 0 ? `-₹${breakdown.advanceDiscountAmount}` : '₹0'}</span>
                 </div>
+                {breakdown.advanceDiscountAmount > 0 && breakdown.excludedSubtotal > 0 && (
+                  <div className="text-[10px] text-gray-500 italic pl-1">
+                    (Applied only to ₹{breakdown.eligibleSubtotal} eligible items)
+                  </div>
+                )}
+                {breakdown.advanceDiscountAmount === 0 && breakdown.excludedSubtotal > 0 && (
+                  <div className="text-[10px] text-amber-800 italic pl-1">
+                    (No discount: items are Price Regulated)
+                  </div>
+                )}
                 <div className="flex justify-between text-gray-600">
                   <span>Delivery Fee:</span>
                   <span>{breakdown.deliveryFee === 0 ? <span className="text-emerald-600 font-bold">FREE</span> : `₹${breakdown.deliveryFee}`}</span>
@@ -117,11 +139,15 @@ export const DualPaymentModal: React.FC<DualPaymentModalProps> = ({
               </span>
             </div>
 
-            {totalSavings > 0 && (
+            {totalSavings > 0 ? (
               <div className="mt-2 text-center bg-emerald-100/80 text-emerald-800 text-[10px] font-extrabold py-0.5 px-2 rounded">
                 You Save ₹{totalSavings} vs COD!
               </div>
-            )}
+            ) : breakdown.excludedSubtotal > 0 ? (
+              <div className="mt-2 text-center bg-amber-100 text-amber-900 text-[10px] font-bold py-0.5 px-2 rounded">
+                Regulated Pricing (Price Unchanged)
+              </div>
+            ) : null}
           </div>
 
           {/* Option 2: Cash on Delivery */}

@@ -44,17 +44,24 @@ export const EntryLoginPage: React.FC<EntryLoginPageProps> = ({
     setError('');
 
     if (selectedRole === 'SHOPKEEPER') {
-      if (!password.trim()) {
+      /* ===== TEMPORARY DEV ADMIN LOGIN BYPASS (REMOVE TO RESTORE STRICT DEV PW) ===== */
+      const isDev = import.meta.env.DEV;
+      const isBypass = isDev && !password.trim();
+      if (!password.trim() && !isDev) {
         setError('Please enter your admin password');
         return;
       }
+      /* ===== END TEMPORARY DEV ADMIN LOGIN BYPASS ===== */
 
       try {
         const res = await fetch('/api/auth/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
-          body: JSON.stringify({ password: password.trim() }),
+          body: JSON.stringify({
+            password: password.trim(),
+            bypassDev: isBypass,
+          }),
         });
 
         const data = await res.json().catch(() => ({}));

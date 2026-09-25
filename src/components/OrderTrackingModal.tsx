@@ -219,7 +219,14 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
               {currentOrder.items.map((item) => (
                 <div key={item.id} className="p-3 flex justify-between items-center hover:bg-gray-50">
                   <div>
-                    <div className="font-bold text-gray-900">{item.productName}</div>
+                    <div className="flex items-center gap-1.5 font-bold text-gray-900">
+                      <span>{item.productName}</span>
+                      {item.isDiscountExcluded && (
+                        <span className="text-[9px] bg-amber-100 text-amber-900 border border-amber-200 px-1.5 py-0.2 rounded font-semibold">
+                          Price Regulated
+                        </span>
+                      )}
+                    </div>
                     <div className="text-[11px] text-gray-500">
                       {item.packSize} {item.unit} • Qty: {item.quantity} × ₹{item.unitPrice}
                     </div>
@@ -236,12 +243,17 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
               <span>Subtotal:</span>
               <span>₹{currentOrder.subtotal}</span>
             </div>
-            {currentOrder.discountAmount > 0 && (
+            {currentOrder.discountAmount > 0 ? (
               <div className="flex justify-between text-emerald-700 font-bold">
                 <span>Advance Online Discount (Saved):</span>
                 <span>-₹{currentOrder.discountAmount}</span>
               </div>
-            )}
+            ) : currentOrder.paymentMethod === PaymentMethod.ADVANCE_ONLINE ? (
+              <div className="flex justify-between text-gray-500 text-[11px]">
+                <span>Advance Online Discount:</span>
+                <span>₹0 (Price Regulated items)</span>
+              </div>
+            ) : null}
             <div className="flex justify-between text-gray-600">
               <span>Delivery Fee:</span>
               <span>{currentOrder.deliveryFee === 0 ? 'FREE' : `₹${currentOrder.deliveryFee}`}</span>
