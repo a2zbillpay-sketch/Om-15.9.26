@@ -1,12 +1,16 @@
 import React, { useState, useEffect } from 'react';
-import { ShieldCheck, Truck, ArrowRight, Percent, CheckCircle2 } from 'lucide-react';
+import { ShieldCheck, Truck, ArrowRight, Percent, CheckCircle2, Wallet } from 'lucide-react';
 import { CheckoutBreakdown } from '../lib/engine/checkout-calculator';
+import { useApp } from '../context/AppContext';
 
 interface DualPaymentModalProps {
   isOpen: boolean;
   onClose: () => void;
   breakdown: CheckoutBreakdown;
-  onSelectPayment: (method: 'COD' | 'ADVANCE_ONLINE') => void | Promise<void>;
+  onSelectPayment: (
+    method: 'COD' | 'ADVANCE_ONLINE',
+    app?: 'PAYTM' | 'PHONEPE' | 'GPAY' | 'QR' | 'WALLET'
+  ) => void | Promise<void>;
 }
 
 export const DualPaymentModal: React.FC<DualPaymentModalProps> = ({
@@ -15,15 +19,23 @@ export const DualPaymentModal: React.FC<DualPaymentModalProps> = ({
   breakdown,
   onSelectPayment,
 }) => {
+  const { useWalletBalance, setUseWalletBalance } = useApp();
   const [selectedMethod, setSelectedMethod] = useState<'COD' | 'ADVANCE_ONLINE' | null>(null);
+  const [selectedAdvanceApp, setSelectedAdvanceApp] = useState<'PAYTM' | 'PHONEPE' | 'GPAY' | 'QR' | 'WALLET'>('PAYTM');
   const [isPlacingOrder, setIsPlacingOrder] = useState(false);
 
   useEffect(() => {
     if (isOpen) {
       setSelectedMethod(null);
       setIsPlacingOrder(false);
+      if (breakdown.availableWalletBalance && breakdown.availableWalletBalance > 0) {
+        setSelectedAdvanceApp('WALLET');
+        setUseWalletBalance(true);
+      } else {
+        setSelectedAdvanceApp('PAYTM');
+      }
     }
-  }, [isOpen]);
+  }, [isOpen, breakdown.availableWalletBalance]);
 
   if (!isOpen) return null;
 
@@ -64,7 +76,7 @@ export const DualPaymentModal: React.FC<DualPaymentModalProps> = ({
         id="dual-payment-modal-content"
         className="bg-white w-full max-w-lg rounded-t-2xl sm:rounded-2xl p-6 shadow-2xl border-t-4 border-[#D4AF37] max-h-[90vh] overflow-y-auto"
       >
-        <div className="text-center mb-6">
+        <div className="text-center mb-4">
           <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-amber-50 border border-amber-200 rounded-full text-amber-900 text-xs font-bold mb-2">
             <Percent size={13} className="text-[#FF6B00]" />
             <span>Instant Advance Discount Offer</span>
@@ -77,7 +89,7 @@ export const DualPaymentModal: React.FC<DualPaymentModalProps> = ({
           {/* Option 1: Advance Online */}
           <div
             id="select-advance-payment-btn"
-            onClick={() => onSelectPayment('ADVANCE_ONLINE')}
+            onClick={() => onSelectPayment('ADVANCE_ONLINE', selectedAdvanceApp)}
             className="relative bg-emerald-50/70 hover:bg-emerald-50 border-2 border-emerald-500 rounded-xl p-4 cursor-pointer transition-all flex flex-col justify-between shadow-sm hover:shadow-md hover:scale-[1.02]"
           >
             <div className="absolute -top-3 right-3 bg-emerald-600 text-white text-[10px] font-extrabold px-2.5 py-0.5 rounded-full uppercase tracking-wider shadow-sm">
@@ -89,7 +101,77 @@ export const DualPaymentModal: React.FC<DualPaymentModalProps> = ({
                 <ShieldCheck className="text-emerald-600" size={20} />
                 <span className="font-bold text-[#0F2C59] text-sm">Advance Payment</span>
               </div>
-              <p className="text-[11px] text-gray-600 mb-3">Pay via UPI / QR / Netbanking instantly</p>
+
+              {/* Display: Paytm | PhonePe | Google Pay | Scan any QR | Wallet */}
+              <div
+                id="advance-payment-methods-text"
+                className="text-xs font-bold text-emerald-900 bg-emerald-100/90 border border-emerald-300 rounded-lg py-1.5 px-2 mb-2 text-center"
+              >
+                Paytm | PhonePe | Google Pay | Scan any QR | Wallet
+              </div>
+
+              {/* Selectable Payment Apps / Wallet Buttons inside Advance Payment */}
+              <div className="grid grid-cols-5 gap-1 mb-2.5">
+                {[
+                  { id: 'PAYTM', name: 'Paytm' },
+                  { id: 'PHONEPE', name: 'PhonePe' },
+                  { id: 'GPAY', name: 'Google Pay' },
+                  { id: 'QR', name: 'Scan any QR' },
+                  { id: 'WALLET', name: 'Wallet' },
+                ].map((app) => (
+                  <button
+                    key={app.id}
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSelectedAdvanceApp(app.id as any);
+                      if (app.id === 'WALLET') {
+                        setUseWalletBalance(true);
+                      }
+                      onSelectPayment('ADVANCE_ONLINE', app.id as any);
+                    }}
+                    className={`py-1.5 px-0.5 rounded-md text-[10px] font-bold border transition text-center truncate ${
+                      selectedAdvanceApp === app.id
+                        ? 'bg-emerald-700 text-white border-emerald-700 shadow-xs'
+                        : 'bg-white text-gray-700 border-emerald-200 hover:bg-emerald-100'
+                    }`}
+                  >
+                    {app.name}
+                  </button>
+                ))}
+              </div>
+
+              {/* Wallet Information included inside Advance Payment option */}
+              {breakdown.availableWalletBalance && breakdown.availableWalletBalance > 0 ? (
+                <div
+                  id="dual-modal-wallet-banner"
+                  className="bg-white/90 border border-emerald-300 rounded-lg p-2 mb-2 text-xs flex items-center justify-between"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <div className="flex items-center gap-1.5">
+                    <Wallet size={13} className="text-emerald-700 shrink-0" />
+                    <div>
+                      <span className="font-bold text-gray-700 text-[10px] block">Wallet Balance</span>
+                      <span className="font-extrabold text-emerald-800 text-xs">₹{breakdown.availableWalletBalance}</span>
+                    </div>
+                  </div>
+                  <label className="flex items-center gap-1 text-[10px] font-bold text-emerald-900 cursor-pointer bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                    <input
+                      type="checkbox"
+                      id="dual-modal-use-wallet-checkbox"
+                      checked={useWalletBalance}
+                      onChange={(e) => {
+                        setUseWalletBalance(e.target.checked);
+                        if (e.target.checked) {
+                          setSelectedAdvanceApp('WALLET');
+                        }
+                      }}
+                      className="rounded text-emerald-600 focus:ring-emerald-500 w-3 h-3"
+                    />
+                    <span>Use Wallet</span>
+                  </label>
+                </div>
+              ) : null}
 
               <div className="space-y-1.5 text-xs text-gray-700 border-t border-emerald-200/60 pt-2.5">
                 <div className="flex justify-between">
@@ -126,13 +208,53 @@ export const DualPaymentModal: React.FC<DualPaymentModalProps> = ({
                   <span>Delivery Fee:</span>
                   <span>{breakdown.deliveryFee === 0 ? <span className="text-emerald-600 font-bold">FREE</span> : `₹${breakdown.deliveryFee}`}</span>
                 </div>
+                <div className="flex justify-between font-bold text-gray-800 pt-1 border-t border-emerald-200/60">
+                  <span>New Order Amount:</span>
+                  <span>₹{breakdown.advanceFinalTotal}</span>
+                </div>
+                {breakdown.isWalletApplied && breakdown.advanceWalletUsed && breakdown.advanceWalletUsed > 0 ? (
+                  <div className="flex justify-between text-emerald-700 font-bold">
+                    <span>Wallet Balance Used:</span>
+                    <span>-₹{breakdown.advanceWalletUsed}</span>
+                  </div>
+                ) : null}
               </div>
+
+              {breakdown.previousOutstanding && breakdown.previousOutstanding > 0 ? (
+                <div className="bg-emerald-100/70 border border-emerald-300 rounded-lg p-2.5 mt-2.5 space-y-1 text-xs">
+                  <div className="flex justify-between text-gray-700">
+                    <span>Previous Outstanding:</span>
+                    <span className="font-extrabold text-amber-900">+₹{breakdown.previousOutstanding}</span>
+                  </div>
+                  <div className="flex justify-between text-gray-700">
+                    <span>+ New Order Amount:</span>
+                    <span className="font-extrabold text-gray-900">₹{breakdown.advanceFinalTotal}</span>
+                  </div>
+                  <div className="border-t border-emerald-300 pt-1 flex justify-between font-black text-xs text-[#0F2C59]">
+                    <span>= Total Payable:</span>
+                    <span className="text-sm font-black text-emerald-800">
+                      ₹{breakdown.advanceRemainingPayable ?? breakdown.advanceTotalPayable ?? (breakdown.advanceFinalTotal + breakdown.previousOutstanding)}
+                    </span>
+                  </div>
+                </div>
+              ) : null}
             </div>
 
             <div className="mt-4 pt-3 border-t border-emerald-200 flex justify-between items-center">
               <div>
-                <span className="text-[11px] font-bold text-gray-500 block">Payable Amount:</span>
-                <span className="text-lg font-black text-emerald-700">₹{breakdown.advanceFinalTotal}</span>
+                <span className="text-[11px] font-bold text-gray-500 block">Total Payable:</span>
+                <span className="text-lg font-black text-emerald-700">
+                  ₹{breakdown.advanceRemainingPayable ?? breakdown.advanceTotalPayable ?? (breakdown.advanceFinalTotal + (breakdown.previousOutstanding || 0))}
+                </span>
+                {breakdown.isWalletApplied && breakdown.advanceWalletUsed && breakdown.advanceWalletUsed > 0 ? (
+                  <span className="text-[10px] text-emerald-800 font-medium block">
+                    (₹{breakdown.advanceWalletUsed} from wallet · Rem. wallet: ₹{breakdown.advanceRemainingWallet})
+                  </span>
+                ) : breakdown.previousOutstanding && breakdown.previousOutstanding > 0 ? (
+                  <span className="text-[9px] text-amber-800 font-bold block">
+                    (Includes ₹{breakdown.previousOutstanding} previous balance)
+                  </span>
+                ) : null}
               </div>
               <span className="bg-emerald-600 text-white p-1.5 rounded-full">
                 <ArrowRight size={14} />
@@ -203,6 +325,12 @@ export const DualPaymentModal: React.FC<DualPaymentModalProps> = ({
                   <span>New Order Amount:</span>
                   <span>₹{breakdown.codFinalTotal}</span>
                 </div>
+                {breakdown.isWalletApplied && breakdown.codWalletUsed && breakdown.codWalletUsed > 0 ? (
+                  <div className="flex justify-between text-emerald-700 font-bold">
+                    <span>Wallet Balance Used:</span>
+                    <span>-₹{breakdown.codWalletUsed}</span>
+                  </div>
+                ) : null}
               </div>
 
               {breakdown.previousOutstanding && breakdown.previousOutstanding > 0 ? (
@@ -218,7 +346,7 @@ export const DualPaymentModal: React.FC<DualPaymentModalProps> = ({
                   <div className="border-t border-amber-300 pt-1 flex justify-between font-black text-xs text-[#0F2C59]">
                     <span>= Total Payable:</span>
                     <span className="text-sm font-black">
-                      ₹{breakdown.codTotalPayable ?? (breakdown.codFinalTotal + breakdown.previousOutstanding)}
+                      ₹{breakdown.codRemainingPayable ?? breakdown.codTotalPayable ?? (breakdown.codFinalTotal + breakdown.previousOutstanding)}
                     </span>
                   </div>
                 </div>
@@ -230,9 +358,13 @@ export const DualPaymentModal: React.FC<DualPaymentModalProps> = ({
                 <div>
                   <span className="text-[11px] font-bold text-gray-500 block">Total Payable:</span>
                   <span className="text-lg font-black text-[#0F2C59]">
-                    ₹{breakdown.codTotalPayable ?? (breakdown.codFinalTotal + (breakdown.previousOutstanding || 0))}
+                    ₹{breakdown.codRemainingPayable ?? breakdown.codTotalPayable ?? (breakdown.codFinalTotal + (breakdown.previousOutstanding || 0))}
                   </span>
-                  {breakdown.previousOutstanding && breakdown.previousOutstanding > 0 ? (
+                  {breakdown.isWalletApplied && breakdown.codWalletUsed && breakdown.codWalletUsed > 0 ? (
+                    <span className="text-[10px] text-emerald-800 font-medium block">
+                      (₹{breakdown.codWalletUsed} from wallet · Rem. wallet: ₹{breakdown.codRemainingWallet})
+                    </span>
+                  ) : breakdown.previousOutstanding && breakdown.previousOutstanding > 0 ? (
                     <span className="text-[9px] text-amber-800 font-bold block">
                       (Includes ₹{breakdown.previousOutstanding} previous balance)
                     </span>
@@ -260,7 +392,13 @@ export const DualPaymentModal: React.FC<DualPaymentModalProps> = ({
                     className="w-full py-3 px-4 bg-[#0F2C59] hover:bg-[#153e7d] active:scale-[0.99] text-white font-extrabold text-sm rounded-xl shadow-lg transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
                   >
                     <CheckCircle2 size={16} className="text-[#D4AF37]" />
-                    <span>{isPlacingOrder ? 'Placing Order...' : 'Confirm COD Order'}</span>
+                    <span>
+                      {isPlacingOrder
+                        ? 'Placing Order...'
+                        : (breakdown.codRemainingPayable ?? breakdown.codTotalPayable ?? 0) === 0
+                        ? 'Confirm Order (Paid with Wallet)'
+                        : 'Confirm COD Order'}
+                    </span>
                   </button>
                 ) : (
                   <div className="w-full py-2.5 px-3 text-center bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 transition">

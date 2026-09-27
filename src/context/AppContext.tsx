@@ -12,6 +12,8 @@ import {
   PaymentMethod,
   PaymentStatus,
   Address,
+  WalletTransaction,
+  AdminNotification,
 } from '../types';
 import {
   INITIAL_SETTINGS,
@@ -34,6 +36,8 @@ import {
   saveOrderToSupabase,
   fetchAllOrdersForAdmin,
   updateOrderStatusInSupabase,
+  creditCustomerWalletInSupabase,
+  debitCustomerWalletInSupabase,
   saveCustomerProfileToSupabase,
   fetchCustomerProfileFromSupabase,
   saveProductToSupabase,
@@ -141,6 +145,8 @@ interface AppContextType {
   removeFromCart: (variantId: string) => void;
   clearCart: () => void;
   checkoutBreakdown: CheckoutBreakdown;
+  useWalletBalance: boolean;
+  setUseWalletBalance: (use: boolean) => void;
   orders: Order[];
   customerOutstanding: number;
   getCustomerOutstanding: (phoneOrId?: string) => number;
@@ -148,6 +154,9 @@ interface AppContextType {
     address: Address;
     paymentMethod: PaymentMethod;
     deliveryDate: string;
+    useWallet?: boolean;
+    orderId?: string;
+    orderNumber?: string;
   }) => Promise<Order>;
   cancelOrder: (orderId: string) => boolean;
   updateOrderStatus: (orderId: string, newStatus: OrderStatus) => void;
@@ -175,6 +184,10 @@ interface AppContextType {
   isAdminSessionValid: boolean;
   checkAdminSession: () => Promise<boolean>;
   logoutAdminSession: () => Promise<void>;
+  walletTransactions: WalletTransaction[];
+  adminNotifications: AdminNotification[];
+  markNotificationAsRead: (id: string) => void;
+  markAllNotificationsAsRead: () => void;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -347,6 +360,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
 
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+
+  const [walletTransactions, setWalletTransactions] = useState<WalletTransaction[]>(() => {
+    const saved = localStorage.getItem('om_wallet_transactions');
+    return saved ? JSON.parse(saved) : [];
+  });
+
+  const [adminNotifications, setAdminNotifications] = useState<AdminNotification[]>(() => {
+    const saved = localStorage.getItem('om_admin_notifications');
+    return saved ? JSON.parse(saved) : [];
+  });
+
+  useEffect(() => {
+    localStorage.setItem('om_wallet_transactions', JSON.stringify(walletTransactions));
+  }, [walletTransactions]);
+
+  useEffect(() => {
+    localStorage.setItem('om_admin_notifications', JSON.stringify(adminNotifications));
+  }, [adminNotifications]);
+
+  const markNotificationAsRead = (id: string) => {
+    setAdminNotifications((prev) =>
+      prev.map((n) => (n.id === id ? { ...n, read: true } : n))
+    );
+  };
+
+  const markAllNotificationsAsRead = () => {
+    setAdminNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+  };
 
   // Sync to localStorage
   useEffect(() => {
@@ -912,13 +953,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (currentUser.walletBalance < 0 || (currentUser.outstandingBalance && currentUser.outstandingBalance > 0)) {
           setCurrentUser((prev) => ({
             ...prev,
-            walletBalance: 0,
+            walletBalance: prev.walletBalance < 0 ? 0 : prev.walletBalance,
             outstandingBalance: 0,
           }));
         }
       }
     }
   }, [activeRole, customerOutstanding, currentUser.phone, currentUser.id, currentUser.walletBalance, currentUser.outstandingBalance]);
+
+  const [useWalletBalance, setUseWalletBalance] = useState<boolean>(true);
 
   // Dynamic Checkout Breakdown calculation using the engine
   const checkoutBreakdown = useMemo(() => {
@@ -939,15 +982,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         freeShippingMinAmount: settings.freeShippingMinAmount,
         baseDeliveryFee: settings.baseDeliveryFee,
       },
-      customerOutstanding
+      customerOutstanding,
+      currentUser.walletBalance > 0 ? currentUser.walletBalance : 0,
+      useWalletBalance
     );
-  }, [cart, currentUser.codOrderCount, settings, customerOutstanding]);
+  }, [cart, currentUser.codOrderCount, settings, customerOutstanding, currentUser.walletBalance, useWalletBalance]);
 
   // Order Management
   const createOrder = async (data: {
     address: Address;
     paymentMethod: PaymentMethod;
     deliveryDate: string;
+    useWallet?: boolean;
+    orderId?: string;
+    orderNumber?: string;
   }): Promise<Order> => {
     const isAdvance = data.paymentMethod === PaymentMethod.ADVANCE_ONLINE;
     const finalAmount = isAdvance
@@ -956,22 +1004,42 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const discountAmount = isAdvance ? checkoutBreakdown.advanceDiscountAmount : 0;
     const codCharge = isAdvance ? 0 : checkoutBreakdown.codCharge;
 
-    const previousOutstanding = isAdvance ? 0 : customerOutstanding;
-    const totalPayable = isAdvance ? finalAmount : finalAmount + previousOutstanding;
+    const previousOutstanding = customerOutstanding;
+    const baseTotalPayable = isAdvance
+      ? (checkoutBreakdown.advanceTotalPayable ?? (finalAmount + previousOutstanding))
+      : finalAmount + previousOutstanding;
 
-    const orderNumber = `OM-${Math.floor(10000 + Math.random() * 90000)}`;
+    // Wallet balance usage calculation
+    const shouldApplyWallet = data.useWallet !== undefined ? data.useWallet : useWalletBalance;
+    const availableWallet = Math.max(0, currentUser.walletBalance || 0);
+    const walletUsed = shouldApplyWallet ? Math.min(availableWallet, baseTotalPayable) : 0;
+    const totalPayable = Math.max(0, baseTotalPayable - walletUsed);
+    const newWalletBalance = Math.max(0, availableWallet - walletUsed);
+
+    const orderNumber = data.orderNumber || `OM-${Math.floor(10000 + Math.random() * 90000)}`;
+    const orderId = data.orderId || `ord-${Date.now()}`;
+
+    // Payment status: if remaining payable is 0, full amount covered by wallet, received immediately.
+    // If Advance Online, received immediately via UPI gateway.
+    // If COD and totalPayable > 0, pending collection at doorstep.
+    const paymentStatus =
+      totalPayable === 0
+        ? PaymentStatus.RECEIVED
+        : isAdvance
+        ? PaymentStatus.RECEIVED
+        : PaymentStatus.PENDING;
 
     const newOrder: Order = {
-      id: `ord-${Date.now()}`,
+      id: orderId,
       orderNumber,
       userId: currentUser.id,
       userName: currentUser.name,
       userPhone: currentUser.phone,
       addressId: data.address.id,
       address: data.address,
-      status: OrderStatus.ORDER_ACCEPTED,
+      status: OrderStatus.ORDER_PENDING,
       paymentMethod: data.paymentMethod,
-      paymentStatus: isAdvance ? PaymentStatus.RECEIVED : PaymentStatus.PENDING,
+      paymentStatus,
       deliveryDate: data.deliveryDate,
       subtotal: checkoutBreakdown.subtotal,
       discountAmount,
@@ -979,7 +1047,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       codCharge,
       finalAmount, // Original bill / final amount of this new order is preserved unchanged!
       previousOutstanding,
-      totalPayable,
+      totalPayable, // Remaining payable calculated correctly
+      walletAmountUsed: walletUsed,
       codCollectedAmount: 0,
       razorpayOrderId: isAdvance ? `rzp_ord_${Date.now()}` : undefined,
       razorpayPaymentId: isAdvance ? `pay_${Date.now()}` : undefined,
@@ -992,7 +1061,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         );
         return {
           id: `item-${Date.now()}-${item.variantId}`,
-          orderId: `ord-${Date.now()}`,
+          orderId,
           variantId: item.variantId,
           variantName: item.variant.packLabel,
           productName: item.product.name,
@@ -1015,6 +1084,91 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       saveOrderToSupabase(newOrder).catch((err) => {
         console.warn('Background Supabase order save error:', err);
       });
+    }
+
+    // Deduct only the amount actually used from the persistent wallet balance
+    if (walletUsed > 0) {
+      // Prevent duplicate wallet deductions if the payment/order operation is retried
+      const isAlreadyDebited = walletTransactions.some(
+        (tx) =>
+          (tx.orderId === newOrder.id || tx.orderNumber === newOrder.orderNumber) &&
+          tx.type === 'DEBIT'
+      );
+
+      if (!isAlreadyDebited) {
+        const updatedCurrentUser: User = {
+          ...currentUser,
+          walletBalance: newWalletBalance,
+        };
+
+        setCurrentUser(updatedCurrentUser);
+        localStorage.setItem('om_current_user', JSON.stringify(updatedCurrentUser));
+
+        const customerPhone = newOrder.userPhone || currentUser.phone;
+        if (customerPhone) {
+          const cleanPhone = customerPhone.replace(/\D/g, '').slice(-10);
+          localStorage.setItem(`om_profile_${cleanPhone}`, JSON.stringify(updatedCurrentUser));
+          const rawDigits = customerPhone.replace(/\D/g, '');
+          if (rawDigits && rawDigits !== cleanPhone) {
+            localStorage.setItem(`om_profile_${rawDigits}`, JSON.stringify(updatedCurrentUser));
+          }
+        }
+
+        setUsers((prev) => {
+          const updated = prev.map((u) => {
+            const uClean = u.phone ? u.phone.replace(/\D/g, '').slice(-10) : '';
+            const targetClean = customerPhone ? customerPhone.replace(/\D/g, '').slice(-10) : '';
+            if (
+              u.id === newOrder.userId ||
+              u.id === currentUser.id ||
+              (targetClean && uClean === targetClean)
+            ) {
+              return {
+                ...u,
+                walletBalance: newWalletBalance,
+              };
+            }
+            return u;
+          });
+          localStorage.setItem('om_users', JSON.stringify(updated));
+          return updated;
+        });
+
+        const newWalletTx: WalletTransaction = {
+          id: `wtx-${Date.now()}`,
+          userId: newOrder.userId || currentUser.id,
+          userPhone: newOrder.userPhone || currentUser.phone,
+          orderId: newOrder.id,
+          orderNumber: newOrder.orderNumber,
+          type: 'DEBIT',
+          amount: walletUsed,
+          balanceAfter: newWalletBalance,
+          description: `Wallet Payment for Order #${newOrder.orderNumber}`,
+          createdAt: new Date().toISOString(),
+        };
+
+        setWalletTransactions((prev) => {
+          const updated = [newWalletTx, ...prev];
+          localStorage.setItem('om_wallet_transactions', JSON.stringify(updated));
+          return updated;
+        });
+
+        // Persist debit to Supabase ledger and users table
+        if (isSupabaseConfigured) {
+          debitCustomerWalletInSupabase({
+            userId: newOrder.userId || currentUser.id,
+            customerPhone: newOrder.userPhone || currentUser.phone,
+            customerName: newOrder.userName || currentUser.name,
+            orderId: newOrder.id,
+            orderNumber: newOrder.orderNumber,
+            amount: walletUsed,
+            newWalletBalance,
+            description: `Wallet Payment for Order #${newOrder.orderNumber}`,
+          }).catch((err) => {
+            console.warn('Background Supabase wallet debit error:', err);
+          });
+        }
+      }
     }
 
     // Update user cod count if COD
@@ -1054,36 +1208,208 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const cancelOrder = (orderId: string): boolean => {
-    const target = orders.find((o) => o.id === orderId);
+    const target = orders.find((o) => o.id === orderId || o.orderNumber === orderId);
     if (!target) return false;
+
+    // Check if order is already cancelled (prevent duplicate processing)
+    if (target.status === OrderStatus.CANCELLED) {
+      return false;
+    }
 
     // Check 15-minute cancellation window rule
     if (!canCancelOrder(target.createdAt)) {
       return false;
     }
 
-    // Process cancellation and credit wallet if online payment
-    if (target.paymentStatus === PaymentStatus.RECEIVED) {
-      setCurrentUser((prev) => ({
-        ...prev,
-        walletBalance: prev.walletBalance + target.finalAmount,
-      }));
+    const isAdvancePaid =
+      target.paymentMethod === PaymentMethod.ADVANCE_ONLINE ||
+      target.paymentStatus === PaymentStatus.RECEIVED;
+
+    // Track both components of advance payment to refund the full order amount:
+    // 1. wallet amount used in the cancelled order
+    let walletAmountUsed = Math.max(0, target.walletAmountUsed || 0);
+    if (walletAmountUsed === 0) {
+      // Check walletTransactions for a DEBIT tx for this order
+      const debitTx = walletTransactions.find(
+        (tx) =>
+          (tx.orderId === target.id || tx.orderNumber === target.orderNumber) &&
+          tx.type === 'DEBIT'
+      );
+      if (debitTx && debitTx.amount > 0) {
+        walletAmountUsed = debitTx.amount;
+      } else if (
+        isAdvancePaid &&
+        target.totalPayable !== undefined &&
+        target.finalAmount > target.totalPayable
+      ) {
+        walletAmountUsed = Math.max(0, target.finalAmount - target.totalPayable);
+      }
     }
 
-    setOrders((prev) =>
-      prev.map((o) =>
-        o.id === orderId
+    // 2. online advance payment amount paid by customer (strictly actual online payment only, never adding wallet amount)
+    const onlineAdvancePayment = isAdvancePaid
+      ? Math.max(
+          0,
+          Math.min(
+            target.totalPayable !== undefined ? target.totalPayable : target.finalAmount,
+            target.finalAmount - walletAmountUsed
+          )
+        )
+      : 0;
+
+    // Total refund is based on actual payment sources: wallet amount used + actual online advance payment
+    const advancePaidAmount = walletAmountUsed + (isAdvancePaid ? onlineAdvancePayment : 0);
+
+    // 1. Mark order as CANCELLED and REFUNDED in state and local storage
+    const updatedPaymentStatus = advancePaidAmount > 0
+      ? PaymentStatus.REFUNDED
+      : target.paymentStatus;
+
+    setOrders((prev) => {
+      const updated = prev.map((o) =>
+        o.id === target.id || o.orderNumber === target.orderNumber
           ? {
               ...o,
               status: OrderStatus.CANCELLED,
-              paymentStatus:
-                o.paymentStatus === PaymentStatus.RECEIVED
-                  ? PaymentStatus.REFUNDED
-                  : o.paymentStatus,
+              paymentStatus: updatedPaymentStatus,
             }
           : o
-      )
-    );
+      );
+      localStorage.setItem('om_orders', JSON.stringify(updated));
+      return updated;
+    });
+
+    // 2. Persist cancellation in database
+    if (isSupabaseConfigured) {
+      updateOrderStatusInSupabase(
+        target.id,
+        OrderStatus.CANCELLED,
+        false
+      ).catch((err) => {
+        console.warn('Background Supabase cancel order error:', err);
+      });
+    }
+
+    // 3. Credit the refund amount to the customer's persistent Wallet balance
+    if (advancePaidAmount > 0) {
+      // Check for prior refund logged for this order in walletTransactions
+      const existingRefundTx = walletTransactions.find(
+        (tx) =>
+          (tx.orderId === target.id || tx.orderNumber === target.orderNumber) &&
+          tx.type === 'CREDIT'
+      );
+      const alreadyRefundedAmount = existingRefundTx ? existingRefundTx.amount : 0;
+      const amountToCredit = Math.max(0, advancePaidAmount - alreadyRefundedAmount);
+
+      let newWalletBalance = currentUser.walletBalance >= 0 ? currentUser.walletBalance : 0;
+      newWalletBalance += amountToCredit;
+
+      const updatedCurrentUser: User = {
+        ...currentUser,
+        walletBalance: newWalletBalance,
+        outstandingBalance: 0,
+      };
+
+      setCurrentUser(updatedCurrentUser);
+      localStorage.setItem('om_current_user', JSON.stringify(updatedCurrentUser));
+
+      const customerPhone = target.userPhone || currentUser.phone;
+      if (customerPhone) {
+        const cleanPhone = customerPhone.replace(/\D/g, '').slice(-10);
+        localStorage.setItem(`om_profile_${cleanPhone}`, JSON.stringify(updatedCurrentUser));
+        const rawDigits = customerPhone.replace(/\D/g, '');
+        if (rawDigits && rawDigits !== cleanPhone) {
+          localStorage.setItem(`om_profile_${rawDigits}`, JSON.stringify(updatedCurrentUser));
+        }
+      }
+
+      setUsers((prev) => {
+        const updated = prev.map((u) => {
+          const uClean = u.phone ? u.phone.replace(/\D/g, '').slice(-10) : '';
+          const targetClean = customerPhone ? customerPhone.replace(/\D/g, '').slice(-10) : '';
+          if (
+            u.id === target.userId ||
+            u.id === currentUser.id ||
+            (targetClean && uClean === targetClean)
+          ) {
+            return {
+              ...u,
+              walletBalance: newWalletBalance,
+              outstandingBalance: 0,
+            };
+          }
+          return u;
+        });
+        localStorage.setItem('om_users', JSON.stringify(updated));
+        return updated;
+      });
+
+      // 4. Create a Wallet transaction/ledger entry referencing the order number and credited amount
+      if (amountToCredit > 0) {
+        const refundDescription =
+          walletAmountUsed > 0 && onlineAdvancePayment > 0
+            ? `Refund for Cancelled Order #${target.orderNumber} (₹${walletAmountUsed} wallet + ₹${onlineAdvancePayment} online advance)`
+            : walletAmountUsed > 0
+            ? `Refund for Cancelled Order #${target.orderNumber} (₹${walletAmountUsed} wallet used)`
+            : `Refund for Cancelled Order #${target.orderNumber} (₹${onlineAdvancePayment} online advance)`;
+
+        const newWalletTx: WalletTransaction = {
+          id: `wtx-${Date.now()}`,
+          userId: target.userId || currentUser.id,
+          userPhone: target.userPhone || currentUser.phone,
+          orderId: target.id,
+          orderNumber: target.orderNumber,
+          type: 'CREDIT',
+          amount: amountToCredit,
+          balanceAfter: newWalletBalance,
+          description: refundDescription,
+          createdAt: new Date().toISOString(),
+        };
+
+        setWalletTransactions((prev) => {
+          const updated = [newWalletTx, ...prev];
+          localStorage.setItem('om_wallet_transactions', JSON.stringify(updated));
+          return updated;
+        });
+
+        // Persist to Supabase ledger and users table
+        if (isSupabaseConfigured) {
+          creditCustomerWalletInSupabase({
+            userId: target.userId || currentUser.id,
+            customerPhone: target.userPhone || currentUser.phone,
+            customerName: target.userName || currentUser.name,
+            orderId: target.id,
+            orderNumber: target.orderNumber,
+            amount: amountToCredit,
+            newWalletBalance: newWalletBalance,
+            description: refundDescription,
+          }).catch((err) => {
+            console.warn('Background Supabase wallet credit error:', err);
+          });
+        }
+      }
+    }
+
+    // 5. Notify the shopkeeper/admin that the order was cancelled
+    const newAdminNotification: AdminNotification = {
+      id: `notif-${Date.now()}`,
+      type: 'ORDER_CANCELLED',
+      title: `Order #${target.orderNumber} Cancelled`,
+      message: `Customer ${target.userName || target.userPhone || 'Customer'} cancelled order #${target.orderNumber}${
+        isAdvancePaid ? ` (₹${advancePaidAmount} advance refunded to store wallet)` : ''
+      }.`,
+      orderId: target.id,
+      orderNumber: target.orderNumber,
+      amount: advancePaidAmount,
+      read: false,
+      createdAt: new Date().toISOString(),
+    };
+
+    setAdminNotifications((prev) => {
+      const updated = [newAdminNotification, ...prev];
+      localStorage.setItem('om_admin_notifications', JSON.stringify(updated));
+      return updated;
+    });
 
     return true;
   };
@@ -1334,7 +1660,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     // CUSTOMER FLOW:
-    if (options?.isExisting) {
+    const hasLocalProfile = Boolean(
+      localStorage.getItem(`om_profile_${cleanPhone}`) ||
+      users.some((u) => {
+        const uClean = u.phone ? u.phone.replace(/\D/g, '').slice(-10) : '';
+        return uClean === cleanPhone.slice(-10);
+      })
+    );
+
+    const treatAsExisting = options?.isExisting === true || (options?.isExisting === undefined && hasLocalProfile);
+
+    if (treatAsExisting) {
       // Existing Customer login: must await database profile lookup before advancing
       let resolvedUser: User | null = null;
 
@@ -1355,23 +1691,66 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       }
 
-      // If customer record is not found, throw error to inform the user
+      // If customer record is not found, fallback to checking local users
       if (!resolvedUser) {
-        throw new Error(
-          `No registered customer profile found for +91 ${cleanPhone}. Please switch to New Customer to register.`
-        );
+        const matchingUser = users.find((u) => {
+          const uClean = u.phone ? u.phone.replace(/\D/g, '').slice(-10) : '';
+          return uClean === cleanPhone.slice(-10);
+        });
+        if (matchingUser) {
+          resolvedUser = matchingUser;
+        } else if (options?.isExisting === true) {
+          throw new Error(
+            `No registered customer profile found for +91 ${cleanPhone}. Please switch to New Customer to register.`
+          );
+        }
+      }
+
+      // Ensure persistent wallet balance (e.g. from cancellation refunds and order wallet payments) is accurately preserved
+      let resolvedWalletBalance = resolvedUser ? (resolvedUser.walletBalance || 0) : 0;
+      try {
+        const savedTx = localStorage.getItem('om_wallet_transactions');
+        if (savedTx) {
+          const txList: WalletTransaction[] = JSON.parse(savedTx);
+          const userTx = txList.filter(
+            (t) =>
+              (t.userPhone && t.userPhone.replace(/\D/g, '').slice(-10) === cleanPhone.slice(-10)) ||
+              (resolvedUser && t.userId === resolvedUser.id)
+          );
+          if (userTx.length > 0 && typeof userTx[0].balanceAfter === 'number' && userTx[0].balanceAfter >= 0) {
+            resolvedWalletBalance = userTx[0].balanceAfter;
+          }
+        }
+      } catch {}
+
+      if (resolvedWalletBalance <= 0) {
+        try {
+          const localProfileStr = localStorage.getItem(`om_profile_${cleanPhone}`);
+          if (localProfileStr) {
+            const parsed = JSON.parse(localProfileStr);
+            if (typeof parsed.walletBalance === 'number' && parsed.walletBalance > 0) {
+              resolvedWalletBalance = parsed.walletBalance;
+            }
+          }
+        } catch {}
       }
 
       const userDebt = Number(
-        resolvedUser.outstandingBalance ?? calculateCustomerOutstanding(orders, cleanPhone)
+        resolvedUser?.outstandingBalance ?? calculateCustomerOutstanding(orders, cleanPhone)
       );
 
       const finalUser: User = {
-        ...resolvedUser,
+        ...(resolvedUser || {}),
+        id: resolvedUser?.id || `user-${cleanPhone}`,
+        name: resolvedUser?.name || name?.trim() || '',
         phone: cleanPhone,
         role: Role.CUSTOMER,
-        walletBalance: userDebt > 0 ? -userDebt : (resolvedUser.walletBalance || 0),
+        referralCode: resolvedUser?.referralCode || `OM${cleanPhone.slice(-4)}`,
+        walletBalance: userDebt > 0 ? -userDebt : resolvedWalletBalance,
         outstandingBalance: userDebt,
+        codOrderCount: resolvedUser?.codOrderCount || 0,
+        addresses: resolvedUser?.addresses || [],
+        createdAt: resolvedUser?.createdAt || new Date().toISOString(),
       };
 
       setCurrentUser(finalUser);
@@ -1388,7 +1767,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         JSON.stringify({
           phone: cleanPhone,
           role: Role.CUSTOMER,
-          profileCompleted: false, // Navigate to Profile step first to confirm details
+          profileCompleted: Boolean(finalUser.name && finalUser.addresses.length > 0),
         })
       );
 
@@ -1400,24 +1779,42 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       if (isSupabaseConfigured) {
         fetchCustomerOrdersFromSupabase(finalUser.id, cleanPhone).then((dbOrders) => {
-          if (dbOrders) setOrders(dbOrders);
+          if (dbOrders && dbOrders.length > 0) {
+            setOrders((prev) => {
+              const existingIds = new Set(prev.map((o) => o.id));
+              const existingOrderNums = new Set(prev.map((o) => o.orderNumber));
+              const newOrders = dbOrders.filter((o) => !existingIds.has(o.id) && !existingOrderNums.has(o.orderNumber));
+              return [...prev, ...newOrders];
+            });
+          }
         });
         refreshProducts();
       }
 
-      setCustomerFlowStep('PROFILE');
+      setCustomerFlowStep(finalUser.name && finalUser.addresses.length > 0 ? 'SHOP' : 'PROFILE');
       return finalUser;
     }
 
     // NEW CUSTOMER FLOW:
-    // New Customer must continue to start with a clean/empty profile
+    // Check if phone already has a stored wallet balance from an advance refund
+    let initialNewWalletBalance = 100; // Welcome ₹100 bonus
+    try {
+      const localProfileStr = localStorage.getItem(`om_profile_${cleanPhone}`);
+      if (localProfileStr) {
+        const parsed = JSON.parse(localProfileStr);
+        if (typeof parsed.walletBalance === 'number' && parsed.walletBalance > 0) {
+          initialNewWalletBalance = parsed.walletBalance;
+        }
+      }
+    } catch {}
+
     const finalUser: User = {
       id: `user-${cleanPhone}`,
       name: name?.trim() || '',
       phone: cleanPhone,
       role: Role.CUSTOMER,
       referralCode: `OM${cleanPhone.length >= 4 ? cleanPhone.slice(-4) : '2026'}`,
-      walletBalance: 100, // Welcome ₹100 bonus
+      walletBalance: initialNewWalletBalance,
       codOrderCount: 0,
       addresses: [], // Strictly blank for new customers!
       createdAt: new Date().toISOString(),
@@ -1482,6 +1879,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         removeFromCart,
         clearCart,
         checkoutBreakdown,
+        useWalletBalance,
+        setUseWalletBalance,
         orders,
         customerOutstanding,
         getCustomerOutstanding,
@@ -1503,6 +1902,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isAdminSessionValid,
         checkAdminSession,
         logoutAdminSession,
+        walletTransactions,
+        adminNotifications,
+        markNotificationAsRead,
+        markAllNotificationsAsRead,
       }}
     >
       {children}

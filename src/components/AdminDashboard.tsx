@@ -112,6 +112,9 @@ export const AdminDashboard: React.FC = () => {
     isSupabaseConfigured,
     refreshOrders,
     recordCodCollection,
+    adminNotifications,
+    markNotificationAsRead,
+    markAllNotificationsAsRead,
   } = useApp();
 
   const [activeTab, setActiveTab] = useState<'ORDERS' | 'INVENTORY' | 'CATEGORIES' | 'SETTINGS' | 'CUSTOMERS'>('ORDERS');
@@ -370,6 +373,10 @@ export const AdminDashboard: React.FC = () => {
     0
   );
 
+  const unreadCancellations = (adminNotifications || []).filter(
+    (n) => !n.read && n.type === 'ORDER_CANCELLED'
+  );
+
   const filteredOrders = orders.filter((o) => {
     if (orderFilter === 'ALL') return true;
     return o.status === orderFilter;
@@ -609,6 +616,11 @@ export const AdminDashboard: React.FC = () => {
               >
                 <Package size={14} />
                 <span>Orders ({orders.length})</span>
+                {unreadCancellations.length > 0 && (
+                  <span className="bg-rose-500 text-white text-[9px] px-1.5 py-0.5 rounded-full font-black animate-pulse">
+                    {unreadCancellations.length} cancelled
+                  </span>
+                )}
               </button>
               <button
                 onClick={() => setActiveTab('INVENTORY')}
@@ -718,7 +730,7 @@ export const AdminDashboard: React.FC = () => {
 
               {/* Status Filters */}
               <div className="flex flex-wrap gap-1.5 text-xs">
-                {['ALL', 'ORDER_ACCEPTED', 'PACKING_IN_PROGRESS', 'READY_FOR_DELIVERY', 'ON_THE_WAY', 'DELIVERED', 'CANCELLED'].map(
+                {['ALL', 'ORDER_PENDING', 'ORDER_ACCEPTED', 'PACKING_IN_PROGRESS', 'READY_FOR_DELIVERY', 'ON_THE_WAY', 'DELIVERED', 'CANCELLED'].map(
                   (status) => (
                     <button
                       key={status}
@@ -735,6 +747,47 @@ export const AdminDashboard: React.FC = () => {
                 )}
               </div>
             </div>
+
+            {/* Real-time Order Cancellation Notifications for Shopkeeper */}
+            {unreadCancellations.length > 0 && (
+              <div id="admin-cancellation-alerts" className="p-3 bg-rose-50 border-b border-rose-200 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-rose-900 font-extrabold text-xs">
+                    <AlertCircle size={15} className="text-rose-600 shrink-0" />
+                    <span>Customer Order Cancellation Alert ({unreadCancellations.length})</span>
+                  </div>
+                  <button
+                    onClick={markAllNotificationsAsRead}
+                    className="text-[11px] text-rose-700 hover:text-rose-900 font-bold underline"
+                  >
+                    Dismiss All
+                  </button>
+                </div>
+                <div className="space-y-1.5 max-h-40 overflow-y-auto">
+                  {unreadCancellations.map((notif) => (
+                    <div
+                      key={notif.id}
+                      className="bg-white p-2.5 rounded-xl border border-rose-200 text-xs flex items-center justify-between shadow-xs gap-2"
+                    >
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-bold text-rose-900">{notif.title}:</span>
+                        <span className="text-gray-700">{notif.message}</span>
+                        <span className="text-[10px] text-gray-400">
+                          {new Date(notif.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => markNotificationAsRead(notif.id)}
+                        className="text-gray-400 hover:text-gray-700 p-1 rounded"
+                        title="Dismiss"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Orders Table */}
             <div className="overflow-x-auto">
@@ -864,6 +917,8 @@ export const AdminDashboard: React.FC = () => {
                                 ? 'bg-amber-100 text-amber-800'
                                 : order.status === OrderStatus.ORDER_ACCEPTED
                                 ? 'bg-[#FF6B00]/15 text-[#FF6B00]'
+                                : order.status === OrderStatus.ORDER_PENDING
+                                ? 'bg-amber-100 text-amber-900 border border-amber-300'
                                 : 'bg-gray-100 text-gray-800'
                             }`}
                           >
@@ -884,29 +939,42 @@ export const AdminDashboard: React.FC = () => {
                         </td>
                         <td className="p-3 text-right">
                           {order.status !== OrderStatus.CANCELLED && order.status !== OrderStatus.DELIVERED ? (
-                            <select
-                              value={order.status}
-                              onChange={(e) => {
-                                const newStatus = e.target.value as OrderStatus;
-                                if (
-                                  newStatus === OrderStatus.DELIVERED &&
-                                  order.paymentMethod === PaymentMethod.COD &&
-                                  order.codCollectedAmount === undefined
-                                ) {
-                                  setCodCollectingOrder(order);
-                                } else {
-                                  updateOrderStatus(order.id, newStatus);
-                                }
-                              }}
-                              className="bg-white border border-gray-300 text-gray-800 text-[11px] font-bold rounded-lg p-1.5 outline-none focus:ring-1 focus:ring-[#0F2C59]"
-                            >
-                              <option value={OrderStatus.ORDER_PENDING}>Order Pending</option>
-                              <option value={OrderStatus.ORDER_ACCEPTED}>Order Accepted</option>
-                              <option value={OrderStatus.PACKING_IN_PROGRESS}>Packing</option>
-                              <option value={OrderStatus.READY_FOR_DELIVERY}>Ready</option>
-                              <option value={OrderStatus.ON_THE_WAY}>On The Way</option>
-                              <option value={OrderStatus.DELIVERED}>Mark Delivered</option>
-                            </select>
+                            <div className="flex items-center justify-end gap-1.5">
+                              {order.status === OrderStatus.ORDER_PENDING && (
+                                <button
+                                  id={`accept-order-btn-${order.id}`}
+                                  onClick={() => updateOrderStatus(order.id, OrderStatus.ORDER_ACCEPTED)}
+                                  className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-extrabold rounded-lg shadow-sm transition flex items-center gap-1 shrink-0"
+                                  title="Accept Order"
+                                >
+                                  <CheckCircle2 size={12} />
+                                  <span>Accept Order</span>
+                                </button>
+                              )}
+                              <select
+                                value={order.status}
+                                onChange={(e) => {
+                                  const newStatus = e.target.value as OrderStatus;
+                                  if (
+                                    newStatus === OrderStatus.DELIVERED &&
+                                    order.paymentMethod === PaymentMethod.COD &&
+                                    order.codCollectedAmount === undefined
+                                  ) {
+                                    setCodCollectingOrder(order);
+                                  } else {
+                                    updateOrderStatus(order.id, newStatus);
+                                  }
+                                }}
+                                className="bg-white border border-gray-300 text-gray-800 text-[11px] font-bold rounded-lg p-1.5 outline-none focus:ring-1 focus:ring-[#0F2C59]"
+                              >
+                                <option value={OrderStatus.ORDER_PENDING}>Order Pending</option>
+                                <option value={OrderStatus.ORDER_ACCEPTED}>Order Accepted</option>
+                                <option value={OrderStatus.PACKING_IN_PROGRESS}>Packing</option>
+                                <option value={OrderStatus.READY_FOR_DELIVERY}>Ready</option>
+                                <option value={OrderStatus.ON_THE_WAY}>On The Way</option>
+                                <option value={OrderStatus.DELIVERED}>Mark Delivered</option>
+                              </select>
+                            </div>
                           ) : (
                             <span className="text-[11px] text-gray-400 font-semibold">Completed</span>
                           )}

@@ -147,6 +147,11 @@ export const CustomerOrdersDrawer: React.FC<CustomerOrdersDrawerProps> = ({
                     <div>
                       <span className="text-gray-500 text-[10px]">Order: </span>
                       <span className="font-bold text-gray-800">₹{order.finalAmount}</span>
+                      {order.walletAmountUsed !== undefined && order.walletAmountUsed > 0 && (
+                        <span className="ml-1 text-[10px] font-black text-emerald-800 bg-emerald-100/70 px-1.5 py-0.5 rounded">
+                          Wallet: -₹{order.walletAmountUsed}
+                        </span>
+                      )}
                       {order.previousOutstanding !== undefined && order.previousOutstanding > 0 && (
                         <span className="ml-1 text-[10px] font-black text-amber-900 bg-amber-100/70 px-1.5 py-0.5 rounded">
                           Payable: ₹{order.totalPayable || (order.finalAmount + order.previousOutstanding)}

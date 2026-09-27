@@ -9,6 +9,7 @@ import {
   CreditCard,
   QrCode,
   ArrowRight,
+  Wallet,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { Address, PaymentMethod } from '../types';
@@ -33,6 +34,8 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
     setSelectedAddressId,
     checkoutBreakdown,
     createOrder,
+    useWalletBalance,
+    setUseWalletBalance,
   } = useApp();
 
   const [isDualPaymentOpen, setIsDualPaymentOpen] = useState(false);
@@ -48,7 +51,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
 
   // Simulated Razorpay Modal State
   const [isSimulatingRazorpay, setIsSimulatingRazorpay] = useState(false);
-  const [selectedUpiApp, setSelectedUpiApp] = useState<'GPAY' | 'PHONEPE' | 'PAYTM' | 'QR'>('GPAY');
+  const [selectedUpiApp, setSelectedUpiApp] = useState<'PAYTM' | 'PHONEPE' | 'GPAY' | 'QR' | 'WALLET'>('PAYTM');
 
   if (!isOpen) return null;
 
@@ -73,8 +76,17 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
     setIsDualPaymentOpen(true);
   };
 
-  const handleSelectPaymentMethod = async (method: PaymentMethod) => {
+  const handleSelectPaymentMethod = async (
+    method: PaymentMethod,
+    app?: 'PAYTM' | 'PHONEPE' | 'GPAY' | 'QR' | 'WALLET'
+  ) => {
     if (method === PaymentMethod.ADVANCE_ONLINE) {
+      if (app) {
+        setSelectedUpiApp(app);
+        if (app === 'WALLET') {
+          setUseWalletBalance(true);
+        }
+      }
       setIsDualPaymentOpen(false);
       // Trigger simulated UPI / Razorpay Gateway
       setIsSimulatingRazorpay(true);
@@ -101,6 +113,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
       address: currentSelectedAddress,
       paymentMethod: PaymentMethod.ADVANCE_ONLINE,
       deliveryDate,
+      useWallet: selectedUpiApp === 'WALLET' ? true : useWalletBalance,
     });
     setIsSimulatingRazorpay(false);
     onClose();
@@ -139,6 +152,49 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                 Verified Recipient
               </span>
             </div>
+
+            {/* Store Wallet Balance (If positive available balance exists) */}
+            {currentUser.walletBalance > 0 && (
+              <div
+                id="checkout-wallet-balance-banner"
+                className="bg-emerald-50/90 border-2 border-emerald-400 rounded-xl p-3.5 flex items-center justify-between shadow-xs"
+              >
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-full bg-emerald-600 text-white flex items-center justify-center font-bold text-sm shadow-xs">
+                    <Wallet size={18} />
+                  </div>
+                  <div>
+                    <div className="text-xs font-extrabold text-emerald-950 flex items-center gap-1.5">
+                      <span>Available Wallet Balance</span>
+                      <span className="bg-emerald-200 text-emerald-900 text-[10px] font-black px-1.5 py-0.2 rounded">
+                        Refund Credit
+                      </span>
+                    </div>
+                    <div className="text-sm font-black text-emerald-800">
+                      ₹{currentUser.walletBalance}
+                    </div>
+                  </div>
+                </div>
+
+                <label className="flex items-center gap-2 cursor-pointer bg-white px-3 py-1.5 rounded-lg border border-emerald-300 shadow-xs hover:bg-emerald-50 transition">
+                  <input
+                    type="checkbox"
+                    id="use-wallet-balance-checkbox"
+                    checked={useWalletBalance}
+                    onChange={(e) => setUseWalletBalance(e.target.checked)}
+                    className="rounded text-emerald-600 focus:ring-emerald-500 w-4 h-4 cursor-pointer"
+                  />
+                  <div className="text-right">
+                    <span className="text-xs font-bold text-emerald-950 block">Apply Wallet</span>
+                    {useWalletBalance && checkoutBreakdown.advanceWalletUsed ? (
+                      <span className="text-[10px] text-emerald-700 font-bold block">
+                        Using ₹{checkoutBreakdown.advanceWalletUsed}
+                      </span>
+                    ) : null}
+                  </div>
+                </label>
+              </div>
+            )}
 
             {/* Address Selection */}
             <div>
@@ -288,9 +344,40 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
             </div>
 
             <div className="bg-emerald-50 p-3 rounded-xl mb-4 text-center border border-emerald-200">
-              <div className="text-[11px] text-emerald-800 font-semibold">Advance Payment Amount</div>
-              <div className="text-2xl font-black text-emerald-800">₹{checkoutBreakdown.advanceFinalTotal}</div>
-              <div className="text-[10px] text-emerald-700 font-bold mt-0.5">
+              <div className="text-[11px] text-emerald-800 font-semibold">Advance Payment Total Payable</div>
+              <div className="text-2xl font-black text-emerald-800">
+                ₹{checkoutBreakdown.advanceRemainingPayable ?? checkoutBreakdown.advanceTotalPayable ?? (checkoutBreakdown.advanceFinalTotal + (checkoutBreakdown.previousOutstanding || 0))}
+              </div>
+              <div className="bg-white/80 border border-emerald-200 rounded-lg p-2 mt-2 space-y-1 text-xs text-left">
+                <div className="flex justify-between text-gray-600">
+                  <span>New Order Amount:</span>
+                  <span className="font-semibold text-gray-800">₹{checkoutBreakdown.advanceFinalTotal}</span>
+                </div>
+                {checkoutBreakdown.previousOutstanding && checkoutBreakdown.previousOutstanding > 0 ? (
+                  <div className="flex justify-between text-gray-600">
+                    <span>Previous Outstanding:</span>
+                    <span className="font-semibold text-amber-900">+₹{checkoutBreakdown.previousOutstanding}</span>
+                  </div>
+                ) : null}
+                {checkoutBreakdown.isWalletApplied && checkoutBreakdown.advanceWalletUsed && checkoutBreakdown.advanceWalletUsed > 0 ? (
+                  <div className="flex justify-between text-emerald-700 font-bold">
+                    <span>Wallet Balance Used:</span>
+                    <span>-₹{checkoutBreakdown.advanceWalletUsed}</span>
+                  </div>
+                ) : null}
+                <div className="border-t border-emerald-200 pt-1 flex justify-between font-bold text-emerald-900">
+                  <span>Remaining Payable:</span>
+                  <span className="font-black text-emerald-800">
+                    ₹{checkoutBreakdown.advanceRemainingPayable ?? checkoutBreakdown.advanceTotalPayable ?? (checkoutBreakdown.advanceFinalTotal + (checkoutBreakdown.previousOutstanding || 0))}
+                  </span>
+                </div>
+                {checkoutBreakdown.isWalletApplied && checkoutBreakdown.advanceRemainingWallet !== undefined ? (
+                  <div className="text-[10px] text-emerald-700 font-medium text-right pt-0.5">
+                    Wallet balance after payment: ₹{checkoutBreakdown.advanceRemainingWallet}
+                  </div>
+                ) : null}
+              </div>
+              <div className="text-[10px] text-emerald-700 font-bold mt-1">
                 {checkoutBreakdown.advanceDiscountAmount > 0
                   ? `Includes ₹${checkoutBreakdown.advanceDiscountAmount} Instant Advance Discount (Applied on eligible items)`
                   : checkoutBreakdown.excludedSubtotal > 0
@@ -300,20 +387,34 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
             </div>
 
             <div className="space-y-2 mb-5">
-              <p className="text-[11px] font-bold text-gray-600 uppercase">Select Fast UPI App:</p>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="flex items-center justify-between flex-wrap gap-1">
+                <p className="text-[11px] font-bold text-gray-600 uppercase">Select Payment Method:</p>
+                <div
+                  id="checkout-advance-payment-methods-text"
+                  className="text-[10px] font-extrabold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200"
+                >
+                  Paytm | PhonePe | Google Pay | Scan any QR | Wallet
+                </div>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                 {[
-                  { id: 'GPAY', name: 'Google Pay', icon: '⚡' },
+                  { id: 'PAYTM', name: 'Paytm', icon: '🔵' },
                   { id: 'PHONEPE', name: 'PhonePe', icon: '🟣' },
-                  { id: 'PAYTM', name: 'Paytm UPI', icon: '🔵' },
-                  { id: 'QR', name: 'Scan Any QR', icon: '📱' },
+                  { id: 'GPAY', name: 'Google Pay', icon: '⚡' },
+                  { id: 'QR', name: 'Scan any QR', icon: '📱' },
+                  { id: 'WALLET', name: 'Wallet', icon: '👛' },
                 ].map((app) => (
                   <button
                     key={app.id}
-                    onClick={() => setSelectedUpiApp(app.id as any)}
-                    className={`p-2 rounded-xl border text-xs font-bold flex items-center gap-2 transition ${
+                    onClick={() => {
+                      setSelectedUpiApp(app.id as any);
+                      if (app.id === 'WALLET') {
+                        setUseWalletBalance(true);
+                      }
+                    }}
+                    className={`p-2.5 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition ${
                       selectedUpiApp === app.id
-                        ? 'border-emerald-600 bg-emerald-50 text-emerald-900 ring-2 ring-emerald-500/20'
+                        ? 'border-emerald-600 bg-emerald-50 text-emerald-900 ring-2 ring-emerald-500/20 shadow-xs'
                         : 'border-gray-200 hover:bg-gray-50 text-gray-700'
                     }`}
                   >
@@ -330,7 +431,23 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
               className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold py-3 rounded-xl shadow-md transition text-xs flex items-center justify-center gap-2"
             >
               <ShieldCheck size={16} />
-              <span>Authorize ₹{checkoutBreakdown.advanceFinalTotal} & Confirm Order</span>
+              <span>
+                {(checkoutBreakdown.advanceRemainingPayable ?? checkoutBreakdown.advanceTotalPayable ?? 0) === 0
+                  ? 'Authorize ₹0 & Confirm Order (Fully paid with Wallet)'
+                  : selectedUpiApp === 'WALLET' && (checkoutBreakdown.advanceWalletUsed || 0) > 0
+                  ? `Authorize ₹${checkoutBreakdown.advanceRemainingPayable ?? checkoutBreakdown.advanceTotalPayable} via Wallet & Confirm Order`
+                  : `Authorize ₹${checkoutBreakdown.advanceRemainingPayable ?? checkoutBreakdown.advanceTotalPayable} via ${
+                      selectedUpiApp === 'PAYTM'
+                        ? 'Paytm'
+                        : selectedUpiApp === 'PHONEPE'
+                        ? 'PhonePe'
+                        : selectedUpiApp === 'GPAY'
+                        ? 'Google Pay'
+                        : selectedUpiApp === 'QR'
+                        ? 'Scan any QR'
+                        : 'Wallet'
+                    } & Confirm Order`}
+              </span>
             </button>
           </div>
         </div>

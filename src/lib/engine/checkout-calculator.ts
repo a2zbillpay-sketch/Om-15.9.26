@@ -31,6 +31,15 @@ export interface CheckoutBreakdown {
   advanceFinalTotal: number;
   previousOutstanding?: number;
   codTotalPayable?: number;
+  advanceTotalPayable?: number;
+  availableWalletBalance?: number;
+  isWalletApplied?: boolean;
+  advanceWalletUsed?: number;
+  codWalletUsed?: number;
+  advanceRemainingPayable?: number;
+  codRemainingPayable?: number;
+  advanceRemainingWallet?: number;
+  codRemainingWallet?: number;
 }
 
 /**
@@ -57,7 +66,9 @@ export function calculateCheckoutTotals(
   items: VariantCartItem[],
   user: UserContext,
   settings: SystemSettings,
-  previousOutstanding: number = 0
+  previousOutstanding: number = 0,
+  availableWalletBalance: number = 0,
+  useWallet: boolean = true
 ): CheckoutBreakdown {
   let subtotal = 0;
   let eligibleSubtotal = 0;
@@ -92,6 +103,23 @@ export function calculateCheckoutTotals(
   const advanceFinalTotal = Math.max(0, subtotal + deliveryFee - advanceDiscountAmount);
   const cleanOutstanding = Math.max(0, Number(previousOutstanding) || 0);
   const codTotalPayable = codFinalTotal + cleanOutstanding;
+  const advanceTotalPayable = advanceFinalTotal + cleanOutstanding;
+
+  // 5. Wallet Usage Calculation
+  const cleanWalletBalance = Math.max(0, Number(availableWalletBalance) || 0);
+  const isWalletApplied = Boolean(useWallet && cleanWalletBalance > 0);
+
+  const advanceWalletUsed = isWalletApplied
+    ? Math.min(cleanWalletBalance, advanceTotalPayable)
+    : 0;
+  const advanceRemainingPayable = Math.max(0, advanceTotalPayable - advanceWalletUsed);
+  const advanceRemainingWallet = Math.max(0, cleanWalletBalance - advanceWalletUsed);
+
+  const codWalletUsed = isWalletApplied
+    ? Math.min(cleanWalletBalance, codTotalPayable)
+    : 0;
+  const codRemainingPayable = Math.max(0, codTotalPayable - codWalletUsed);
+  const codRemainingWallet = Math.max(0, cleanWalletBalance - codWalletUsed);
 
   return {
     subtotal,
@@ -105,6 +133,15 @@ export function calculateCheckoutTotals(
     advanceFinalTotal,
     previousOutstanding: cleanOutstanding,
     codTotalPayable,
+    advanceTotalPayable,
+    availableWalletBalance: cleanWalletBalance,
+    isWalletApplied,
+    advanceWalletUsed,
+    codWalletUsed,
+    advanceRemainingPayable,
+    codRemainingPayable,
+    advanceRemainingWallet,
+    codRemainingWallet,
   };
 }
 

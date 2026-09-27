@@ -12,7 +12,7 @@ import {
   MapPin,
   FileText,
 } from 'lucide-react';
-import { Order, OrderStatus, PaymentMethod } from '../types';
+import { Order, OrderStatus, PaymentMethod, PaymentStatus } from '../types';
 import { useApp } from '../context/AppContext';
 import { canCancelOrder } from '../lib/engine/checkout-calculator';
 import {
@@ -66,11 +66,38 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
   const secondsLeft = secondsRemaining % 60;
 
   const handleCancel = () => {
+    const isAdvance =
+      currentOrder.paymentMethod === PaymentMethod.ADVANCE_ONLINE ||
+      currentOrder.paymentStatus === PaymentStatus.RECEIVED;
+    let walletUsed = Math.max(0, currentOrder.walletAmountUsed || 0);
+    if (
+      walletUsed === 0 &&
+      isAdvance &&
+      currentOrder.totalPayable !== undefined &&
+      currentOrder.finalAmount > currentOrder.totalPayable
+    ) {
+      walletUsed = Math.max(0, currentOrder.finalAmount - currentOrder.totalPayable);
+    }
+    const onlinePaid = isAdvance
+      ? Math.max(
+          0,
+          Math.min(
+            currentOrder.totalPayable !== undefined ? currentOrder.totalPayable : currentOrder.finalAmount,
+            currentOrder.finalAmount - walletUsed
+          )
+        )
+      : 0;
+    const refundAmount = walletUsed + onlinePaid;
+
     const success = cancelOrder(currentOrder.id);
     if (success) {
       setCancelMessage(
-        currentOrder.paymentMethod === PaymentMethod.ADVANCE_ONLINE
-          ? 'Order cancelled! ₹' + currentOrder.finalAmount + ' has been refunded directly to your Store Wallet.'
+        refundAmount > 0
+          ? walletUsed > 0 && onlinePaid > 0
+            ? `Order cancelled! Full refund of ₹${refundAmount} (₹${walletUsed} wallet used + ₹${onlinePaid} online advance) has been refunded directly to your Store Wallet.`
+            : walletUsed > 0
+            ? `Order cancelled! Full refund of ₹${refundAmount} (₹${walletUsed} wallet used) has been refunded directly to your Store Wallet.`
+            : `Order cancelled! Full refund of ₹${refundAmount} online payment has been refunded directly to your Store Wallet.`
           : 'Order successfully cancelled.'
       );
     }
@@ -184,6 +211,43 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
             </div>
           )}
 
+          {currentOrder.status === OrderStatus.CANCELLED && !cancelMessage && (
+            <div className="p-3 bg-red-50 border border-red-200 text-red-800 text-xs rounded-xl font-semibold">
+              {(() => {
+                let wUsed = Math.max(0, currentOrder.walletAmountUsed || 0);
+                if (
+                  wUsed === 0 &&
+                  currentOrder.totalPayable !== undefined &&
+                  currentOrder.finalAmount > currentOrder.totalPayable
+                ) {
+                  wUsed = Math.max(0, currentOrder.finalAmount - currentOrder.totalPayable);
+                }
+                const isAdv =
+                  currentOrder.paymentMethod === PaymentMethod.ADVANCE_ONLINE ||
+                  currentOrder.paymentStatus === PaymentStatus.RECEIVED ||
+                  currentOrder.paymentStatus === PaymentStatus.REFUNDED;
+                const oPaid = isAdv
+                  ? Math.max(
+                      0,
+                      Math.min(
+                        currentOrder.totalPayable !== undefined ? currentOrder.totalPayable : currentOrder.finalAmount,
+                        currentOrder.finalAmount - wUsed
+                      )
+                    )
+                  : 0;
+                const rTot = wUsed + oPaid;
+                if (rTot > 0) {
+                  return wUsed > 0 && oPaid > 0
+                    ? `Order Cancelled. Full refund of ₹${rTot} (₹${wUsed} wallet used + ₹${oPaid} online advance) has been refunded to your Store Wallet.`
+                    : wUsed > 0
+                    ? `Order Cancelled. Full refund of ₹${rTot} (₹${wUsed} wallet used) has been refunded to your Store Wallet.`
+                    : `Order Cancelled. Full refund of ₹${rTot} has been refunded to your Store Wallet.`;
+                }
+                return 'Order has been cancelled.';
+              })()}
+            </div>
+          )}
+
           {/* Delivery & Recipient Details */}
           <div className="grid grid-cols-2 gap-3 text-xs">
             <div className="bg-gray-50 p-3 rounded-xl border border-gray-200">
@@ -274,6 +338,13 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
               <div className="flex justify-between text-xs text-amber-800 font-bold">
                 <span>Previous Outstanding:</span>
                 <span>+₹{currentOrder.previousOutstanding}</span>
+              </div>
+            )}
+
+            {currentOrder.walletAmountUsed !== undefined && currentOrder.walletAmountUsed > 0 && (
+              <div className="flex justify-between text-xs text-emerald-700 font-bold">
+                <span>Wallet Balance Used:</span>
+                <span>-₹{currentOrder.walletAmountUsed}</span>
               </div>
             )}
 

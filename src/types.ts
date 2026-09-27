@@ -140,6 +140,7 @@ export interface Order {
   previousOutstanding?: number;
   totalPayable?: number;
   codCollectedAmount?: number;
+  walletAmountUsed?: number;
   razorpayOrderId?: string;
   razorpayPaymentId?: string;
   createdAt: string;
@@ -191,4 +192,29 @@ export interface CartItem {
   variantId: string;
   variant: ProductVariant;
   quantity: number;
+}
+
+export interface WalletTransaction {
+  id: string;
+  userId: string;
+  userPhone: string;
+  orderId?: string;
+  orderNumber?: string;
+  type: 'CREDIT' | 'DEBIT';
+  amount: number;
+  balanceAfter: number;
+  description: string;
+  createdAt: string;
+}
+
+export interface AdminNotification {
+  id: string;
+  type: 'ORDER_CANCELLED' | 'GENERAL';
+  title: string;
+  message: string;
+  orderId?: string;
+  orderNumber?: string;
+  amount?: number;
+  read: boolean;
+  createdAt: string;
 }

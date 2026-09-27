@@ -87,6 +87,92 @@ function parseCustomerAddress(rawAddress?: string | null): {
 }
 
 /**
+ * Safely fetches the customer's persistent wallet balance from Supabase's ledger table
+ * or localStorage cache. This ensures refunded amounts survive sessions, reloads, and logins
+ * even if users table doesn't have a wallet_balance column.
+ */
+export async function getCustomerWalletBalanceFromLedger(
+  customerId?: string,
+  phone?: string
+): Promise<number> {
+  let balance = 0;
+  let foundWalletEntry = false;
+  const cleanPhone = phone ? phone.replace(/\D/g, '').slice(-10) : '';
+
+  if (supabase) {
+    try {
+      const filters: string[] = [];
+      if (customerId) filters.push(`customer_id.eq.${customerId}`);
+      if (cleanPhone) {
+        filters.push(`customer_id.eq.${cleanPhone}`);
+        filters.push(`customer_id.eq.user-${cleanPhone}`);
+      }
+      if (filters.length > 0) {
+        const { data: ledgerRows } = await supabase
+          .from('ledger')
+          .select('balance_after, date, type, description')
+          .or(filters.join(','))
+          .order('date', { ascending: false })
+          .limit(10);
+
+        if (ledgerRows && ledgerRows.length > 0) {
+          // Identify the most recent wallet transaction (DEBIT or CREDIT with Refund/Wallet in description)
+          const walletRow = ledgerRows.find(
+            (r) =>
+              r.type === 'DEBIT' ||
+              (r.description &&
+                (r.description.toLowerCase().includes('wallet') ||
+                  r.description.toLowerCase().includes('refund')))
+          );
+
+          if (walletRow && typeof walletRow.balance_after === 'number') {
+            balance = Number(walletRow.balance_after);
+            foundWalletEntry = true;
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Error querying ledger for wallet balance:', err);
+    }
+  }
+
+  // Fallback to localStorage cache if no Supabase wallet entry was found
+  if (!foundWalletEntry && typeof localStorage !== 'undefined') {
+    try {
+      const txStr = localStorage.getItem('om_wallet_transactions');
+      if (txStr) {
+        const txList = JSON.parse(txStr);
+        if (Array.isArray(txList)) {
+          const match = txList.find(
+            (t: any) =>
+              (cleanPhone && t.userPhone && t.userPhone.replace(/\D/g, '').slice(-10) === cleanPhone) ||
+              (customerId && t.userId === customerId)
+          );
+          if (match && typeof match.balanceAfter === 'number') {
+            balance = Number(match.balanceAfter);
+            foundWalletEntry = true;
+          }
+        }
+      }
+    } catch {}
+
+    if (!foundWalletEntry && cleanPhone) {
+      try {
+        const cached = localStorage.getItem(`om_profile_${cleanPhone}`);
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (typeof parsed.walletBalance === 'number' && parsed.walletBalance >= 0) {
+            balance = parsed.walletBalance;
+          }
+        }
+      } catch {}
+    }
+  }
+
+  return balance;
+}
+
+/**
  * Deterministically resolves or creates a customer by their phone number.
  * This guarantees that Chrome, Samsung Internet, Safari, Firefox, Edge, etc.
  * all resolve to the EXACT SAME customer account.
@@ -128,7 +214,8 @@ export async function getOrCreateCustomerByPhone(
         : [];
 
       const dbOutstanding = Number(existingUser.outstanding_balance || 0);
-      const dbCredits = Number(existingUser.wallet_balance || 0);
+      const ledgerCredits = await getCustomerWalletBalanceFromLedger(existingUser.id, cleanPhone);
+      const dbCredits = Math.max(Number(existingUser.wallet_balance || 0), ledgerCredits);
 
       return {
         id: existingUser.id,
@@ -283,7 +370,8 @@ export async function saveCustomerProfileToSupabase(
     };
 
     const dbOutstanding = Number(targetUser?.outstanding_balance || 0);
-    const dbCredits = Number(targetUser?.wallet_balance || 0);
+    const ledgerCredits = await getCustomerWalletBalanceFromLedger(targetUser?.id || userId, cleanPhone);
+    const dbCredits = Math.max(Number(targetUser?.wallet_balance || 0), ledgerCredits);
 
     return {
       id: targetUser?.id || userId,
@@ -377,7 +465,8 @@ export async function fetchCustomerProfileFromSupabase(phone: string): Promise<U
       : [];
 
     const dbOutstanding = Number(dbUser.outstanding_balance || 0);
-    const dbCredits = Number(dbUser.wallet_balance || 0);
+    const ledgerCredits = await getCustomerWalletBalanceFromLedger(dbUser.id, cleanPhone);
+    const dbCredits = Math.max(Number(dbUser.wallet_balance || 0), ledgerCredits);
 
     return {
       id: dbUser.id,
@@ -569,6 +658,7 @@ export async function fetchCustomerOrdersFromSupabase(
       let codCollectedAmount = 0;
       let previousOutstanding = 0;
       let totalPayable = finalAmount;
+      let walletAmountUsed = 0;
 
       const rawNotes = o.notes || '';
       if (rawNotes.includes('COD_META:')) {
@@ -578,7 +668,8 @@ export async function fetchCustomerOrdersFromSupabase(
           const meta = JSON.parse(parts[1].trim());
           codCollectedAmount = Number(meta.codCollected) || 0;
           previousOutstanding = Number(meta.prevOutstanding) || 0;
-          totalPayable = Number(meta.totalPayable) || (finalAmount + previousOutstanding);
+          totalPayable = meta.totalPayable !== undefined ? Number(meta.totalPayable) : (finalAmount + previousOutstanding);
+          walletAmountUsed = Number(meta.walletAmountUsed) || 0;
         } catch {
           // ignore parsing error
         }
@@ -600,6 +691,10 @@ export async function fetchCustomerOrdersFromSupabase(
         paymentStatus = PaymentStatus.PARTIALLY_COLLECTED;
       }
 
+      const resolvedWalletAmountUsed =
+        walletAmountUsed ||
+        (o.is_paid && finalAmount > totalPayable ? Math.max(0, finalAmount - totalPayable) : 0);
+
       return {
         id: o.id,
         orderNumber: orderNumber || `OM-${o.id.slice(0, 5)}`,
@@ -615,7 +710,7 @@ export async function fetchCustomerOrdersFromSupabase(
           pincode: parsedAddress.pincode || '',
           isDefault: true,
         },
-        status: (o.status as OrderStatus) || OrderStatus.ORDER_ACCEPTED,
+        status: (o.status as OrderStatus) || OrderStatus.ORDER_PENDING,
         paymentMethod: (o.payment_method as PaymentMethod) || PaymentMethod.COD,
         paymentStatus,
         deliveryDate: o.preferred_slot || (o.created_at ? o.created_at.split('T')[0] : new Date().toISOString().split('T')[0]),
@@ -626,6 +721,7 @@ export async function fetchCustomerOrdersFromSupabase(
         finalAmount,
         previousOutstanding,
         totalPayable,
+        walletAmountUsed: resolvedWalletAmountUsed,
         codCollectedAmount,
         createdAt: o.created_at || new Date().toISOString(),
         items,
@@ -648,7 +744,8 @@ export async function saveOrderToSupabase(order: Order): Promise<boolean> {
     const metaPayload = JSON.stringify({
       codCollected: order.codCollectedAmount || 0,
       prevOutstanding: order.previousOutstanding || 0,
-      totalPayable: order.totalPayable || order.finalAmount,
+      totalPayable: order.totalPayable !== undefined ? order.totalPayable : order.finalAmount,
+      walletAmountUsed: order.walletAmountUsed || 0,
     });
     const orderNotes = `Order #${order.orderNumber} | COD_META:${metaPayload}`;
 
@@ -720,6 +817,7 @@ export async function fetchAllOrdersForAdmin(): Promise<Order[] | null> {
       let codCollectedAmount = 0;
       let previousOutstanding = 0;
       let totalPayable = finalAmount;
+      let walletAmountUsed = 0;
 
       const rawNotes = o.notes || '';
       if (rawNotes.includes('COD_META:')) {
@@ -729,7 +827,8 @@ export async function fetchAllOrdersForAdmin(): Promise<Order[] | null> {
           const meta = JSON.parse(parts[1].trim());
           codCollectedAmount = Number(meta.codCollected) || 0;
           previousOutstanding = Number(meta.prevOutstanding) || 0;
-          totalPayable = Number(meta.totalPayable) || (finalAmount + previousOutstanding);
+          totalPayable = meta.totalPayable !== undefined ? Number(meta.totalPayable) : (finalAmount + previousOutstanding);
+          walletAmountUsed = Number(meta.walletAmountUsed) || 0;
         } catch {
           // ignore parsing error
         }
@@ -751,6 +850,10 @@ export async function fetchAllOrdersForAdmin(): Promise<Order[] | null> {
         paymentStatus = PaymentStatus.PARTIALLY_COLLECTED;
       }
 
+      const resolvedWalletAmountUsed =
+        walletAmountUsed ||
+        (o.is_paid && finalAmount > totalPayable ? Math.max(0, finalAmount - totalPayable) : 0);
+
       return {
         id: o.id,
         orderNumber: orderNumber || `OM-${o.id.slice(0, 5)}`,
@@ -766,7 +869,7 @@ export async function fetchAllOrdersForAdmin(): Promise<Order[] | null> {
           pincode: parsedAddress.pincode || '',
           isDefault: true,
         },
-        status: (o.status as OrderStatus) || OrderStatus.ORDER_ACCEPTED,
+        status: (o.status as OrderStatus) || OrderStatus.ORDER_PENDING,
         paymentMethod: (o.payment_method as PaymentMethod) || PaymentMethod.COD,
         paymentStatus,
         deliveryDate: o.preferred_slot || (o.created_at ? o.created_at.split('T')[0] : new Date().toISOString().split('T')[0]),
@@ -777,6 +880,7 @@ export async function fetchAllOrdersForAdmin(): Promise<Order[] | null> {
         finalAmount,
         previousOutstanding,
         totalPayable,
+        walletAmountUsed: resolvedWalletAmountUsed,
         codCollectedAmount,
         createdAt: o.created_at || new Date().toISOString(),
         items,
@@ -819,10 +923,14 @@ export async function updateOrderStatusInSupabase(
       updatePayload.notes = `Order #${orderNum} | COD_META:${metaString}`;
     }
 
-    const { error } = await supabase
-      .from('orders')
-      .update(updatePayload)
-      .eq('id', orderId);
+    let orderQuery = supabase.from('orders').update(updatePayload);
+    if (orderId.startsWith('OM-')) {
+      orderQuery = orderQuery.ilike('notes', `%${orderId}%`);
+    } else {
+      orderQuery = orderQuery.eq('id', orderId);
+    }
+
+    const { error } = await orderQuery;
 
     if (error) {
       console.error('Failed to update order status in Supabase:', error);
@@ -884,6 +992,175 @@ export async function recordCodCollectionInSupabase(tx: {
     return true;
   } catch (err) {
     console.warn('Exception in recordCodCollectionInSupabase:', err);
+    return false;
+  }
+}
+
+/**
+ * Permanently logs a Wallet Credit / Refund transaction in Supabase's ledger and updates the customer's wallet_balance.
+ */
+export async function creditCustomerWalletInSupabase(tx: {
+  userId?: string;
+  customerPhone: string;
+  customerName?: string;
+  orderId?: string;
+  orderNumber?: string;
+  amount: number;
+  newWalletBalance: number;
+  description: string;
+}): Promise<boolean> {
+  if (!supabase) return false;
+
+  try {
+    const cleanPhone = (tx.customerPhone || '').replace(/\D/g, '').slice(-10);
+
+    // 0. Prevent duplicate ledger entry for the same order refund
+    if (tx.orderId || tx.orderNumber) {
+      try {
+        let dupQuery = supabase.from('ledger').select('id, amount').eq('type', 'CREDIT');
+        if (tx.orderId) {
+          dupQuery = dupQuery.eq('order_id', tx.orderId);
+        } else if (tx.orderNumber) {
+          dupQuery = dupQuery.ilike('description', `%${tx.orderNumber}%`);
+        }
+        const { data: existingLedger } = await dupQuery;
+        if (existingLedger && existingLedger.length > 0) {
+          const totalAlreadyCredited = existingLedger.reduce((sum, r: any) => sum + (Number(r.amount) || 0), 0);
+          if (totalAlreadyCredited >= tx.amount) {
+            return true; // Already credited full amount, do not duplicate
+          }
+        }
+      } catch (dupErr) {
+        console.warn('Error checking duplicate ledger entry:', dupErr);
+      }
+    }
+
+    // 1. Insert into Supabase 'ledger' table
+    const ledgerPayload = {
+      id: `led_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      customer_id: tx.userId || cleanPhone || tx.customerPhone,
+      customer_name: tx.customerName || 'Customer',
+      order_id: tx.orderId || null,
+      date: new Date().toISOString(),
+      type: 'CREDIT',
+      amount: tx.amount,
+      description: tx.description,
+      balance_after: tx.newWalletBalance,
+    };
+
+    const { error: ledgerError } = await supabase.from('ledger').insert(ledgerPayload);
+    if (ledgerError) {
+      console.warn('Error inserting wallet credit to Supabase ledger:', ledgerError.message);
+    }
+
+    // 2. Safely attempt updating Supabase 'users.wallet_balance'
+    try {
+      const updatePayload = {
+        wallet_balance: tx.newWalletBalance,
+        updated_at: new Date().toISOString(),
+      };
+
+      if (cleanPhone) {
+        await supabase
+          .from('users')
+          .update(updatePayload)
+          .eq('phone', cleanPhone);
+      } else if (tx.userId) {
+        await supabase
+          .from('users')
+          .update(updatePayload)
+          .eq('id', tx.userId);
+      }
+    } catch {
+      // Ignored if column does not exist on users table
+    }
+
+    return true;
+  } catch (err) {
+    console.warn('Exception in creditCustomerWalletInSupabase:', err);
+    return false;
+  }
+}
+
+/**
+ * Permanently logs a Wallet Debit transaction in Supabase's ledger and updates the customer's wallet_balance.
+ */
+export async function debitCustomerWalletInSupabase(tx: {
+  userId?: string;
+  customerPhone: string;
+  customerName?: string;
+  orderId?: string;
+  orderNumber?: string;
+  amount: number;
+  newWalletBalance: number;
+  description: string;
+}): Promise<boolean> {
+  if (!supabase) return false;
+
+  try {
+    const cleanPhone = (tx.customerPhone || '').replace(/\D/g, '').slice(-10);
+
+    // 0. Prevent duplicate ledger entry for the same order debit
+    if (tx.orderId || tx.orderNumber) {
+      try {
+        let dupQuery = supabase.from('ledger').select('id').eq('type', 'DEBIT');
+        if (tx.orderId) {
+          dupQuery = dupQuery.eq('order_id', tx.orderId);
+        } else if (tx.orderNumber) {
+          dupQuery = dupQuery.ilike('description', `%${tx.orderNumber}%`);
+        }
+        const { data: existingLedger } = await dupQuery;
+        if (existingLedger && existingLedger.length > 0) {
+          return true; // Already debited, do not duplicate
+        }
+      } catch (dupErr) {
+        console.warn('Error checking duplicate ledger debit entry:', dupErr);
+      }
+    }
+
+    // 1. Insert into Supabase 'ledger' table
+    const ledgerPayload = {
+      id: `led_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      customer_id: tx.userId || cleanPhone || tx.customerPhone,
+      customer_name: tx.customerName || 'Customer',
+      order_id: tx.orderId || null,
+      date: new Date().toISOString(),
+      type: 'DEBIT',
+      amount: tx.amount,
+      description: tx.description,
+      balance_after: tx.newWalletBalance,
+    };
+
+    const { error: ledgerError } = await supabase.from('ledger').insert(ledgerPayload);
+    if (ledgerError) {
+      console.warn('Error inserting wallet debit to Supabase ledger:', ledgerError.message);
+    }
+
+    // 2. Safely attempt updating Supabase 'users.wallet_balance'
+    try {
+      const updatePayload = {
+        wallet_balance: tx.newWalletBalance,
+        updated_at: new Date().toISOString(),
+      };
+
+      if (cleanPhone) {
+        await supabase
+          .from('users')
+          .update(updatePayload)
+          .eq('phone', cleanPhone);
+      } else if (tx.userId) {
+        await supabase
+          .from('users')
+          .update(updatePayload)
+          .eq('id', tx.userId);
+      }
+    } catch {
+      // Ignored if column does not exist on users table
+    }
+
+    return true;
+  } catch (err) {
+    console.warn('Exception in debitCustomerWalletInSupabase:', err);
     return false;
   }
 }

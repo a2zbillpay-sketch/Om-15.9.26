@@ -8,10 +8,21 @@ interface ReferralWalletModalProps {
 }
 
 export const ReferralWalletModal: React.FC<ReferralWalletModalProps> = ({ isOpen, onClose }) => {
-  const { currentUser, settings, customerOutstanding } = useApp();
+  const { currentUser, settings, customerOutstanding, walletTransactions } = useApp();
   const [copied, setCopied] = useState(false);
 
   if (!isOpen) return null;
+
+  const cleanUserPhone = currentUser.phone ? currentUser.phone.replace(/\D/g, '').slice(-10) : '';
+
+  const userTransactions = (walletTransactions || []).filter((tx) => {
+    const txPhone = tx.userPhone ? tx.userPhone.replace(/\D/g, '').slice(-10) : '';
+    return (
+      tx.userId === currentUser.id ||
+      (cleanUserPhone && txPhone === cleanUserPhone) ||
+      (currentUser.phone && tx.userPhone === currentUser.phone)
+    );
+  });
 
   const hasDebt = customerOutstanding > 0 || (currentUser.walletBalance !== undefined && currentUser.walletBalance < 0);
   const debtAmount = customerOutstanding > 0 ? customerOutstanding : Math.abs(currentUser.walletBalance || 0);
@@ -122,7 +133,22 @@ export const ReferralWalletModal: React.FC<ReferralWalletModalProps> = ({ isOpen
           {/* Activity / Ledgers */}
           <div>
             <h4 className="text-xs font-bold text-gray-700 mb-2">Recent Wallet Activities</h4>
-            <div className="border border-gray-200 rounded-xl divide-y divide-gray-100 text-xs">
+            <div className="border border-gray-200 rounded-xl divide-y divide-gray-100 text-xs max-h-48 overflow-y-auto">
+              {userTransactions.length > 0 &&
+                userTransactions.map((tx) => (
+                  <div key={tx.id} className="p-3 flex justify-between items-center hover:bg-gray-50">
+                    <div>
+                      <div className="font-semibold text-gray-900">{tx.description}</div>
+                      <div className="text-[10px] text-gray-400">
+                        {tx.orderNumber ? `Order #${tx.orderNumber} • ` : ''}
+                        {new Date(tx.createdAt).toLocaleDateString()} {new Date(tx.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </div>
+                    </div>
+                    <div className={`font-black ${tx.type === 'DEBIT' ? 'text-rose-600' : 'text-emerald-600'}`}>
+                      {tx.type === 'DEBIT' ? `-₹${tx.amount}` : `+₹${tx.amount}`}
+                    </div>
+                  </div>
+                ))}
               <div className="p-3 flex justify-between items-center">
                 <div>
                   <div className="font-semibold text-gray-900">Welcome Signup Bonus</div>
