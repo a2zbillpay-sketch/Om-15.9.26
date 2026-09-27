@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Trash2, Plus, Minus, ArrowRight, ShieldCheck, Truck, Sparkles, Package, AlertCircle, Wallet } from 'lucide-react';
+import { X, Trash2, Plus, Minus, ArrowRight, ShieldCheck, Truck, Sparkles, Package, AlertCircle } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { getActiveUnitPrice } from '../lib/engine/checkout-calculator';
 import { formatVariantPack } from '../utils/variantFormatter';
@@ -272,17 +272,6 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                     <span>Previous Outstanding:</span>
                     <span className="font-semibold text-amber-900">+₹{checkoutBreakdown.previousOutstanding}</span>
                   </div>
-                </div>
-              ) : null}
-              {checkoutBreakdown.availableWalletBalance && checkoutBreakdown.availableWalletBalance > 0 ? (
-                <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-2 text-xs flex justify-between items-center my-1">
-                  <div className="flex items-center gap-1.5 text-emerald-900 font-bold">
-                    <Wallet size={13} className="text-emerald-700" />
-                    <span>Store Wallet:</span>
-                  </div>
-                  <span className="font-black text-emerald-800">
-                    ₹{checkoutBreakdown.availableWalletBalance} Available
-                  </span>
                 </div>
               ) : null}
               {checkoutBreakdown.isWalletApplied && checkoutBreakdown.advanceWalletUsed && checkoutBreakdown.advanceWalletUsed > 0 ? (

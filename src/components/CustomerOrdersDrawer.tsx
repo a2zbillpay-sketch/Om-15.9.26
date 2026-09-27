@@ -1,7 +1,7 @@
 import React from 'react';
 import { X, Clock, CheckCircle2, AlertTriangle, ChevronRight, Package, Truck, ArrowRight } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { Order, OrderStatus, PaymentMethod } from '../types';
+import { Order, OrderStatus, PaymentMethod, PaymentStatus } from '../types';
 import { canCancelOrder, getRemainingCancellationMinutes } from '../lib/engine/checkout-calculator';
 import {
   SIX_FULFILLMENT_STEPS,
@@ -152,10 +152,19 @@ export const CustomerOrdersDrawer: React.FC<CustomerOrdersDrawerProps> = ({
                           Wallet: -₹{order.walletAmountUsed}
                         </span>
                       )}
-                      {order.previousOutstanding !== undefined && order.previousOutstanding > 0 && (
-                        <span className="ml-1 text-[10px] font-black text-amber-900 bg-amber-100/70 px-1.5 py-0.5 rounded">
-                          Payable: ₹{order.totalPayable || (order.finalAmount + order.previousOutstanding)}
+                      {order.status !== OrderStatus.CANCELLED &&
+                      (order.paymentStatus === PaymentStatus.RECEIVED ||
+                        (order.paymentStatus as any) === 'PAID' ||
+                        order.paymentMethod === PaymentMethod.ADVANCE_ONLINE) ? (
+                        <span className="ml-1 text-[10px] font-black text-emerald-800 bg-emerald-100/70 px-1.5 py-0.5 rounded">
+                          PAID
                         </span>
+                      ) : (
+                        order.previousOutstanding !== undefined && order.previousOutstanding > 0 && (
+                          <span className="ml-1 text-[10px] font-black text-amber-900 bg-amber-100/70 px-1.5 py-0.5 rounded">
+                            Payable: ₹{order.totalPayable || (order.finalAmount + order.previousOutstanding)}
+                          </span>
+                        )
                       )}
                       <span className="text-[10px] text-gray-400 ml-1.5">
                         ({order.paymentMethod === PaymentMethod.ADVANCE_ONLINE ? 'UPI' : 'COD'})

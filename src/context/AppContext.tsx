@@ -157,6 +157,8 @@ interface AppContextType {
     useWallet?: boolean;
     orderId?: string;
     orderNumber?: string;
+    selectedPaymentApp?: string;
+    isWalletPayment?: boolean;
   }) => Promise<Order>;
   cancelOrder: (orderId: string) => boolean;
   updateOrderStatus: (orderId: string, newStatus: OrderStatus) => void;
@@ -584,7 +586,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const userDebt = calculateCustomerOutstanding(orders, matchingUser.phone || matchingUser.id);
       const updatedUser = {
         ...matchingUser,
-        walletBalance: userDebt > 0 ? -userDebt : (matchingUser.walletBalance < 0 ? 0 : matchingUser.walletBalance),
+        walletBalance: matchingUser.walletBalance >= 0 ? matchingUser.walletBalance : 0,
         outstandingBalance: userDebt,
       };
       setCurrentUser(updatedUser);
@@ -937,29 +939,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     [orders, currentUser.phone, currentUser.id, currentUser.outstandingBalance]
   );
 
-  // Ensure customer COD outstanding debt is persistently represented as a negative balance
+  // Ensure customer COD outstanding debt is tracked in outstandingBalance,
+  // NEVER overwriting or reducing walletBalance!
   useEffect(() => {
     if (activeRole === Role.CUSTOMER && (currentUser.phone || currentUser.id)) {
-      if (customerOutstanding > 0) {
-        const targetDebtBalance = -customerOutstanding;
-        if (currentUser.walletBalance !== targetDebtBalance || currentUser.outstandingBalance !== customerOutstanding) {
-          setCurrentUser((prev) => ({
-            ...prev,
-            walletBalance: targetDebtBalance,
-            outstandingBalance: customerOutstanding,
-          }));
-        }
-      } else if (customerOutstanding === 0) {
-        if (currentUser.walletBalance < 0 || (currentUser.outstandingBalance && currentUser.outstandingBalance > 0)) {
-          setCurrentUser((prev) => ({
-            ...prev,
-            walletBalance: prev.walletBalance < 0 ? 0 : prev.walletBalance,
-            outstandingBalance: 0,
-          }));
-        }
+      if (
+        currentUser.outstandingBalance !== customerOutstanding ||
+        (currentUser.walletBalance !== undefined && currentUser.walletBalance < 0)
+      ) {
+        setCurrentUser((prev) => ({
+          ...prev,
+          outstandingBalance: customerOutstanding,
+          walletBalance: prev.walletBalance < 0 ? 0 : prev.walletBalance,
+        }));
       }
     }
-  }, [activeRole, customerOutstanding, currentUser.phone, currentUser.id, currentUser.walletBalance, currentUser.outstandingBalance]);
+  }, [activeRole, customerOutstanding, currentUser.phone, currentUser.id, currentUser.outstandingBalance, currentUser.walletBalance]);
 
   const [useWalletBalance, setUseWalletBalance] = useState<boolean>(true);
 
@@ -996,6 +991,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     useWallet?: boolean;
     orderId?: string;
     orderNumber?: string;
+    selectedPaymentApp?: string;
+    isWalletPayment?: boolean;
   }): Promise<Order> => {
     const isAdvance = data.paymentMethod === PaymentMethod.ADVANCE_ONLINE;
     const finalAmount = isAdvance
@@ -1009,12 +1006,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       ? (checkoutBreakdown.advanceTotalPayable ?? (finalAmount + previousOutstanding))
       : finalAmount + previousOutstanding;
 
-    // Wallet balance usage calculation
-    const shouldApplyWallet = data.useWallet !== undefined ? data.useWallet : useWalletBalance;
-    const availableWallet = Math.max(0, currentUser.walletBalance || 0);
-    const walletUsed = shouldApplyWallet ? Math.min(availableWallet, baseTotalPayable) : 0;
+    // Wallet can ONLY be used inside Advance Payment as "Wallet Applied (Advance)"
+    // Wallet must be deducted ONLY when:
+    // 1. Customer explicitly selects "Advance Payment" (isAdvance === true), AND
+    // 2. Customer explicitly chooses to use Wallet in the Advance Payment flow (data.useWallet === true).
+    // If customer selects COD or does not select Advance Payment:
+    // → Wallet deduction = ₹0
+    // → Do not reduce Wallet balance
+    // → Do not record Wallet as payment.
+    let currentActualWallet = Math.max(0, currentUser.walletBalance || 0);
+    try {
+      const storedUserStr = localStorage.getItem('om_current_user') || localStorage.getItem('om_dist_current_user');
+      if (storedUserStr) {
+        const parsed = JSON.parse(storedUserStr);
+        if (typeof parsed.walletBalance === 'number' && parsed.walletBalance >= 0) {
+          currentActualWallet = parsed.walletBalance;
+        }
+      }
+    } catch {
+      // ignore parsing error
+    }
+
+    // Explicit check: only apply wallet if advance payment AND customer explicitly chose to use wallet
+    const isExplicitlyUsingWallet = isAdvance && Boolean(data.useWallet);
+    const walletUsed = isExplicitlyUsingWallet ? Math.min(currentActualWallet, baseTotalPayable) : 0;
     const totalPayable = Math.max(0, baseTotalPayable - walletUsed);
-    const newWalletBalance = Math.max(0, availableWallet - walletUsed);
+    const newWalletBalance = isExplicitlyUsingWallet
+      ? Math.max(0, currentActualWallet - walletUsed)
+      : currentActualWallet;
 
     const orderNumber = data.orderNumber || `OM-${Math.floor(10000 + Math.random() * 90000)}`;
     const orderId = data.orderId || `ord-${Date.now()}`;
@@ -1143,7 +1162,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           type: 'DEBIT',
           amount: walletUsed,
           balanceAfter: newWalletBalance,
-          description: `Wallet Payment for Order #${newOrder.orderNumber}`,
+          description: `Wallet Applied (Advance) for Order #${newOrder.orderNumber}`,
           createdAt: new Date().toISOString(),
         };
 
@@ -1163,7 +1182,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             orderNumber: newOrder.orderNumber,
             amount: walletUsed,
             newWalletBalance,
-            description: `Wallet Payment for Order #${newOrder.orderNumber}`,
+            description: `Wallet Applied (Advance) for Order #${newOrder.orderNumber}`,
           }).catch((err) => {
             console.warn('Background Supabase wallet debit error:', err);
           });
@@ -1506,7 +1525,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (isSameCustomer({ userPhone: u.phone, userId: u.id }, targetCustomer)) {
           return {
             ...u,
-            walletBalance: newDebt > 0 ? -newDebt : (u.walletBalance < 0 ? 0 : u.walletBalance),
+            walletBalance: u.walletBalance < 0 ? 0 : u.walletBalance,
             outstandingBalance: newDebt,
           };
         }
@@ -1517,7 +1536,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (isSameCustomer({ userPhone: currentUser.phone, userId: currentUser.id }, targetCustomer)) {
       setCurrentUser((prev) => ({
         ...prev,
-        walletBalance: newDebt > 0 ? -newDebt : (prev.walletBalance < 0 ? 0 : prev.walletBalance),
+        walletBalance: prev.walletBalance < 0 ? 0 : prev.walletBalance,
         outstandingBalance: newDebt,
       }));
     }
@@ -1746,7 +1765,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         phone: cleanPhone,
         role: Role.CUSTOMER,
         referralCode: resolvedUser?.referralCode || `OM${cleanPhone.slice(-4)}`,
-        walletBalance: userDebt > 0 ? -userDebt : resolvedWalletBalance,
+        walletBalance: resolvedWalletBalance >= 0 ? resolvedWalletBalance : 0,
         outstandingBalance: userDebt,
         codOrderCount: resolvedUser?.codOrderCount || 0,
         addresses: resolvedUser?.addresses || [],

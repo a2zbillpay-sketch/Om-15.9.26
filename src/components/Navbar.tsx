@@ -61,9 +61,8 @@ export const Navbar: React.FC<NavbarProps> = ({
 
   const hasDebt = customerOutstanding > 0;
   const debtAmount = customerOutstanding;
-  const formattedBalance = hasDebt
-    ? `-₹${Math.round(debtAmount)}`
-    : `₹${currentUser.walletBalance && currentUser.walletBalance > 0 ? currentUser.walletBalance : 0}`;
+  const walletCash = currentUser.walletBalance && currentUser.walletBalance > 0 ? currentUser.walletBalance : 0;
+  const formattedBalance = `₹${walletCash}`;
 
   const currentAddress = currentUser.addresses.find((a) => a.isDefault) || currentUser.addresses[0];
 

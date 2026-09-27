@@ -24,9 +24,10 @@ export const ReferralWalletModal: React.FC<ReferralWalletModalProps> = ({ isOpen
     );
   });
 
-  const hasDebt = customerOutstanding > 0 || (currentUser.walletBalance !== undefined && currentUser.walletBalance < 0);
-  const debtAmount = customerOutstanding > 0 ? customerOutstanding : Math.abs(currentUser.walletBalance || 0);
-  const displayAmount = hasDebt ? `-₹${Math.round(debtAmount)}` : `₹${currentUser.walletBalance >= 0 ? currentUser.walletBalance : 0}`;
+  const hasDebt = customerOutstanding > 0;
+  const debtAmount = customerOutstanding;
+  const walletCash = currentUser.walletBalance && currentUser.walletBalance > 0 ? currentUser.walletBalance : 0;
+  const displayAmount = `₹${walletCash}`;
 
   const referralMessage = `Get wholesale and retail groceries delivered fast from ${settings.appName}! Use my referral code *${currentUser.referralCode}* to get ₹${settings.referralRewardAmount} wallet cash on your first order.`;
 
@@ -62,34 +63,33 @@ export const ReferralWalletModal: React.FC<ReferralWalletModalProps> = ({ isOpen
 
         <div className="p-5 overflow-y-auto space-y-5 flex-1">
           {/* Balance Card */}
-          <div
-            className={`text-white p-5 rounded-2xl shadow-lg relative overflow-hidden ${
-              hasDebt
-                ? 'bg-gradient-to-br from-rose-700 via-rose-900 to-[#0F2C59]'
-                : 'bg-gradient-to-br from-emerald-600 to-[#0F2C59]'
-            }`}
-          >
+          <div className="text-white p-5 rounded-2xl shadow-lg relative overflow-hidden bg-gradient-to-br from-emerald-600 to-[#0F2C59]">
             <div className="relative z-10">
-              <div
-                className={`text-xs font-semibold uppercase tracking-wider ${
-                  hasDebt ? 'text-rose-200' : 'text-emerald-200'
-                }`}
-              >
-                {hasDebt ? 'COD Outstanding Debt' : 'Available Wallet Cash'}
+              <div className="text-xs font-semibold uppercase tracking-wider text-emerald-200">
+                Available Wallet Cash
               </div>
               <div className="text-3xl font-black tracking-tight text-white mt-1">
                 {displayAmount}
               </div>
-              <p className={`text-[11px] mt-2 ${hasDebt ? 'text-rose-100' : 'text-emerald-100'}`}>
-                {hasDebt
-                  ? 'Unpaid balance on past Cash on Delivery orders. This will be automatically added to your next order payable.'
-                  : '100% usable on your next checkout! Automatically credited from refunds and referrals.'}
+              <p className="text-[11px] mt-2 text-emerald-100">
+                100% usable on your next Advance Payment! Automatically credited from refunds and referrals.
               </p>
             </div>
             <div className="absolute right-[-10px] bottom-[-20px] opacity-15 text-white text-8xl font-black">
               ₹
             </div>
           </div>
+
+          {/* COD Debt Banner if any */}
+          {hasDebt && (
+            <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 flex items-center justify-between text-xs">
+              <div>
+                <span className="font-bold text-rose-900 block">Pending COD Outstanding</span>
+                <span className="text-[10px] text-rose-700">To be collected upon doorstep delivery</span>
+              </div>
+              <span className="font-black text-rose-800 text-sm">₹{Math.round(debtAmount)}</span>
+            </div>
+          )}
 
           {/* Referral Engine */}
           <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 space-y-3">

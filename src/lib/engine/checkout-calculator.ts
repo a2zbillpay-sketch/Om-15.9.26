@@ -115,11 +115,10 @@ export function calculateCheckoutTotals(
   const advanceRemainingPayable = Math.max(0, advanceTotalPayable - advanceWalletUsed);
   const advanceRemainingWallet = Math.max(0, cleanWalletBalance - advanceWalletUsed);
 
-  const codWalletUsed = isWalletApplied
-    ? Math.min(cleanWalletBalance, codTotalPayable)
-    : 0;
-  const codRemainingPayable = Math.max(0, codTotalPayable - codWalletUsed);
-  const codRemainingWallet = Math.max(0, cleanWalletBalance - codWalletUsed);
+  // Wallet is strictly NOT a direct payment method and never applied to COD
+  const codWalletUsed = 0;
+  const codRemainingPayable = codTotalPayable;
+  const codRemainingWallet = cleanWalletBalance;
 
   return {
     subtotal,

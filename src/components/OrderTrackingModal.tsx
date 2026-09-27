@@ -65,36 +65,55 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
   const minutesLeft = Math.floor(secondsRemaining / 60);
   const secondsLeft = secondsRemaining % 60;
 
-  const handleCancel = () => {
-    const isAdvance =
-      currentOrder.paymentMethod === PaymentMethod.ADVANCE_ONLINE ||
-      currentOrder.paymentStatus === PaymentStatus.RECEIVED;
-    let walletUsed = Math.max(0, currentOrder.walletAmountUsed || 0);
-    if (
-      walletUsed === 0 &&
-      isAdvance &&
-      currentOrder.totalPayable !== undefined &&
-      currentOrder.finalAmount > currentOrder.totalPayable
-    ) {
-      walletUsed = Math.max(0, currentOrder.finalAmount - currentOrder.totalPayable);
-    }
-    const onlinePaid = isAdvance
-      ? Math.max(
-          0,
-          Math.min(
-            currentOrder.totalPayable !== undefined ? currentOrder.totalPayable : currentOrder.finalAmount,
-            currentOrder.finalAmount - walletUsed
-          )
-        )
-      : 0;
-    const refundAmount = walletUsed + onlinePaid;
+  const isAdvance =
+    currentOrder.paymentMethod === PaymentMethod.ADVANCE_ONLINE ||
+    currentOrder.paymentStatus === PaymentStatus.RECEIVED;
 
+  let walletUsed = Math.max(0, currentOrder.walletAmountUsed || 0);
+  if (
+    walletUsed === 0 &&
+    isAdvance &&
+    currentOrder.totalPayable !== undefined &&
+    currentOrder.finalAmount > currentOrder.totalPayable
+  ) {
+    walletUsed = Math.max(0, currentOrder.finalAmount - currentOrder.totalPayable);
+  }
+
+  const actualOnlinePayment = isAdvance
+    ? Math.max(
+        0,
+        Math.min(
+          currentOrder.totalPayable !== undefined ? currentOrder.totalPayable : currentOrder.finalAmount,
+          currentOrder.finalAmount - walletUsed
+        )
+      )
+    : 0;
+
+  const isPaid =
+    currentOrder.status !== OrderStatus.CANCELLED &&
+    currentOrder.paymentStatus !== PaymentStatus.REFUNDED &&
+    (currentOrder.paymentStatus === PaymentStatus.RECEIVED ||
+      (currentOrder.paymentStatus as any) === 'PAID' ||
+      (currentOrder as any).is_paid === true ||
+      currentOrder.paymentMethod === PaymentMethod.ADVANCE_ONLINE);
+
+  let amountCollected = 0;
+  if (currentOrder.paymentMethod === PaymentMethod.ADVANCE_ONLINE) {
+    amountCollected = walletUsed + actualOnlinePayment;
+  } else if (currentOrder.codCollectedAmount !== undefined && currentOrder.codCollectedAmount > 0) {
+    amountCollected = currentOrder.codCollectedAmount;
+  } else if (isPaid) {
+    amountCollected = currentOrder.totalPayable !== undefined ? currentOrder.totalPayable : currentOrder.finalAmount;
+  }
+
+  const handleCancel = () => {
+    const refundAmount = walletUsed + actualOnlinePayment;
     const success = cancelOrder(currentOrder.id);
     if (success) {
       setCancelMessage(
         refundAmount > 0
-          ? walletUsed > 0 && onlinePaid > 0
-            ? `Order cancelled! Full refund of ₹${refundAmount} (₹${walletUsed} wallet used + ₹${onlinePaid} online advance) has been refunded directly to your Store Wallet.`
+          ? walletUsed > 0 && actualOnlinePayment > 0
+            ? `Order cancelled! Full refund of ₹${refundAmount} (₹${walletUsed} wallet used + ₹${actualOnlinePayment} online advance) has been refunded directly to your Store Wallet.`
             : walletUsed > 0
             ? `Order cancelled! Full refund of ₹${refundAmount} (₹${walletUsed} wallet used) has been refunded directly to your Store Wallet.`
             : `Order cancelled! Full refund of ₹${refundAmount} online payment has been refunded directly to your Store Wallet.`
@@ -341,23 +360,62 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
               </div>
             )}
 
-            {currentOrder.walletAmountUsed !== undefined && currentOrder.walletAmountUsed > 0 && (
-              <div className="flex justify-between text-xs text-emerald-700 font-bold">
-                <span>Wallet Balance Used:</span>
-                <span>-₹{currentOrder.walletAmountUsed}</span>
-              </div>
-            )}
+            {isPaid ? (
+              <>
+                <div className="flex justify-between text-xs text-emerald-700 font-bold">
+                  <span>Wallet Applied (Advance):</span>
+                  <span>{walletUsed > 0 ? `₹${walletUsed}` : '₹0'}</span>
+                </div>
 
-            <div className="flex justify-between text-sm font-black text-[#0F2C59] border-t border-gray-200 pt-1.5">
-              <span>Total Payable:</span>
-              <span>₹{currentOrder.totalPayable || (currentOrder.finalAmount + (currentOrder.previousOutstanding || 0))}</span>
-            </div>
+                <div className="flex justify-between text-xs text-emerald-700 font-bold">
+                  <span>Actual Online Payment (UPI/etc.):</span>
+                  <span>₹{actualOnlinePayment}</span>
+                </div>
 
-            {currentOrder.codCollectedAmount !== undefined && currentOrder.codCollectedAmount > 0 && (
-              <div className="flex justify-between text-xs text-emerald-700 font-bold pt-0.5">
-                <span>Amount Collected:</span>
-                <span>₹{currentOrder.codCollectedAmount}</span>
-              </div>
+                <div className="flex justify-between text-xs font-black text-gray-900 border-t border-gray-200 pt-1.5">
+                  <span>Amount Collected:</span>
+                  <span>₹{amountCollected}</span>
+                </div>
+
+                <div className="flex justify-between items-center text-xs font-bold pt-1.5 border-t border-gray-200">
+                  <span className="text-gray-700">Payment Status:</span>
+                  <span className="px-2 py-0.5 rounded text-[11px] font-black uppercase bg-emerald-100 text-emerald-800 border border-emerald-300">
+                    PAID
+                  </span>
+                </div>
+              </>
+            ) : (
+              <>
+                {walletUsed > 0 && (
+                  <div className="flex justify-between text-xs text-emerald-700 font-bold">
+                    <span>Wallet Balance Used:</span>
+                    <span>-₹{walletUsed}</span>
+                  </div>
+                )}
+
+                <div className="flex justify-between text-sm font-black text-[#0F2C59] border-t border-gray-200 pt-1.5">
+                  <span>Total Payable:</span>
+                  <span>₹{currentOrder.totalPayable || (currentOrder.finalAmount + (currentOrder.previousOutstanding || 0))}</span>
+                </div>
+
+                {currentOrder.codCollectedAmount !== undefined && currentOrder.codCollectedAmount > 0 && (
+                  <div className="flex justify-between text-xs text-emerald-700 font-bold pt-0.5">
+                    <span>Amount Collected:</span>
+                    <span>₹{currentOrder.codCollectedAmount}</span>
+                  </div>
+                )}
+
+                <div className="flex justify-between items-center text-xs font-bold pt-1.5 border-t border-gray-200">
+                  <span className="text-gray-700">Payment Status:</span>
+                  <span className="px-2 py-0.5 rounded text-[11px] font-black uppercase bg-amber-100 text-amber-800 border border-amber-300">
+                    {currentOrder.paymentStatus === PaymentStatus.REFUNDED
+                      ? 'REFUNDED'
+                      : currentOrder.status === OrderStatus.CANCELLED
+                      ? 'CANCELLED'
+                      : 'PENDING'}
+                  </span>
+                </div>
+              </>
             )}
           </div>
         </div>
