@@ -635,7 +635,7 @@ export function parseOrderItemsFromProductName(
     const match = line.match(pattern);
 
     if (match) {
-      const fullLabel = match[1].trim();
+      const rawLabel = match[1].trim();
       const qty = parseFloat(match[2]) || 1;
       const parsedUnitPrice = match[3] ? parseFloat(match[3]) : undefined;
       const parsedTotalPrice = match[4] ? parseFloat(match[4]) : undefined;
@@ -652,11 +652,40 @@ export function parseOrderItemsFromProductName(
           ? parsedTotalPrice
           : unitPrice * qty;
 
+      // Extract parenthesized information: e.g. "Red Lable Tea (100 G) (UNILIVER)"
+      const parenMatches = [...rawLabel.matchAll(/\(([^)]+)\)/g)].map((m) => m[1].trim());
+      const cleanName = rawLabel.replace(/\s*\([^)]+\)/g, '').trim();
+
+      const unitRegex = /^(\d+(?:\.\d+)?)\s*(KG|G|GM|ML|LITER|LITRE|LTR|NOS|PCS|PACK|POUCH)\b/i;
+      let variantName = '';
+      let packSize: number | undefined = undefined;
+      let unit: UnitType | undefined = undefined;
+      let brand = '';
+
+      for (const p of parenMatches) {
+        const uMatch = p.match(unitRegex);
+        if (uMatch) {
+          variantName = p;
+          packSize = parseFloat(uMatch[1]);
+          let rawUnit = uMatch[2].toUpperCase();
+          if (rawUnit === 'GM') rawUnit = 'G';
+          if (rawUnit === 'LITRE' || rawUnit === 'LTR') rawUnit = 'LITER';
+          unit = rawUnit as UnitType;
+        } else if (!brand) {
+          brand = p;
+        }
+      }
+
       items.push({
         id: `item-${orderId}-${idx + 1}`,
         orderId,
+        productId: '',
         variantId: '',
-        productName: fullLabel,
+        productName: cleanName || rawLabel,
+        variantName: variantName || undefined,
+        brand: brand || undefined,
+        unit,
+        packSize,
         quantity: qty,
         unitPrice,
         price: totalPrice,
@@ -667,6 +696,7 @@ export function parseOrderItemsFromProductName(
       items.push({
         id: `item-${orderId}-${idx + 1}`,
         orderId,
+        productId: '',
         variantId: '',
         productName: cleaned || 'Grocery Item',
         quantity: 1,
@@ -720,7 +750,7 @@ export async function fetchCustomerOrdersFromSupabase(
       const subtotal = Number(o.subtotal ?? finalAmount);
       const discountAmount = Number(o.discount_amount ?? 0);
       const deliveryFee = Math.max(0, finalAmount - (subtotal - discountAmount));
-      const items = parseOrderItemsFromProductName(o['Product Name'], o.id, finalAmount);
+      let items = parseOrderItemsFromProductName(o['Product Name'], o.id, finalAmount);
       const parsedAddress = parseCustomerAddress(o.delivery_address);
 
       let orderNumber = '';
@@ -728,6 +758,8 @@ export async function fetchCustomerOrdersFromSupabase(
       let previousOutstanding = 0;
       let totalPayable = finalAmount;
       let walletAmountUsed = 0;
+      let stockDeducted = false;
+      let stockRestored = false;
 
       const rawNotes = o.notes || '';
       if (rawNotes.includes('COD_META:')) {
@@ -739,6 +771,11 @@ export async function fetchCustomerOrdersFromSupabase(
           previousOutstanding = Number(meta.prevOutstanding) || 0;
           totalPayable = meta.totalPayable !== undefined ? Number(meta.totalPayable) : (finalAmount + previousOutstanding);
           walletAmountUsed = Number(meta.walletAmountUsed) || 0;
+          stockDeducted = Boolean(meta.stockDeducted);
+          stockRestored = Boolean(meta.stockRestored);
+          if (Array.isArray(meta.items) && meta.items.length > 0) {
+            items = meta.items;
+          }
         } catch {
           // ignore parsing error
         }
@@ -792,6 +829,8 @@ export async function fetchCustomerOrdersFromSupabase(
         totalPayable,
         walletAmountUsed: resolvedWalletAmountUsed,
         codCollectedAmount,
+        stockDeducted,
+        stockRestored,
         createdAt: o.created_at || new Date().toISOString(),
         items,
       };
@@ -815,6 +854,23 @@ export async function saveOrderToSupabase(order: Order): Promise<boolean> {
       prevOutstanding: order.previousOutstanding || 0,
       totalPayable: order.totalPayable !== undefined ? order.totalPayable : order.finalAmount,
       walletAmountUsed: order.walletAmountUsed || 0,
+      stockDeducted: order.stockDeducted ?? false,
+      stockRestored: order.stockRestored ?? false,
+      items: order.items?.map((it) => ({
+        id: it.id,
+        orderId: it.orderId || order.id,
+        productId: it.productId,
+        variantId: it.variantId,
+        variantName: it.variantName,
+        productName: it.productName,
+        brand: it.brand,
+        unit: it.unit,
+        packSize: it.packSize,
+        quantity: it.quantity,
+        unitPrice: it.unitPrice,
+        price: it.price,
+        isDiscountExcluded: it.isDiscountExcluded,
+      })),
     });
     const orderNotes = `Order #${order.orderNumber} | COD_META:${metaPayload}`;
 
@@ -879,7 +935,7 @@ export async function fetchAllOrdersForAdmin(): Promise<Order[] | null> {
       const subtotal = Number(o.subtotal ?? finalAmount);
       const discountAmount = Number(o.discount_amount ?? 0);
       const deliveryFee = Math.max(0, finalAmount - (subtotal - discountAmount));
-      const items = parseOrderItemsFromProductName(o['Product Name'], o.id, finalAmount);
+      let items = parseOrderItemsFromProductName(o['Product Name'], o.id, finalAmount);
       const parsedAddress = parseCustomerAddress(o.delivery_address);
 
       let orderNumber = '';
@@ -887,6 +943,8 @@ export async function fetchAllOrdersForAdmin(): Promise<Order[] | null> {
       let previousOutstanding = 0;
       let totalPayable = finalAmount;
       let walletAmountUsed = 0;
+      let stockDeducted = false;
+      let stockRestored = false;
 
       const rawNotes = o.notes || '';
       if (rawNotes.includes('COD_META:')) {
@@ -898,6 +956,11 @@ export async function fetchAllOrdersForAdmin(): Promise<Order[] | null> {
           previousOutstanding = Number(meta.prevOutstanding) || 0;
           totalPayable = meta.totalPayable !== undefined ? Number(meta.totalPayable) : (finalAmount + previousOutstanding);
           walletAmountUsed = Number(meta.walletAmountUsed) || 0;
+          stockDeducted = Boolean(meta.stockDeducted);
+          stockRestored = Boolean(meta.stockRestored);
+          if (Array.isArray(meta.items) && meta.items.length > 0) {
+            items = meta.items;
+          }
         } catch {
           // ignore parsing error
         }
@@ -951,6 +1014,8 @@ export async function fetchAllOrdersForAdmin(): Promise<Order[] | null> {
         totalPayable,
         walletAmountUsed: resolvedWalletAmountUsed,
         codCollectedAmount,
+        stockDeducted,
+        stockRestored,
         createdAt: o.created_at || new Date().toISOString(),
         items,
       };
@@ -968,7 +1033,16 @@ export async function updateOrderStatusInSupabase(
   orderId: string,
   newStatus: OrderStatus,
   isPaid?: boolean,
-  meta?: { codCollected?: number; prevOutstanding?: number; totalPayable?: number; orderNumber?: string }
+  meta?: {
+    codCollected?: number;
+    prevOutstanding?: number;
+    totalPayable?: number;
+    orderNumber?: string;
+    walletAmountUsed?: number;
+    stockDeducted?: boolean;
+    stockRestored?: boolean;
+    items?: OrderItem[];
+  }
 ): Promise<boolean> {
   if (!supabase) return false;
 
@@ -988,6 +1062,10 @@ export async function updateOrderStatusInSupabase(
         codCollected: meta.codCollected || 0,
         prevOutstanding: meta.prevOutstanding || 0,
         totalPayable: meta.totalPayable || 0,
+        walletAmountUsed: meta.walletAmountUsed || 0,
+        stockDeducted: meta.stockDeducted ?? false,
+        stockRestored: meta.stockRestored ?? false,
+        ...(meta.items && meta.items.length > 0 ? { items: meta.items } : {}),
       });
       updatePayload.notes = `Order #${orderNum} | COD_META:${metaString}`;
     }
@@ -1008,6 +1086,41 @@ export async function updateOrderStatusInSupabase(
     return true;
   } catch (err) {
     console.error('Exception in updateOrderStatusInSupabase:', err);
+    return false;
+  }
+}
+
+/**
+ * Directly updates product stock and wholesale variant definitions in Supabase.
+ */
+export async function updateProductStockInSupabase(
+  productId: string,
+  variants: ProductVariant[]
+): Promise<boolean> {
+  if (!supabase) return false;
+
+  try {
+    const totalStock = (variants || []).reduce(
+      (sum, v) => sum + (Number(v.stockQuantity) || 0),
+      0
+    );
+
+    const { error } = await supabase
+      .from('products')
+      .update({
+        stock: totalStock,
+        wholesale_tier_discount: variants || [],
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', productId);
+
+    if (error) {
+      console.warn('Failed to update product stock directly in Supabase:', error.message);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.error('Exception in updateProductStockInSupabase:', err);
     return false;
   }
 }

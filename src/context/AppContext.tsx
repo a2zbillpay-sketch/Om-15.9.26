@@ -43,6 +43,7 @@ import {
   saveProductToSupabase,
   fetchProductsFromSupabase,
   deleteProductFromSupabase,
+  updateProductStockInSupabase,
 } from '../lib/supabase';
 import {
   fetchCategoriesFromDb,
@@ -56,6 +57,14 @@ import {
   fetchCodCollectionsFromApi,
   isSameCustomer,
 } from '../lib/cod-storage';
+import {
+  deductStockForOrder,
+  restoreStockForOrder,
+  isStockDeductedForOrder,
+  markStockDeductedForOrder,
+  isStockRestoredForOrder,
+  markStockRestoredForOrder,
+} from '../lib/stock-service';
 
 export type CustomerFlowStep = 'AUTH' | 'PROFILE' | 'SHOP';
 
@@ -160,7 +169,7 @@ interface AppContextType {
     selectedPaymentApp?: string;
     isWalletPayment?: boolean;
   }) => Promise<Order>;
-  cancelOrder: (orderId: string) => boolean;
+  cancelOrder: (orderId: string, isShopkeeperOverride?: boolean) => boolean;
   updateOrderStatus: (orderId: string, newStatus: OrderStatus) => void;
   recordCodCollection: (
     orderId: string,
@@ -436,7 +445,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         activeRole === Role.SHOPKEEPER ? undefined : currentUser.phone
       );
 
-      const baseOrders = fetchedOrders && fetchedOrders.length > 0 ? fetchedOrders : orders;
+      // Preserve rich item definitions and stock status from current orders
+      const resolvedFetched = fetchedOrders
+        ? fetchedOrders.map((fo) => {
+            const local = orders.find((lo) => lo.id === fo.id || lo.orderNumber === fo.orderNumber);
+            if (!local) return fo;
+            const localHasRichItems = local.items?.some((it) => it.variantId || it.productId);
+            const fetchedHasRichItems = fo.items?.some((it) => it.variantId || it.productId);
+            return {
+              ...fo,
+              items: !fetchedHasRichItems && localHasRichItems ? local.items : fo.items,
+              stockDeducted: fo.stockDeducted ?? local.stockDeducted ?? false,
+              stockRestored: fo.stockRestored ?? local.stockRestored ?? false,
+            };
+          })
+        : null;
+
+      const baseOrders = resolvedFetched && resolvedFetched.length > 0 ? resolvedFetched : orders;
 
       if (apiData && apiData.success && apiData.ordersMap) {
         const merged = baseOrders.map((o) => {
@@ -1081,6 +1106,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return {
           id: `item-${Date.now()}-${item.variantId}`,
           orderId,
+          productId: item.productId || item.product.id,
           variantId: item.variantId,
           variantName: item.variant.packLabel,
           productName: item.product.name,
@@ -1093,6 +1119,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           isDiscountExcluded: item.product.isDiscountExcluded === true || (item.product.isDiscountExcluded as any) === 'true',
         };
       }),
+      stockDeducted: false,
+      stockRestored: false,
     };
 
     // Update orders
@@ -1203,30 +1231,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       );
     }
 
-    // Deduct stock for inventory integrity
-    setProducts((prev) =>
-      prev.map((p) => {
-        const matchingCartItems = cart.filter((c) => c.productId === p.id);
-        if (matchingCartItems.length === 0) return p;
-        const updatedVariants = p.variants.map((v) => {
-          const cartItem = matchingCartItems.find((c) => c.variantId === v.id);
-          if (cartItem) {
-            return {
-              ...v,
-              stockQuantity: Math.max(0, v.stockQuantity - cartItem.quantity),
-            };
-          }
-          return v;
-        });
-        return { ...p, variants: updatedVariants };
-      })
-    );
-
+    // Do NOT deduct stock when order is Pending. Stock deduction occurs strictly upon acceptance.
     clearCart();
     return newOrder;
   };
 
-  const cancelOrder = (orderId: string): boolean => {
+  const cancelOrder = (orderId: string, isShopkeeperOverride: boolean = false): boolean => {
     const target = orders.find((o) => o.id === orderId || o.orderNumber === orderId);
     if (!target) return false;
 
@@ -1235,9 +1245,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return false;
     }
 
-    // Check 15-minute cancellation window rule
-    if (!canCancelOrder(target.createdAt)) {
+    // Check 15-minute cancellation window rule (bypassed if shopkeeper/admin cancels)
+    if (!isShopkeeperOverride && !canCancelOrder(target.createdAt)) {
       return false;
+    }
+
+    // Requirement 3: If an order is cancelled while still "Pending", do not change stock.
+    const isPending = target.status === OrderStatus.ORDER_PENDING;
+
+    // Restore stock ONLY if stock was deducted upon acceptance and has not yet been restored
+    const wasDeducted = !isPending && isStockDeductedForOrder(target.id, target.orderNumber, target);
+    const alreadyRestored = isStockRestoredForOrder(target.id, target.orderNumber, target);
+
+    if (wasDeducted && !alreadyRestored) {
+      const { updatedProducts, affectedProducts } = restoreStockForOrder(target, products);
+      setProducts(updatedProducts);
+      markStockRestoredForOrder(target.id, target.orderNumber);
+
+      if (isSupabaseConfigured && affectedProducts.length > 0) {
+        affectedProducts.forEach((p) => {
+          updateProductStockInSupabase(p.id, p.variants).catch(() => {});
+          saveProductToSupabase(p).catch((err) => {
+            console.warn('Background Supabase product stock restore error:', err);
+          });
+        });
+      }
     }
 
     const isAdvancePaid =
@@ -1291,6 +1323,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               ...o,
               status: OrderStatus.CANCELLED,
               paymentStatus: updatedPaymentStatus,
+              stockDeducted: false,
+              stockRestored: wasDeducted ? true : false,
             }
           : o
       );
@@ -1303,7 +1337,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       updateOrderStatusInSupabase(
         target.id,
         OrderStatus.CANCELLED,
-        false
+        false,
+        {
+          stockDeducted: false,
+          stockRestored: wasDeducted ? true : false,
+          orderNumber: target.orderNumber,
+          walletAmountUsed: target.walletAmountUsed || walletAmountUsed || 0,
+          items: target.items,
+          codCollected: target.codCollectedAmount || 0,
+          prevOutstanding: target.previousOutstanding || 0,
+          totalPayable: target.totalPayable !== undefined ? target.totalPayable : target.finalAmount,
+        }
       ).catch((err) => {
         console.warn('Background Supabase cancel order error:', err);
       });
@@ -1434,9 +1478,44 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const updateOrderStatus = (orderId: string, newStatus: OrderStatus) => {
+    const target = orders.find((o) => o.id === orderId || o.orderNumber === orderId);
+    if (!target) return;
+
+    if (newStatus === OrderStatus.CANCELLED) {
+      cancelOrder(orderId, true);
+      return;
+    }
+
+    // Check if order is moving to an accepted or subsequent active fulfillment status
+    const isAcceptedOrProgressing =
+      newStatus === OrderStatus.ORDER_ACCEPTED ||
+      newStatus === OrderStatus.PACKING_IN_PROGRESS ||
+      newStatus === OrderStatus.READY_FOR_DELIVERY ||
+      newStatus === OrderStatus.ON_THE_WAY ||
+      newStatus === OrderStatus.DELIVERED;
+
+    const alreadyDeducted = isStockDeductedForOrder(target.id, target.orderNumber, target);
+    let nextStockDeducted = target.stockDeducted ?? false;
+
+    if (isAcceptedOrProgressing && !alreadyDeducted) {
+      const { updatedProducts, affectedProducts } = deductStockForOrder(target, products);
+      setProducts(updatedProducts);
+      markStockDeductedForOrder(target.id, target.orderNumber);
+      nextStockDeducted = true;
+
+      if (isSupabaseConfigured && affectedProducts.length > 0) {
+        affectedProducts.forEach((p) => {
+          updateProductStockInSupabase(p.id, p.variants).catch(() => {});
+          saveProductToSupabase(p).catch((err) => {
+            console.warn('Background Supabase product stock deduction error:', err);
+          });
+        });
+      }
+    }
+
     setOrders((prev) =>
       prev.map((o) => {
-        if (o.id === orderId) {
+        if (o.id === orderId || o.orderNumber === orderId) {
           const isDelivered = newStatus === OrderStatus.DELIVERED;
           let updatedPaymentStatus = o.paymentStatus;
           let updatedCodCollected = o.codCollectedAmount;
@@ -1461,6 +1540,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             status: newStatus,
             paymentStatus: updatedPaymentStatus,
             codCollectedAmount: updatedCodCollected,
+            stockDeducted: isAcceptedOrProgressing ? true : o.stockDeducted,
+            stockRestored: false,
           };
         }
         return o;
@@ -1468,7 +1549,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
 
     if (isSupabaseConfigured) {
-      updateOrderStatusInSupabase(orderId, newStatus).catch((err) => {
+      updateOrderStatusInSupabase(orderId, newStatus, undefined, {
+        stockDeducted: nextStockDeducted,
+        stockRestored: false,
+        orderNumber: target.orderNumber,
+        walletAmountUsed: target.walletAmountUsed,
+        items: target.items,
+        codCollected: target.codCollectedAmount || 0,
+        prevOutstanding: target.previousOutstanding || 0,
+        totalPayable: target.totalPayable !== undefined ? target.totalPayable : target.finalAmount,
+      }).catch((err) => {
         console.warn('Background Supabase status update error:', err);
       });
     }

@@ -973,6 +973,7 @@ export const AdminDashboard: React.FC = () => {
                                 <option value={OrderStatus.READY_FOR_DELIVERY}>Ready</option>
                                 <option value={OrderStatus.ON_THE_WAY}>On The Way</option>
                                 <option value={OrderStatus.DELIVERED}>Mark Delivered</option>
+                                <option value={OrderStatus.CANCELLED}>Cancel Order</option>
                               </select>
                             </div>
                           ) : (

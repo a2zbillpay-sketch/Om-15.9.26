@@ -107,6 +107,7 @@ export interface Product {
 export interface OrderItem {
   id: string;
   orderId: string;
+  productId?: string;
   variantId: string;
   variantName?: string;
   productName?: string;
@@ -141,6 +142,8 @@ export interface Order {
   totalPayable?: number;
   codCollectedAmount?: number;
   walletAmountUsed?: number;
+  stockDeducted?: boolean;
+  stockRestored?: boolean;
   razorpayOrderId?: string;
   razorpayPaymentId?: string;
   createdAt: string;
