@@ -388,26 +388,7 @@ export async function saveProductWithCascadeSync(
   }
 
   try {
-    // 1. Ensure category exists in categories table to satisfy Foreign Key constraints if present
-    if (product.categoryId) {
-      const matchedCat = INITIAL_CATEGORIES.find((c) => c.id === product.categoryId);
-      if (matchedCat) {
-        try {
-          await supabaseClient.from('categories').upsert(
-            {
-              id: matchedCat.id,
-              name: matchedCat.name,
-              image_url: matchedCat.imageUrl || null,
-            },
-            { onConflict: 'id' }
-          );
-        } catch {
-          // Continue if category upsert is restricted
-        }
-      }
-    }
-
-    // 2. Prepare Product record for public.products
+    // 1. Resolve category name for public.products (categories are stored directly on products.category)
     const matchedCategory = INITIAL_CATEGORIES.find((c) => c.id === product.categoryId);
     const categoryName = matchedCategory ? matchedCategory.name : (product.categoryId || 'Other Grocery Items');
     const primaryVariant = product.variants?.[0];

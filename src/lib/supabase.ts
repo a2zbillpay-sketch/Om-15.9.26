@@ -234,7 +234,7 @@ export async function getOrCreateCustomerByPhone(
     // 2. User does not exist, create deterministic customer record in Supabase users table
     const referralCode = `OM${Math.floor(1000 + Math.random() * 9000)}`;
     const newCustomerPayload = {
-      id: `usr_${Date.now()}`,
+      id: `usr_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`,
       phone: cleanPhone,
       name: name || (role === Role.SHOPKEEPER ? 'Om Prakash Sharma' : ''),
       role,
@@ -246,12 +246,35 @@ export async function getOrCreateCustomerByPhone(
 
     const { data: insertedUser, error: insertError } = await supabase
       .from('users')
-      .insert(newCustomerPayload)
+      .upsert(newCustomerPayload, { onConflict: 'id' })
       .select()
       .single();
 
     if (insertError) {
-      console.error('Error inserting new user into Supabase:', insertError);
+      // If error (such as duplicate key or unique constraint), safely fetch existing record
+      const { data: fallbackUser } = await supabase
+        .from('users')
+        .select('*')
+        .eq('phone', cleanPhone)
+        .order('updated_at', { ascending: false })
+        .limit(1);
+
+      if (fallbackUser && fallbackUser.length > 0) {
+        const u = fallbackUser[0];
+        const { fullAddress, landmark, pincode } = parseCustomerAddress(u.address);
+        return {
+          id: u.id,
+          name: u.name || '',
+          phone: u.phone,
+          role: u.role as Role,
+          referralCode,
+          walletBalance: 100,
+          codOrderCount: 0,
+          addresses: fullAddress ? [{ id: `addr-${u.id}`, userId: u.id, fullAddress, landmark, pincode, isDefault: true }] : [],
+          createdAt: u.updated_at || new Date().toISOString(),
+        };
+      }
+      console.warn('Error in getOrCreateCustomerByPhone upsert:', insertError.message);
       return null;
     }
 
@@ -275,6 +298,7 @@ export async function getOrCreateCustomerByPhone(
 /**
  * Saves or updates a customer profile (Name, Address, Landmark, Pincode) in Supabase.
  * Stores address directly in users.address and never queries or touches non-existent addresses table.
+ * Uses an UPSERT-safe workflow so an existing user is updated instead of attempting a duplicate insert.
  */
 export async function saveCustomerProfileToSupabase(
   userId: string,
@@ -296,16 +320,34 @@ export async function saveCustomerProfileToSupabase(
       completeAddress = `${completeAddress} - ${pincode.trim()}`;
     }
 
-    // 1. Locate existing CUSTOMER record in users table
-    const { data: existingRows } = await supabase
-      .from('users')
-      .select('*')
-      .eq('phone', cleanPhone)
-      .eq('role', 'CUSTOMER')
-      .order('updated_at', { ascending: false })
-      .limit(1);
+    // 1. Locate existing record in users table by ID or phone to prevent duplicate insert on users_pkey
+    let targetUser: any = null;
 
-    let targetUser = existingRows && existingRows.length > 0 ? existingRows[0] : null;
+    // Check by ID if valid existing user ID provided (excluding temporary client-side IDs like 'user-...')
+    if (userId && !userId.startsWith('user-')) {
+      const { data: userById } = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', userId)
+        .limit(1);
+      if (userById && userById.length > 0) {
+        targetUser = userById[0];
+      }
+    }
+
+    // Check by phone if not found by ID
+    if (!targetUser && cleanPhone) {
+      const { data: existingRows } = await supabase
+        .from('users')
+        .select('*')
+        .eq('phone', cleanPhone)
+        .order('updated_at', { ascending: false })
+        .limit(1);
+
+      if (existingRows && existingRows.length > 0) {
+        targetUser = existingRows[0];
+      }
+    }
 
     if (targetUser) {
       // Update existing customer record in users table
@@ -318,6 +360,9 @@ export async function saveCustomerProfileToSupabase(
       }
       if (!targetUser.shop_name && name.trim()) {
         updatePayload.shop_name = `${name.trim()}'s Kirana Store`;
+      }
+      if (targetUser.role !== Role.SHOPKEEPER && targetUser.role !== Role.SECONDARY_ADMIN) {
+        updatePayload.role = 'CUSTOMER';
       }
 
       const { data: updated, error: updateError } = await supabase
@@ -333,7 +378,7 @@ export async function saveCustomerProfileToSupabase(
         targetUser = updated;
       }
     } else {
-      // Insert new customer record into users table
+      // User not found -> UPSERT-safe insert into users table to prevent users_pkey collisions
       const newUserId = userId && !userId.startsWith('user-') ? userId : `usr_${Date.now()}`;
       const insertPayload = {
         id: newUserId,
@@ -346,16 +391,40 @@ export async function saveCustomerProfileToSupabase(
         updated_at: new Date().toISOString(),
       };
 
-      const { data: inserted, error: insertError } = await supabase
+      const { data: upserted, error: upsertError } = await supabase
         .from('users')
-        .insert(insertPayload)
+        .upsert(insertPayload, { onConflict: 'id' })
         .select()
         .single();
 
-      if (insertError) {
-        console.warn('Supabase insert customer profile warning:', insertError.message);
-      } else if (inserted) {
-        targetUser = inserted;
+      if (upsertError) {
+        // If users_pkey or duplicate key error occurs, safely update the existing row
+        if (
+          upsertError.message?.includes('users_pkey') ||
+          upsertError.message?.includes('duplicate key') ||
+          (upsertError as any).code === '23505'
+        ) {
+          const updatePayload: Record<string, any> = {
+            address: completeAddress,
+            updated_at: new Date().toISOString(),
+          };
+          if (name.trim()) updatePayload.name = name.trim();
+
+          const { data: fallbackUpdated } = await supabase
+            .from('users')
+            .update(updatePayload)
+            .or(`id.eq.${newUserId},phone.eq.${cleanPhone}`)
+            .select()
+            .limit(1);
+
+          if (fallbackUpdated && fallbackUpdated.length > 0) {
+            targetUser = fallbackUpdated[0];
+          }
+        } else {
+          console.warn('Supabase upsert customer profile warning:', upsertError.message);
+        }
+      } else if (upserted) {
+        targetUser = upserted;
       }
     }
 

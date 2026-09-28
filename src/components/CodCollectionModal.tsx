@@ -31,17 +31,15 @@ export const CodCollectionModal: React.FC<CodCollectionModalProps> = ({
 
   useEffect(() => {
     if (order && isOpen) {
-      const initialAmount =
-        order.codCollectedAmount !== undefined && order.codCollectedAmount > 0
-          ? order.codCollectedAmount
-          : totalPayable;
-      setAmountStr(String(initialAmount));
+      // Keep "Actual Cash Collected / Deposited" blank until the shopkeeper/admin actually enters the amount collected from the customer.
+      // Do NOT prefill the bill amount or any estimated amount.
+      setAmountStr('');
       setMarkDelivered(order.status !== OrderStatus.DELIVERED);
       setError(null);
       setSaveSuccess(false);
       setIsSubmitting(false);
     }
-  }, [order, isOpen, totalPayable]);
+  }, [order, isOpen]);
 
   if (!isOpen || !order) return null;
 
@@ -174,6 +172,16 @@ export const CodCollectionModal: React.FC<CodCollectionModalProps> = ({
               <span>Total Payable Amount:</span>
               <span className="text-base text-[#0F2C59]">₹{totalPayable}</span>
             </div>
+
+            {order.codCollectedAmount !== undefined && order.codCollectedAmount > 0 && (
+              <div className="flex items-center justify-between font-bold text-emerald-800 pt-1 border-t border-amber-200/60">
+                <span className="flex items-center gap-1.5">
+                  <CheckCircle2 size={13} className="text-emerald-600" />
+                  <span>Previously Recorded:</span>
+                </span>
+                <span className="font-extrabold text-emerald-900">₹{order.codCollectedAmount}</span>
+              </div>
+            )}
           </div>
 
           {/* Actual Collected Amount Input */}
