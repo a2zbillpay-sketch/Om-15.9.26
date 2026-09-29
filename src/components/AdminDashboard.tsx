@@ -115,6 +115,7 @@ export const AdminDashboard: React.FC = () => {
     adminNotifications,
     markNotificationAsRead,
     markAllNotificationsAsRead,
+    productRequests,
   } = useApp();
 
   const [activeTab, setActiveTab] = useState<'ORDERS' | 'INVENTORY' | 'CATEGORIES' | 'SETTINGS' | 'CUSTOMERS'>('ORDERS');
@@ -884,11 +885,6 @@ export const AdminDashboard: React.FC = () => {
                           )}
                           {order.paymentMethod === PaymentMethod.COD && (
                             <div className="text-[10px] space-y-0.5 mt-0.5">
-                              {order.previousOutstanding !== undefined && order.previousOutstanding > 0 && (
-                                <div className="text-amber-800 font-semibold">
-                                  Prev Debt: +₹{order.previousOutstanding}
-                                </div>
-                              )}
                               {order.totalPayable && order.totalPayable !== order.finalAmount && (
                                 <div className="font-extrabold text-[#0F2C59]">
                                   Payable: ₹{order.totalPayable}
@@ -1104,6 +1100,45 @@ export const AdminDashboard: React.FC = () => {
                 >
                   <X size={13} />
                 </button>
+              </div>
+            )}
+
+            {/* Customer Product Requests for Out-of-Stock Items */}
+            {productRequests && productRequests.length > 0 && (
+              <div className="bg-amber-50/80 border border-amber-300 rounded-2xl p-4 text-xs space-y-3 shadow-xs">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse" />
+                    <h3 className="font-extrabold text-sm text-amber-950">
+                      Customer Product Requests ({productRequests.length})
+                    </h3>
+                  </div>
+                  <span className="text-[11px] font-semibold text-amber-800">
+                    Out-of-stock items requested by customers
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                  {productRequests.slice(0, 6).map((req) => (
+                    <div
+                      key={req.id}
+                      className="bg-white p-3 rounded-xl border border-amber-200/90 shadow-2xs space-y-1"
+                    >
+                      <div className="font-bold text-gray-900 truncate">
+                        {req.productName}
+                      </div>
+                      <div className="text-[11px] text-gray-600 flex justify-between">
+                        <span>Pack: {req.packSize || req.variantName || 'Standard'}</span>
+                        <span className="font-bold text-blue-900 bg-blue-50 px-1.5 py-0.2 rounded border border-blue-200">
+                          Qty: {req.quantity}
+                        </span>
+                      </div>
+                      <div className="text-[10px] text-gray-500 flex justify-between pt-1 border-t border-gray-100">
+                        <span>{req.customerName || 'Customer'} {req.customerPhone ? `(${req.customerPhone})` : ''}</span>
+                        <span>{new Date(req.requestDate).toLocaleDateString('en-IN', { month: 'short', day: 'numeric' })}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
 

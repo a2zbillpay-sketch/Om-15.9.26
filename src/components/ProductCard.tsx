@@ -1,21 +1,26 @@
 import React, { useState } from 'react';
-import { Plus, Minus, Check, Layers, AlertCircle, Sparkles, Package, ZoomIn } from 'lucide-react';
+import { Plus, Minus, Layers, AlertCircle, Package, ZoomIn, BellRing, CheckCircle2 } from 'lucide-react';
 import { Product, ProductVariant } from '../types';
 import { useApp } from '../context/AppContext';
 import { getActiveUnitPrice } from '../lib/engine/checkout-calculator';
 import { formatVariantPack } from '../utils/variantFormatter';
 import { ImageLightboxModal } from './ImageLightboxModal';
+import { ProductRequestModal } from './ProductRequestModal';
 
 interface ProductCardProps {
   product: Product;
 }
 
 export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
-  const { cart, addToCart, updateCartQty, settings } = useApp();
+  const { cart, addToCart, updateCartQty, settings, requestProduct, currentUser } = useApp();
   const [selectedVariantId, setSelectedVariantId] = useState<string>(
     product.variants[0]?.id || ''
   );
   const [isZoomOpen, setIsZoomOpen] = useState(false);
+  const [isRequestModalOpen, setIsRequestModalOpen] = useState(false);
+  const [requestedQty, setRequestedQty] = useState<number>(1);
+  const [hasRequested, setHasRequested] = useState<boolean>(false);
+  const [lastRequestDate, setLastRequestDate] = useState<string>('');
 
   const isExcluded =
     product.isDiscountExcluded === true || (product.isDiscountExcluded as any) === 'true';
@@ -53,7 +58,24 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
     updateCartQty(currentVariant.id, cartQuantity - 1);
   };
 
-  const isOutOfStock = currentVariant.stockQuantity <= 0;
+  const handleRequestProduct = () => {
+    const qty = Math.max(1, requestedQty);
+    const req = requestProduct({
+      product,
+      variant: currentVariant,
+      quantity: qty,
+    });
+    setHasRequested(true);
+    setLastRequestDate(req.requestDate);
+    setIsRequestModalOpen(true);
+  };
+
+  const isOutOfStock =
+    Number(currentVariant?.stockQuantity ?? 0) <= 0 ||
+    ((product as any).stock !== undefined &&
+      Number((product as any).stock) <= 0 &&
+      (!product.variants || product.variants.length === 0 || product.variants.every((v) => Number(v.stockQuantity || 0) <= 0))) ||
+    (!product.variants || product.variants.length === 0 || product.variants.every((v) => Number(v.stockQuantity || 0) <= 0));
 
   return (
     <div
@@ -103,12 +125,16 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
             </div>
           )}
 
-          {/* Discount Badge */}
-          {discountPercent > 0 && (
+          {/* Out of Stock or Discount Badge */}
+          {isOutOfStock ? (
+            <div className="absolute top-2.5 left-2.5 bg-red-600 text-white font-black text-[10px] px-2.5 py-0.5 rounded-full uppercase tracking-wider shadow-sm pointer-events-none z-10">
+              Out of Stock
+            </div>
+          ) : discountPercent > 0 ? (
             <div className="absolute top-2.5 left-2.5 bg-emerald-600 text-white font-black text-[10px] px-2 py-0.5 rounded-full uppercase tracking-wider shadow-sm pointer-events-none">
               {discountPercent}% OFF
             </div>
-          )}
+          ) : null}
 
           {/* Excluded from advance discount badge or wholesale badge */}
           {isExcluded ? (
@@ -144,7 +170,10 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
                 {product.variants.map((v) => (
                   <button
                     key={v.id}
-                    onClick={() => setSelectedVariantId(v.id)}
+                    onClick={() => {
+                      setSelectedVariantId(v.id);
+                      setHasRequested(false);
+                    }}
                     className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition border ${
                       v.id === currentVariant.id
                         ? 'bg-[#0F2C59] text-white border-[#0F2C59]'
@@ -182,73 +211,158 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
         </div>
       </div>
 
-      {/* Pricing & Add to Cart Footer */}
-      <div className="p-4 pt-2 border-t border-gray-100 flex items-center justify-between gap-2">
-        <div>
-          <div className="flex items-baseline gap-1.5">
-            <span className="text-base font-black text-[#0F2C59]">
-              ₹{currentPrice}
-            </span>
-            {currentVariant.mrp > currentPrice && (
-              <span className="text-xs text-gray-400 line-through">
-                ₹{currentVariant.mrp}
-              </span>
-            )}
-          </div>
-          <div className="text-[10px] text-gray-500 font-medium">
-            Per {formatVariantPack(currentVariant)}
-          </div>
-          {isExcluded ? (
-            <div className="text-[9px] font-bold text-amber-800 bg-amber-50 border border-amber-200/80 px-1.5 py-0.5 rounded mt-1 inline-block">
-              Price Regulated • Discount Excluded
-            </div>
-          ) : (
-            <div className="text-[9px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200/60 px-1.5 py-0.5 rounded mt-1 inline-block">
-              Online UPI: Save extra {settings.advancePaymentDiscountPct}%
-            </div>
-          )}
-        </div>
+      <div>
+        {/* Pricing & Add to Cart / Out of Stock Booking Footer */}
+        {isOutOfStock ? (
+          <div className="p-3.5 sm:p-4 pt-2 border-t border-gray-100 space-y-2">
+            {/* Price and Out of Stock Badge Row */}
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <div className="flex items-baseline gap-1.5">
+                  <span className="text-base font-black text-[#0F2C59]">
+                    ₹{currentPrice}
+                  </span>
+                  {currentVariant.mrp > currentPrice && (
+                    <span className="text-xs text-gray-400 line-through">
+                      ₹{currentVariant.mrp}
+                    </span>
+                  )}
+                </div>
+                <div className="text-[10px] text-gray-500 font-medium">
+                  Per {formatVariantPack(currentVariant)}
+                </div>
+              </div>
 
-        {/* Action Button */}
-        <div>
-          {isOutOfStock ? (
-            <span className="text-xs font-bold text-red-500 bg-red-50 px-2.5 py-1.5 rounded-lg border border-red-200">
-              Out of Stock
-            </span>
-          ) : cartQuantity === 0 ? (
-            <button
-              id={`add-to-cart-${currentVariant.id}`}
-              onClick={handleAdd}
-              className="bg-[#0F2C59] hover:bg-[#153e7d] text-white font-extrabold text-xs px-3.5 py-2 rounded-xl shadow-sm transition flex items-center gap-1.5 hover:scale-105"
-            >
-              <Plus size={14} className="text-[#D4AF37]" />
-              <span>ADD</span>
-            </button>
-          ) : (
-            <div className="flex items-center bg-[#0F2C59] text-white rounded-xl shadow-sm p-0.5">
-              <button
-                id={`cart-decrease-${currentVariant.id}`}
-                onClick={handleDecrement}
-                className="w-7 h-7 flex items-center justify-center hover:bg-white/20 rounded-lg transition"
-                aria-label="Decrease quantity"
-              >
-                <Minus size={12} />
-              </button>
-              <span className="w-8 text-center text-xs font-black text-[#D4AF37]">
-                {cartQuantity}
+              {/* Clear Out of Stock Label */}
+              <span className="text-xs font-bold text-red-600 bg-red-50 px-2.5 py-1.5 rounded-lg border border-red-200 shrink-0">
+                Out of Stock
               </span>
+            </div>
+
+            {/* Book this Product Action Row - Fully visible on mobile screens, no horizontal overflow or clipping */}
+            <div className="flex items-center gap-2 w-full">
+              {/* Optional quantity selector for product request */}
+              <div className="flex items-center bg-gray-100 rounded-xl p-0.5 border border-gray-200 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setRequestedQty((q) => Math.max(1, q - 1))}
+                  className="w-7 h-7 flex items-center justify-center text-gray-600 hover:text-black hover:bg-white rounded-lg transition font-bold text-xs cursor-pointer"
+                  title="Decrease requested quantity"
+                  aria-label="Decrease requested quantity"
+                >
+                  <Minus size={12} />
+                </button>
+                <span className="w-6 text-center text-xs font-extrabold text-[#0F2C59]">
+                  {requestedQty}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setRequestedQty((q) => q + 1)}
+                  className="w-7 h-7 flex items-center justify-center text-gray-600 hover:text-black hover:bg-white rounded-lg transition font-bold text-xs cursor-pointer"
+                  title="Increase requested quantity"
+                  aria-label="Increase requested quantity"
+                >
+                  <Plus size={12} />
+                </button>
+              </div>
+
+              {/* Book this Product Button */}
               <button
-                id={`cart-increase-${currentVariant.id}`}
-                onClick={handleIncrement}
-                disabled={cartQuantity >= Math.min(currentVariant.stockQuantity, currentVariant.maxOrderLimit)}
-                className="w-7 h-7 flex items-center justify-center hover:bg-white/20 rounded-lg transition disabled:opacity-40"
-                aria-label="Increase quantity"
+                id={`request-product-${currentVariant.id}`}
+                type="button"
+                onClick={handleRequestProduct}
+                className="flex-1 min-w-0 bg-[#0F2C59] hover:bg-[#153e7d] text-white font-bold text-xs py-2 px-2.5 rounded-xl shadow-xs transition flex items-center justify-center gap-1.5 cursor-pointer"
+                title="Book this product when it becomes available"
               >
-                <Plus size={12} />
+                <BellRing size={13} className="text-[#D4AF37] shrink-0" />
+                <span className="truncate">Book this Product</span>
+                {hasRequested && (
+                  <span className="bg-emerald-500/25 text-emerald-300 text-[10px] px-1.5 py-0.2 rounded font-bold shrink-0 border border-emerald-400/40">
+                    ✓ Saved
+                  </span>
+                )}
               </button>
             </div>
-          )}
-        </div>
+          </div>
+        ) : (
+          <div className="p-4 pt-2 border-t border-gray-100 flex items-center justify-between gap-2">
+            <div>
+              <div className="flex items-baseline gap-1.5">
+                <span className="text-base font-black text-[#0F2C59]">
+                  ₹{currentPrice}
+                </span>
+                {currentVariant.mrp > currentPrice && (
+                  <span className="text-xs text-gray-400 line-through">
+                    ₹{currentVariant.mrp}
+                  </span>
+                )}
+              </div>
+              <div className="text-[10px] text-gray-500 font-medium">
+                Per {formatVariantPack(currentVariant)}
+              </div>
+              {isExcluded ? (
+                <div className="text-[9px] font-bold text-amber-800 bg-amber-50 border border-amber-200/80 px-1.5 py-0.5 rounded mt-1 inline-block">
+                  Price Regulated • Discount Excluded
+                </div>
+              ) : (
+                <div className="text-[9px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200/60 px-1.5 py-0.5 rounded mt-1 inline-block">
+                  Online UPI: Save extra {settings.advancePaymentDiscountPct}%
+                </div>
+              )}
+            </div>
+
+            {/* Action Button Area */}
+            <div className="flex flex-col items-end gap-1.5 shrink-0">
+              {cartQuantity === 0 ? (
+                <button
+                  id={`add-to-cart-${currentVariant.id}`}
+                  onClick={handleAdd}
+                  className="bg-[#0F2C59] hover:bg-[#153e7d] text-white font-extrabold text-xs px-3.5 py-2 rounded-xl shadow-sm transition flex items-center gap-1.5 hover:scale-105"
+                >
+                  <Plus size={14} className="text-[#D4AF37]" />
+                  <span>ADD</span>
+                </button>
+              ) : (
+                <div className="flex items-center bg-[#0F2C59] text-white rounded-xl shadow-sm p-0.5">
+                  <button
+                    id={`cart-decrease-${currentVariant.id}`}
+                    onClick={handleDecrement}
+                    className="w-7 h-7 flex items-center justify-center hover:bg-white/20 rounded-lg transition"
+                    aria-label="Decrease quantity"
+                  >
+                    <Minus size={12} />
+                  </button>
+                  <span className="w-8 text-center text-xs font-black text-[#D4AF37]">
+                    {cartQuantity}
+                  </span>
+                  <button
+                    id={`cart-increase-${currentVariant.id}`}
+                    onClick={handleIncrement}
+                    disabled={cartQuantity >= Math.min(currentVariant.stockQuantity, currentVariant.maxOrderLimit)}
+                    className="w-7 h-7 flex items-center justify-center hover:bg-white/20 rounded-lg transition disabled:opacity-40"
+                    aria-label="Increase quantity"
+                  >
+                    <Plus size={12} />
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Notice displayed when customer requested an out of stock product */}
+        {isOutOfStock && hasRequested && (
+          <div className="px-4 pb-3">
+            <div className="bg-amber-50 border border-amber-300 rounded-xl p-2.5 text-[11px] text-amber-900 leading-snug">
+              <div className="flex items-start gap-1.5">
+                <AlertCircle size={14} className="text-amber-700 shrink-0 mt-0.5" />
+                <p className="font-medium">
+                  This product is currently out of stock. The price may change when it becomes available. The current price is not guaranteed.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {product.imageUrl && (
@@ -260,6 +374,18 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
           subtitle={product.brand}
         />
       )}
+
+      {/* Product Request Confirmation Modal */}
+      <ProductRequestModal
+        isOpen={isRequestModalOpen}
+        onClose={() => setIsRequestModalOpen(false)}
+        product={product}
+        variant={currentVariant}
+        quantity={requestedQty}
+        requestDate={lastRequestDate}
+        customerName={currentUser.name}
+        customerPhone={currentUser.phone}
+      />
     </div>
   );
 };

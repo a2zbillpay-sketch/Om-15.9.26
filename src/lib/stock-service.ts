@@ -345,3 +345,95 @@ export function restoreStockForOrder(
     success: affectedProducts.length > 0,
   };
 }
+
+/**
+ * Adjusts stock strictly by the difference between old and new quantities for an edited order.
+ * If stock was already deducted:
+ * - Increases in quantity deduct the difference from variant stock.
+ * - Decreases in quantity restore the difference to variant stock.
+ * If stock was not deducted (e.g. order still ORDER_PENDING), no stock modification is performed.
+ */
+export function adjustStockForEditedOrder(
+  oldOrder: Order,
+  newItems: OrderItem[],
+  currentProducts: Product[]
+): StockChangeResult {
+  const wasDeducted =
+    oldOrder.stockDeducted === true ||
+    isStockDeductedForOrder(oldOrder.id, oldOrder.orderNumber, oldOrder);
+
+  if (!wasDeducted) {
+    return { updatedProducts: currentProducts, affectedProducts: [], success: true };
+  }
+
+  const oldQuantities = new Map<string, number>();
+  (oldOrder.items || []).forEach((item) => {
+    const cur = oldQuantities.get(item.variantId) || 0;
+    oldQuantities.set(item.variantId, cur + (Number(item.quantity) || 0));
+  });
+
+  const newQuantities = new Map<string, number>();
+  (newItems || []).forEach((item) => {
+    const cur = newQuantities.get(item.variantId) || 0;
+    newQuantities.set(item.variantId, cur + (Number(item.quantity) || 0));
+  });
+
+  const allVariantIds = new Set<string>([
+    ...Array.from(oldQuantities.keys()),
+    ...Array.from(newQuantities.keys()),
+  ]);
+
+  const productsMap = new Map<string, Product>();
+  currentProducts.forEach((p) => {
+    productsMap.set(p.id, {
+      ...p,
+      variants: p.variants.map((v) => ({ ...v })),
+    });
+  });
+
+  const affectedProductIds = new Set<string>();
+
+  for (const variantId of allVariantIds) {
+    const oldQty = oldQuantities.get(variantId) || 0;
+    const newQty = newQuantities.get(variantId) || 0;
+    const diff = newQty - oldQty;
+
+    if (diff === 0) continue;
+
+    for (const prod of productsMap.values()) {
+      const v = prod.variants.find((variant) => variant.id === variantId);
+      if (v) {
+        if (diff > 0) {
+          // Additional quantity ordered: deduct difference from stock
+          v.stockQuantity = Math.max(0, Number(v.stockQuantity || 0) - diff);
+        } else {
+          // Quantity reduced: restore difference back to stock
+          v.stockQuantity = Number(v.stockQuantity || 0) + Math.abs(diff);
+        }
+        (prod as any).stock = prod.variants.reduce(
+          (sum, variant) => sum + (Number(variant.stockQuantity) || 0),
+          0
+        );
+        affectedProductIds.add(prod.id);
+        break;
+      }
+    }
+  }
+
+  const updatedProducts = currentProducts.map((p) => {
+    if (affectedProductIds.has(p.id)) {
+      return productsMap.get(p.id)!;
+    }
+    return p;
+  });
+
+  const affectedProducts = Array.from(affectedProductIds)
+    .map((id) => productsMap.get(id)!)
+    .filter(Boolean);
+
+  return {
+    updatedProducts,
+    affectedProducts,
+    success: true,
+  };
+}

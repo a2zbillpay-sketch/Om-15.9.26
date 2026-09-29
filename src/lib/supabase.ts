@@ -769,7 +769,7 @@ export async function fetchCustomerOrdersFromSupabase(
           const meta = JSON.parse(parts[1].trim());
           codCollectedAmount = Number(meta.codCollected) || 0;
           previousOutstanding = Number(meta.prevOutstanding) || 0;
-          totalPayable = meta.totalPayable !== undefined ? Number(meta.totalPayable) : (finalAmount + previousOutstanding);
+          totalPayable = meta.totalPayable !== undefined ? Number(meta.totalPayable) : finalAmount;
           walletAmountUsed = Number(meta.walletAmountUsed) || 0;
           stockDeducted = Boolean(meta.stockDeducted);
           stockRestored = Boolean(meta.stockRestored);
@@ -954,7 +954,7 @@ export async function fetchAllOrdersForAdmin(): Promise<Order[] | null> {
           const meta = JSON.parse(parts[1].trim());
           codCollectedAmount = Number(meta.codCollected) || 0;
           previousOutstanding = Number(meta.prevOutstanding) || 0;
-          totalPayable = meta.totalPayable !== undefined ? Number(meta.totalPayable) : (finalAmount + previousOutstanding);
+          totalPayable = meta.totalPayable !== undefined ? Number(meta.totalPayable) : finalAmount;
           walletAmountUsed = Number(meta.walletAmountUsed) || 0;
           stockDeducted = Boolean(meta.stockDeducted);
           stockRestored = Boolean(meta.stockRestored);

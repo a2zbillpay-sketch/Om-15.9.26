@@ -35,9 +35,9 @@ export const DualPaymentModal: React.FC<DualPaymentModalProps> = ({
     breakdown.codFinalTotal - breakdown.advanceFinalTotal;
 
   // Wallet can ONLY be used inside Advance Payment as "Wallet Applied (Advance)"
-  const advanceTotalWithDebt = breakdown.advanceFinalTotal + (breakdown.previousOutstanding || 0);
-  const advanceWalletCredit = Math.min(Math.max(0, breakdown.availableWalletBalance || 0), advanceTotalWithDebt);
-  const remainingOnlinePayable = Math.max(0, advanceTotalWithDebt - advanceWalletCredit);
+  const advanceTotal = breakdown.advanceFinalTotal;
+  const advanceWalletCredit = Math.min(Math.max(0, breakdown.availableWalletBalance || 0), advanceTotal);
+  const remainingOnlinePayable = Math.max(0, advanceTotal - advanceWalletCredit);
   const remainingWalletAfter = Math.max(0, (breakdown.availableWalletBalance || 0) - advanceWalletCredit);
 
   const handleCardClick = () => {
@@ -145,31 +145,6 @@ export const DualPaymentModal: React.FC<DualPaymentModalProps> = ({
                   </div>
                 )}
               </div>
-
-              {breakdown.previousOutstanding && breakdown.previousOutstanding > 0 ? (
-                <div className="bg-emerald-100/70 border border-emerald-300 rounded-lg p-2.5 mt-2.5 space-y-1 text-xs">
-                  <div className="flex justify-between text-gray-700">
-                    <span>Previous Outstanding:</span>
-                    <span className="font-extrabold text-amber-900">+₹{breakdown.previousOutstanding}</span>
-                  </div>
-                  <div className="flex justify-between text-gray-700">
-                    <span>+ New Order Amount:</span>
-                    <span className="font-extrabold text-gray-900">₹{breakdown.advanceFinalTotal}</span>
-                  </div>
-                  {advanceWalletCredit > 0 && (
-                    <div className="flex justify-between text-emerald-800 font-bold">
-                      <span>- Wallet Applied (Advance):</span>
-                      <span className="font-black">-₹{advanceWalletCredit}</span>
-                    </div>
-                  )}
-                  <div className="border-t border-emerald-300 pt-1 flex justify-between font-black text-xs text-[#0F2C59]">
-                    <span>= Remaining Online Payment:</span>
-                    <span className="text-sm font-black text-emerald-800">
-                      ₹{remainingOnlinePayable}
-                    </span>
-                  </div>
-                </div>
-              ) : null}
             </div>
 
             <div className="mt-4 pt-3 border-t border-emerald-200">
@@ -182,10 +157,6 @@ export const DualPaymentModal: React.FC<DualPaymentModalProps> = ({
                   {advanceWalletCredit > 0 ? (
                     <span className="text-[10px] text-emerald-800 font-medium block">
                       (₹{advanceWalletCredit} Wallet Applied (Advance) · Rem. wallet: ₹{remainingWalletAfter})
-                    </span>
-                  ) : breakdown.previousOutstanding && breakdown.previousOutstanding > 0 ? (
-                    <span className="text-[9px] text-amber-800 font-bold block">
-                      (Includes ₹{breakdown.previousOutstanding} previous balance)
                     </span>
                   ) : null}
                 </div>
@@ -269,29 +240,10 @@ export const DualPaymentModal: React.FC<DualPaymentModalProps> = ({
                   <span>{breakdown.deliveryFee === 0 ? <span className="text-emerald-600 font-bold">FREE</span> : `₹${breakdown.deliveryFee}`}</span>
                 </div>
                 <div className="flex justify-between font-bold text-gray-800 pt-1 border-t border-gray-100">
-                  <span>New Order Amount:</span>
+                  <span>Order Amount:</span>
                   <span>₹{breakdown.codFinalTotal}</span>
                 </div>
               </div>
-
-              {breakdown.previousOutstanding && breakdown.previousOutstanding > 0 ? (
-                <div className="bg-amber-50/90 border border-amber-200 rounded-lg p-2.5 mt-2.5 space-y-1 text-xs">
-                  <div className="flex justify-between text-gray-700">
-                    <span>Previous Outstanding:</span>
-                    <span className="font-extrabold text-amber-900">+₹{breakdown.previousOutstanding}</span>
-                  </div>
-                  <div className="flex justify-between text-gray-700">
-                    <span>+ New Order Amount:</span>
-                    <span className="font-extrabold text-gray-900">₹{breakdown.codFinalTotal}</span>
-                  </div>
-                  <div className="border-t border-amber-300 pt-1 flex justify-between font-black text-xs text-[#0F2C59]">
-                    <span>= Total Payable:</span>
-                    <span className="text-sm font-black">
-                      ₹{breakdown.codFinalTotal + breakdown.previousOutstanding}
-                    </span>
-                  </div>
-                </div>
-              ) : null}
             </div>
 
             <div>
@@ -299,13 +251,8 @@ export const DualPaymentModal: React.FC<DualPaymentModalProps> = ({
                 <div>
                   <span className="text-[11px] font-bold text-gray-500 block">Total Payable:</span>
                   <span className="text-lg font-black text-[#0F2C59]">
-                    ₹{breakdown.codFinalTotal + (breakdown.previousOutstanding || 0)}
+                    ₹{breakdown.codFinalTotal}
                   </span>
-                  {breakdown.previousOutstanding && breakdown.previousOutstanding > 0 ? (
-                    <span className="text-[9px] text-amber-800 font-bold block">
-                      (Includes ₹{breakdown.previousOutstanding} previous balance)
-                    </span>
-                  ) : null}
                 </div>
                 {selectedMethod === 'COD' ? (
                   <span className="text-[10px] font-bold text-amber-800 bg-amber-100 px-2 py-0.5 rounded">

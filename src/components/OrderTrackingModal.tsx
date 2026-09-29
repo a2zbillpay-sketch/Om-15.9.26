@@ -218,7 +218,7 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
                   onClick={handleCancel}
                   className="bg-red-600 hover:bg-red-700 text-white font-bold text-xs px-3 py-1.5 rounded-lg shrink-0 shadow-sm transition"
                 >
-                  Cancel Order
+                  Edit Order
                 </button>
               )}
             </div>
@@ -349,16 +349,9 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
             )}
 
             <div className="flex justify-between text-xs text-gray-700 font-semibold border-t border-gray-200 pt-1.5">
-              <span>New Order Amount:</span>
+              <span>Order Amount:</span>
               <span>₹{currentOrder.finalAmount}</span>
             </div>
-
-            {currentOrder.previousOutstanding !== undefined && currentOrder.previousOutstanding > 0 && (
-              <div className="flex justify-between text-xs text-amber-800 font-bold">
-                <span>Previous Outstanding:</span>
-                <span>+₹{currentOrder.previousOutstanding}</span>
-              </div>
-            )}
 
             {isPaid ? (
               <>
@@ -395,7 +388,7 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
 
                 <div className="flex justify-between text-sm font-black text-[#0F2C59] border-t border-gray-200 pt-1.5">
                   <span>Total Payable:</span>
-                  <span>₹{currentOrder.totalPayable || (currentOrder.finalAmount + (currentOrder.previousOutstanding || 0))}</span>
+                  <span>₹{currentOrder.totalPayable ?? currentOrder.finalAmount}</span>
                 </div>
 
                 {currentOrder.codCollectedAmount !== undefined && currentOrder.codCollectedAmount > 0 && (

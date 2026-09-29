@@ -221,3 +221,37 @@ export interface AdminNotification {
   read: boolean;
   createdAt: string;
 }
+
+export interface ProductRequestCustomer {
+  id: string;
+  name: string;
+  phone: string;
+}
+
+export interface ProductRequestProduct {
+  id: string;
+  name: string;
+  brand?: string;
+  variantId: string;
+  variantName?: string;
+  packSize?: string;
+  unit?: string;
+  price?: number;
+}
+
+export interface ProductRequest {
+  id: string;
+  customer: ProductRequestCustomer;
+  customerId: string;
+  customerName: string;
+  customerPhone: string;
+  product: ProductRequestProduct;
+  productId: string;
+  productName: string;
+  variantId: string;
+  variantName?: string;
+  packSize?: string;
+  quantity: number;
+  requestDate: string;
+  createdAt: string;
+}

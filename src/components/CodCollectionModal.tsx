@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { X, Banknote, CheckCircle2, AlertCircle, Lock, ArrowRight, History } from 'lucide-react';
+import { X, Banknote, CheckCircle2, AlertCircle, Lock, Wallet } from 'lucide-react';
 import { Order, OrderStatus } from '../types';
+import { useApp } from '../context/AppContext';
 
 export interface CodCollectionModalProps {
   order: Order | null;
@@ -19,15 +20,29 @@ export const CodCollectionModal: React.FC<CodCollectionModalProps> = ({
   onClose,
   onSave,
 }) => {
+  const { getCustomerOutstanding, users } = useApp();
   const [amountStr, setAmountStr] = useState<string>('');
   const [markDelivered, setMarkDelivered] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState<boolean>(false);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
 
-  const prevDebt = Math.max(0, Number(order?.previousOutstanding) || 0);
   const billAmount = Math.max(0, Number(order?.finalAmount) || 0);
-  const totalPayable = order?.totalPayable ?? (billAmount + prevDebt);
+  const orderPayable = Math.max(0, Number(order?.totalPayable ?? billAmount));
+
+  const targetCustomer = order?.userPhone || order?.userId || '';
+  const customerUser = users.find(
+    (u) =>
+      (order?.userPhone &&
+        (u.phone === order.userPhone ||
+          u.phone?.replace(/\D/g, '').slice(-10) === order.userPhone?.replace(/\D/g, '').slice(-10))) ||
+      (order?.userId && u.id === order.userId)
+  );
+
+  const rawOutstanding = getCustomerOutstanding(targetCustomer);
+  const userWallet = customerUser ? customerUser.walletBalance : (rawOutstanding > 0 ? -rawOutstanding : 0);
+  const negativeWalletDebt = userWallet < 0 ? Math.abs(userWallet) : (rawOutstanding > 0 ? rawOutstanding : 0);
+  const maxCollectible = Math.round((orderPayable + negativeWalletDebt) * 100) / 100;
 
   useEffect(() => {
     if (order && isOpen) {
@@ -46,19 +61,22 @@ export const CodCollectionModal: React.FC<CodCollectionModalProps> = ({
   const parsedAmount = parseFloat(amountStr.trim());
   const isValidNumber = !isNaN(parsedAmount) && isFinite(parsedAmount);
   const isNegative = isValidNumber && parsedAmount < 0;
-  const exceedsPayable = isValidNumber && parsedAmount > totalPayable;
-  const shortfall = isValidNumber && !isNegative && !exceedsPayable ? Math.max(0, totalPayable - parsedAmount) : 0;
-  const isFullCollection = isValidNumber && parsedAmount === totalPayable;
-  const isPartial = isValidNumber && parsedAmount > 0 && parsedAmount < totalPayable;
+  const exceedsPayable = isValidNumber && parsedAmount > maxCollectible;
+  const isFullCollection = isValidNumber && parsedAmount === maxCollectible;
+  const isOrderOnlyCollection = isValidNumber && parsedAmount === orderPayable && negativeWalletDebt > 0;
+  const isPartial = isValidNumber && parsedAmount > 0 && parsedAmount < orderPayable;
   const isZero = isValidNumber && parsedAmount === 0;
 
-  // Breakdown of allocation for this entered amount
-  const allocatedToPrevious = isValidNumber && !isNegative
-    ? Math.min(parsedAmount, prevDebt)
-    : 0;
+  // Breakdown of allocation for this entered amount:
+  // 1. Current order payable is covered first
   const allocatedToOrder = isValidNumber && !isNegative
-    ? Math.min(Math.max(0, parsedAmount - prevDebt), billAmount)
+    ? Math.min(parsedAmount, orderPayable)
     : 0;
+  // 2. Excess cash beyond current order payable settles the customer's negative wallet balance
+  const allocatedToWallet = isValidNumber && !isNegative
+    ? Math.min(Math.max(0, parsedAmount - orderPayable), negativeWalletDebt)
+    : 0;
+  const remainingWalletDebt = Math.max(0, negativeWalletDebt - allocatedToWallet);
 
   const handleInputChange = (val: string) => {
     setError(null);
@@ -67,12 +85,12 @@ export const CodCollectionModal: React.FC<CodCollectionModalProps> = ({
 
   const handleSetFull = () => {
     setError(null);
-    setAmountStr(String(totalPayable));
+    setAmountStr(String(maxCollectible));
   };
 
   const handleSetOrderOnly = () => {
     setError(null);
-    setAmountStr(String(billAmount));
+    setAmountStr(String(orderPayable));
   };
 
   const handleSetZero = () => {
@@ -98,7 +116,7 @@ export const CodCollectionModal: React.FC<CodCollectionModalProps> = ({
     }
 
     if (exceedsPayable) {
-      setError(`Collected amount (₹${parsedAmount}) cannot exceed the total payable amount (₹${totalPayable}).`);
+      setError(`Collected amount (₹${parsedAmount}) cannot exceed the collectible total (₹${maxCollectible}).`);
       return;
     }
 
@@ -148,29 +166,29 @@ export const CodCollectionModal: React.FC<CodCollectionModalProps> = ({
 
         {/* Form Body */}
         <form onSubmit={handleSubmit} className="p-5 space-y-4">
-          {/* Outstanding Balance Breakdown Banner */}
+          {/* Order Details Banner */}
           <div className="bg-amber-50/80 border border-amber-200 rounded-xl p-3 text-xs text-[#0F2C59] space-y-1.5">
             <div className="flex items-center justify-between font-bold text-gray-700">
               <span className="flex items-center gap-1.5">
                 <Lock size={13} className="text-gray-500" />
-                <span>New Order Bill (Fixed):</span>
+                <span>New Order Bill:</span>
               </span>
-              <span className="font-extrabold text-gray-900">₹{billAmount}</span>
+              <span className="font-extrabold text-gray-900">₹{orderPayable}</span>
             </div>
 
-            {prevDebt > 0 && (
-              <div className="flex items-center justify-between font-bold text-amber-900">
+            {negativeWalletDebt > 0 && (
+              <div className="flex items-center justify-between font-bold text-rose-800">
                 <span className="flex items-center gap-1.5">
-                  <History size={13} className="text-amber-700" />
-                  <span>Previous Outstanding:</span>
+                  <Wallet size={13} className="text-rose-600" />
+                  <span>Wallet Balance:</span>
                 </span>
-                <span className="font-extrabold text-amber-900">+₹{prevDebt}</span>
+                <span className="font-extrabold text-rose-800">-₹{negativeWalletDebt}</span>
               </div>
             )}
 
             <div className="border-t border-amber-200/80 pt-1.5 flex items-center justify-between font-black text-sm text-[#0F2C59]">
-              <span>Total Payable Amount:</span>
-              <span className="text-base text-[#0F2C59]">₹{totalPayable}</span>
+              <span>Order Payable Amount:</span>
+              <span className="text-base text-[#0F2C59]">₹{orderPayable}</span>
             </div>
 
             {order.codCollectedAmount !== undefined && order.codCollectedAmount > 0 && (
@@ -191,20 +209,30 @@ export const CodCollectionModal: React.FC<CodCollectionModalProps> = ({
                 Actual Cash Collected / Deposited:
               </label>
               <div className="flex items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={handleSetFull}
-                  className="text-[10px] font-bold text-[#0F2C59] hover:text-[#FF6B00] bg-gray-100 hover:bg-orange-50 px-2 py-0.5 rounded transition cursor-pointer"
-                >
-                  Full Total (₹{totalPayable})
-                </button>
-                {prevDebt > 0 && (
+                {negativeWalletDebt > 0 ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={handleSetFull}
+                      className="text-[10px] font-bold text-[#0F2C59] hover:text-[#FF6B00] bg-gray-100 hover:bg-orange-50 px-2 py-0.5 rounded transition cursor-pointer"
+                    >
+                      Order + Settle (₹{maxCollectible})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleSetOrderOnly}
+                      className="text-[10px] font-bold text-gray-700 hover:text-[#0F2C59] bg-gray-100 hover:bg-blue-50 px-2 py-0.5 rounded transition cursor-pointer"
+                    >
+                      Order Only (₹{orderPayable})
+                    </button>
+                  </>
+                ) : (
                   <button
                     type="button"
                     onClick={handleSetOrderOnly}
-                    className="text-[10px] font-bold text-gray-700 hover:text-[#0F2C59] bg-gray-100 hover:bg-blue-50 px-2 py-0.5 rounded transition cursor-pointer"
+                    className="text-[10px] font-bold text-[#0F2C59] hover:text-[#FF6B00] bg-gray-100 hover:bg-orange-50 px-2 py-0.5 rounded transition cursor-pointer"
                   >
-                    Order (₹{billAmount})
+                    Full Order (₹{orderPayable})
                   </button>
                 )}
                 <button
@@ -226,10 +254,10 @@ export const CodCollectionModal: React.FC<CodCollectionModalProps> = ({
                 type="number"
                 step="0.01"
                 min="0"
-                max={totalPayable}
+                max={maxCollectible}
                 value={amountStr}
                 onChange={(e) => handleInputChange(e.target.value)}
-                placeholder="e.g. 1100"
+                placeholder="e.g. 150"
                 className={`w-full pl-8 pr-4 py-2.5 bg-white border text-base font-bold text-gray-900 rounded-xl outline-none transition focus:ring-2 ${
                   exceedsPayable || isNegative
                     ? 'border-red-400 focus:ring-red-200'
@@ -243,53 +271,67 @@ export const CodCollectionModal: React.FC<CodCollectionModalProps> = ({
           {/* Allocation summary card */}
           {isValidNumber && !isNegative && !exceedsPayable && (
             <div className="bg-gray-50 rounded-xl p-3 border border-gray-200 text-xs space-y-1.5">
-              {prevDebt > 0 ? (
+              <div className="flex justify-between text-gray-600">
+                <span>Applied to Order Bill:</span>
+                <span className="font-bold text-[#0F2C59]">
+                  ₹{allocatedToOrder} / ₹{orderPayable}
+                </span>
+              </div>
+
+              {negativeWalletDebt > 0 && (
                 <>
                   <div className="flex justify-between text-gray-600">
-                    <span>Applied to Previous Outstanding:</span>
-                    <span className="font-bold text-amber-900">
-                      ₹{allocatedToPrevious} / ₹{prevDebt}
+                    <span>Applied to Settle Wallet Balance:</span>
+                    <span className="font-bold text-rose-800">
+                      ₹{allocatedToWallet} / ₹{negativeWalletDebt}
                     </span>
                   </div>
-                  <div className="flex justify-between text-gray-600">
-                    <span>Applied to Current Order Bill:</span>
-                    <span className="font-bold text-[#0F2C59]">
-                      ₹{allocatedToOrder} / ₹{billAmount}
+                  <div className="pt-1.5 border-t border-gray-200 flex justify-between items-center font-bold">
+                    <span>Wallet Balance after Settlement:</span>
+                    <span className={remainingWalletDebt > 0 ? 'text-rose-700 font-extrabold' : 'text-emerald-700 font-black'}>
+                      {remainingWalletDebt > 0 ? `-₹${remainingWalletDebt}` : '₹0 (Settled)'}
                     </span>
                   </div>
                 </>
-              ) : (
-                <div className="flex justify-between text-gray-600">
-                  <span>Applied to Order Bill:</span>
-                  <span className="font-bold text-[#0F2C59]">₹{parsedAmount} / ₹{billAmount}</span>
-                </div>
               )}
 
-              <div className="pt-1.5 border-t border-gray-200 flex justify-between items-center font-bold">
-                <span>Remaining Customer Outstanding:</span>
-                <span className={shortfall > 0 ? 'text-amber-700' : 'text-emerald-700 font-black'}>
-                  {shortfall > 0 ? `₹${shortfall}` : '₹0 (All Cleared)'}
-                </span>
-              </div>
+              {negativeWalletDebt === 0 && (
+                <div className="pt-1.5 border-t border-gray-200 flex justify-between items-center font-bold">
+                  <span>Remaining Unpaid:</span>
+                  <span className={parsedAmount < orderPayable ? 'text-amber-700' : 'text-emerald-700 font-black'}>
+                    {parsedAmount < orderPayable ? `₹${orderPayable - parsedAmount}` : '₹0 (All Cleared)'}
+                  </span>
+                </div>
+              )}
 
               {/* Status Badge */}
               <div className="pt-1">
                 {isFullCollection && (
                   <div className="flex items-center gap-1.5 text-[11px] font-bold text-emerald-800 bg-emerald-100/80 px-2.5 py-1 rounded-lg">
                     <CheckCircle2 size={13} className="text-emerald-700 shrink-0" />
-                    <span>Full Total Cleared (₹{totalPayable})</span>
+                    <span>
+                      {negativeWalletDebt > 0
+                        ? `Full Order & Wallet Settled (₹${maxCollectible})`
+                        : `Full Order Cleared (₹${orderPayable})`}
+                    </span>
+                  </div>
+                )}
+                {isOrderOnlyCollection && (
+                  <div className="flex items-center gap-1.5 text-[11px] font-bold text-blue-800 bg-blue-100/80 px-2.5 py-1 rounded-lg">
+                    <CheckCircle2 size={13} className="text-blue-700 shrink-0" />
+                    <span>Order Cleared (₹{orderPayable}), Wallet Balance Remains -₹{negativeWalletDebt}</span>
                   </div>
                 )}
                 {isPartial && (
                   <div className="flex items-center gap-1.5 text-[11px] font-bold text-amber-900 bg-amber-100/80 px-2.5 py-1 rounded-lg">
                     <AlertCircle size={13} className="text-amber-700 shrink-0" />
-                    <span>Partial COD: ₹{parsedAmount} collected (₹{shortfall} remaining debt)</span>
+                    <span>Partial COD: ₹{parsedAmount} collected (₹{orderPayable - parsedAmount} remaining on order)</span>
                   </div>
                 )}
                 {isZero && (
                   <div className="flex items-center gap-1.5 text-[11px] font-bold text-red-800 bg-red-100/80 px-2.5 py-1 rounded-lg">
                     <AlertCircle size={13} className="text-red-700 shrink-0" />
-                    <span>₹0 Cash Collected (Entire ₹{totalPayable} remains unpaid)</span>
+                    <span>₹0 Cash Collected (Order ₹{orderPayable} remains unpaid)</span>
                   </div>
                 )}
               </div>
@@ -298,35 +340,42 @@ export const CodCollectionModal: React.FC<CodCollectionModalProps> = ({
 
           {/* Validation Error Message */}
           {error && (
-            <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 flex items-center gap-2">
+            <div className="p-3 bg-red-50 border border-red-200 text-red-700 rounded-xl text-xs flex items-center gap-2">
               <AlertCircle size={15} className="shrink-0 text-red-600" />
               <span>{error}</span>
             </div>
           )}
 
-          {/* Success Message */}
+          {/* Success Message Banner */}
           {saveSuccess && (
-            <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-800 flex items-center gap-2">
+            <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl text-xs flex items-center gap-2">
               <CheckCircle2 size={15} className="shrink-0 text-emerald-600" />
-              <span>Collection record permanently saved to database!</span>
+              <span className="font-bold">COD collection recorded successfully!</span>
             </div>
           )}
 
-          {/* Status Delivery Checkbox */}
-          {order.status !== OrderStatus.DELIVERED && (
-            <label className="flex items-center gap-2.5 text-xs text-gray-700 cursor-pointer pt-1">
+          {/* Mark as Delivered Checkbox */}
+          <div className="pt-1">
+            <label className="flex items-center gap-2.5 cursor-pointer bg-gray-50 hover:bg-gray-100/80 p-3 rounded-xl border border-gray-200 transition">
               <input
                 type="checkbox"
                 checked={markDelivered}
                 onChange={(e) => setMarkDelivered(e.target.checked)}
-                className="w-4 h-4 rounded text-[#0F2C59] border-gray-300 focus:ring-[#0F2C59] cursor-pointer"
+                className="w-4 h-4 rounded text-[#0F2C59] focus:ring-[#0F2C59] border-gray-300"
               />
-              <span className="font-medium">Mark order as Delivered upon saving</span>
+              <div className="text-xs">
+                <span className="font-bold text-gray-800">
+                  Update order status to <span className="text-emerald-700 font-extrabold uppercase">Delivered</span>
+                </span>
+                <p className="text-[10px] text-gray-500">
+                  Customer will see order delivered and payment status updated.
+                </p>
+              </div>
             </label>
-          )}
+          </div>
 
-          {/* Footer Actions */}
-          <div className="pt-2 flex justify-end gap-2">
+          {/* Action Buttons */}
+          <div className="flex justify-end gap-2.5 pt-2 border-t border-gray-100">
             <button
               type="button"
               onClick={onClose}
@@ -336,11 +385,10 @@ export const CodCollectionModal: React.FC<CodCollectionModalProps> = ({
             </button>
             <button
               type="submit"
-              disabled={Boolean(error) || exceedsPayable || isNegative || !isValidNumber || isSubmitting}
-              className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-[#0F2C59] hover:bg-[#163a6e] disabled:opacity-50 disabled:cursor-not-allowed rounded-xl shadow-xs transition active:scale-95 cursor-pointer"
+              disabled={isSubmitting || saveSuccess}
+              className="px-5 py-2 text-xs font-black text-white bg-[#0F2C59] hover:bg-[#0b2245] rounded-xl transition cursor-pointer shadow-md disabled:opacity-50"
             >
-              <span>{isSubmitting ? 'Saving...' : 'Save Collection'}</span>
-              <ArrowRight size={13} />
+              {isSubmitting ? 'Saving...' : 'Save Cash Collection'}
             </button>
           </div>
         </form>

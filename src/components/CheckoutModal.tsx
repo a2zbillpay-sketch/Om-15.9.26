@@ -353,12 +353,12 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
 
             {/* Advance Payment Breakdown */}
             {(() => {
-              const advanceTotalWithDebt = checkoutBreakdown.advanceFinalTotal + (checkoutBreakdown.previousOutstanding || 0);
+              const advanceTotal = checkoutBreakdown.advanceFinalTotal;
               const isUsingWallet = applyWalletInAdvance && (currentUser.walletBalance || 0) > 0;
               const advanceWalletCredit = isUsingWallet
-                ? Math.min(Math.max(0, currentUser.walletBalance || 0), advanceTotalWithDebt)
+                ? Math.min(Math.max(0, currentUser.walletBalance || 0), advanceTotal)
                 : 0;
-              const remainingOnlinePayment = Math.max(0, advanceTotalWithDebt - advanceWalletCredit);
+              const remainingOnlinePayment = Math.max(0, advanceTotal - advanceWalletCredit);
               const remainingWalletAfter = isUsingWallet
                 ? Math.max(0, (currentUser.walletBalance || 0) - advanceWalletCredit)
                 : Math.max(0, currentUser.walletBalance || 0);
@@ -397,15 +397,9 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                     </div>
                     <div className="bg-white/80 border border-emerald-200 rounded-lg p-2 mt-2 space-y-1 text-xs text-left">
                       <div className="flex justify-between text-gray-600">
-                        <span>New Order Amount:</span>
+                        <span>Order Amount:</span>
                         <span className="font-semibold text-gray-800">₹{checkoutBreakdown.advanceFinalTotal}</span>
                       </div>
-                      {checkoutBreakdown.previousOutstanding && checkoutBreakdown.previousOutstanding > 0 ? (
-                        <div className="flex justify-between text-gray-600">
-                          <span>Previous Outstanding:</span>
-                          <span className="font-semibold text-amber-900">+₹{checkoutBreakdown.previousOutstanding}</span>
-                        </div>
-                      ) : null}
                       {advanceWalletCredit > 0 ? (
                         <div className="flex justify-between text-emerald-700 font-bold">
                           <span>Wallet Applied (Advance):</span>

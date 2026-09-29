@@ -63,23 +63,32 @@ export function calculateCustomerOutstanding(
 
   if (customerOrders.length === 0) return 0;
 
-  let runningDebt = 0;
+  const latestOrder = customerOrders[customerOrders.length - 1];
+  let totalDebt = 0;
 
   for (const order of customerOrders) {
-    const bill = Number(order.finalAmount) || 0;
-    const prevDebt = Number(order.previousOutstanding || 0);
-    const payable = Number(order.totalPayable) || (bill + (prevDebt || runningDebt));
-    const collected = Number(order.codCollectedAmount) || 0;
-    const isReceived = order.paymentStatus === PaymentStatus.RECEIVED;
-
-    if (isReceived || collected >= payable) {
-      runningDebt = 0;
-    } else {
-      runningDebt = Math.max(0, Math.round((payable - collected) * 100) / 100);
+    if (order.paymentStatus === PaymentStatus.RECEIVED) {
+      continue;
     }
+
+    // A newly placed order that is not yet delivered and has no recorded collection
+    // is currently in progress, not a "previous COD outstanding" debt.
+    const isUndeliveredInProgress =
+      order.status !== OrderStatus.DELIVERED &&
+      order.paymentStatus !== PaymentStatus.PARTIALLY_COLLECTED &&
+      (!order.codCollectedAmount || order.codCollectedAmount <= 0);
+
+    if (order.id === latestOrder.id && isUndeliveredInProgress) {
+      continue;
+    }
+
+    const bill = Number(order.finalAmount) || 0;
+    const collected = Number(order.codCollectedAmount) || 0;
+    const unpaid = Math.max(0, bill - collected);
+    totalDebt += unpaid;
   }
 
-  return Math.round(runningDebt * 100) / 100;
+  return Math.round(totalDebt * 100) / 100;
 }
 
 export interface AllocationResult {
@@ -90,16 +99,20 @@ export interface AllocationResult {
 }
 
 /**
- * Allocates collected cash across previous unpaid/partially paid orders in FIFO order,
- * then to the current order.
+ * Allocates collected cash:
+ * 1. Current order payable is covered first up to its bill amount.
+ * 2. Any additional cash collected beyond the current order bill settles previous
+ *    outstanding COD debt (FIFO across older unpaid orders), reducing negative wallet balance.
  *
  * Example:
- * Previous bill ₹1,000, collected ₹400 → Outstanding ₹600.
- * New order ₹500 → Total Payable ₹1,100.
- * When ₹1,100 is collected:
- * - ₹600 is allocated to Previous bill (total collected becomes ₹1,000, remaining ₹0, status RECEIVED).
- * - ₹500 is allocated to New order (total collected becomes ₹500, remaining ₹0, status RECEIVED).
- * - Remaining Outstanding becomes ₹0.
+ * Old outstanding ₹18, New order ₹150.
+ * If ₹168 is collected:
+ * - ₹150 pays Current order (RECEIVED, unpaid ₹0).
+ * - ₹18 settles Previous outstanding (RECEIVED, unpaid ₹0).
+ * - Customer's Wallet Balance becomes ₹0.
+ * If ₹150 is collected:
+ * - ₹150 pays Current order (RECEIVED, unpaid ₹0).
+ * - Previous outstanding ₹18 remains unpaid, Wallet Balance remains -₹18.
  */
 export function allocateCodCollection(
   orders: Order[],
@@ -141,44 +154,18 @@ export function allocateCodCollection(
   }
 
   const bill = Number(currentOrder.finalAmount) || 0;
-  const prevDebt = Number(currentOrder.previousOutstanding) || 0;
-  const totalPayable = Number(currentOrder.totalPayable) || (bill + prevDebt);
+  const customerPriorDebt = calculateCustomerOutstanding(orders, targetPhoneOrId, currentOrderId);
+  const prevDebt = Math.max(0, Number(currentOrder.previousOutstanding) || customerPriorDebt);
 
-  // When editing an existing collection, cleanCollected replaces the previous collected total on this order
-  const newCollected = cleanCollected;
-  const remainingUnpaid = Math.max(0, Math.round((totalPayable - newCollected) * 100) / 100);
+  // Current order bill is covered first
+  const allocToCurrent = Math.min(cleanCollected, bill);
+  // Cash beyond current bill is allocated to settle older debt up to prevDebt
+  let cashForOlder = Math.min(Math.max(0, cleanCollected - bill), prevDebt);
 
-  let nextPaymentStatus: PaymentStatus;
-  if (newCollected >= totalPayable) {
-    nextPaymentStatus = PaymentStatus.RECEIVED;
-  } else if (newCollected > 0) {
-    nextPaymentStatus = PaymentStatus.PARTIALLY_COLLECTED;
-  } else {
-    nextPaymentStatus = PaymentStatus.PENDING;
-  }
-
-  // Allocate cash across older orders first (FIFO) up to prevDebt
-  let cashForOlder = Math.min(cleanCollected, prevDebt);
   for (const olderOrder of olderOrders) {
     const oBill = Number(olderOrder.finalAmount) || 0;
     const oAlready = Number(olderOrder.codCollectedAmount) || 0;
     const oUnpaid = Math.max(0, oBill - oAlready);
-
-    // If newCollected pays full totalPayable, all older orders whose debt was in prevDebt are 100% satisfied
-    if (newCollected >= totalPayable) {
-      modifiedOrdersMap.set(olderOrder.id, {
-        ...olderOrder,
-        codCollectedAmount: oBill,
-        paymentStatus: PaymentStatus.RECEIVED,
-      });
-      allocations.push({
-        orderId: olderOrder.id,
-        orderNumber: olderOrder.orderNumber,
-        amountAllocated: oUnpaid,
-        orderRemainingUnpaid: 0,
-      });
-      continue;
-    }
 
     if (oUnpaid <= 0) {
       continue;
@@ -211,18 +198,28 @@ export function allocateCodCollection(
     cashForOlder = Math.round((cashForOlder - alloc) * 100) / 100;
   }
 
-  // Current order allocation
-  const allocToBill = Math.min(Math.max(0, cleanCollected - prevDebt), bill);
+  // Current order payment status
+  let nextPaymentStatus: PaymentStatus;
+  if (allocToCurrent >= bill) {
+    nextPaymentStatus = PaymentStatus.RECEIVED;
+  } else if (allocToCurrent > 0) {
+    nextPaymentStatus = PaymentStatus.PARTIALLY_COLLECTED;
+  } else {
+    nextPaymentStatus = PaymentStatus.PENDING;
+  }
+
+  const currentRemainingUnpaid = Math.max(0, Math.round((bill - allocToCurrent) * 100) / 100);
+
   allocations.push({
     orderId: currentOrder.id,
     orderNumber: currentOrder.orderNumber,
-    amountAllocated: allocToBill,
-    orderRemainingUnpaid: remainingUnpaid,
+    amountAllocated: allocToCurrent,
+    orderRemainingUnpaid: currentRemainingUnpaid,
   });
 
   modifiedOrdersMap.set(currentOrder.id, {
     ...currentOrder,
-    codCollectedAmount: newCollected,
+    codCollectedAmount: allocToCurrent,
     paymentStatus: nextPaymentStatus,
     status: markAsDelivered ? OrderStatus.DELIVERED : currentOrder.status,
   });

@@ -159,13 +159,7 @@ export const CustomerOrdersDrawer: React.FC<CustomerOrdersDrawerProps> = ({
                         <span className="ml-1 text-[10px] font-black text-emerald-800 bg-emerald-100/70 px-1.5 py-0.5 rounded">
                           PAID
                         </span>
-                      ) : (
-                        order.previousOutstanding !== undefined && order.previousOutstanding > 0 && (
-                          <span className="ml-1 text-[10px] font-black text-amber-900 bg-amber-100/70 px-1.5 py-0.5 rounded">
-                            Payable: ₹{order.totalPayable || (order.finalAmount + order.previousOutstanding)}
-                          </span>
-                        )
-                      )}
+                      ) : null}
                       <span className="text-[10px] text-gray-400 ml-1.5">
                         ({order.paymentMethod === PaymentMethod.ADVANCE_ONLINE ? 'UPI' : 'COD'})
                       </span>

@@ -262,18 +262,6 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                   )}
                 </span>
               </div>
-              {checkoutBreakdown.previousOutstanding && checkoutBreakdown.previousOutstanding > 0 ? (
-                <div className="bg-amber-50/80 border border-amber-200 rounded-lg p-2 text-xs space-y-1 my-1">
-                  <div className="flex justify-between text-gray-700">
-                    <span>New Order Amount:</span>
-                    <span className="font-semibold">₹{checkoutBreakdown.advanceFinalTotal}</span>
-                  </div>
-                  <div className="flex justify-between text-gray-700">
-                    <span>Previous Outstanding:</span>
-                    <span className="font-semibold text-amber-900">+₹{checkoutBreakdown.previousOutstanding}</span>
-                  </div>
-                </div>
-              ) : null}
               {checkoutBreakdown.isWalletApplied && checkoutBreakdown.advanceWalletUsed && checkoutBreakdown.advanceWalletUsed > 0 ? (
                 <div className="flex justify-between text-emerald-700 font-bold">
                   <span>Wallet Applied (Advance):</span>
@@ -283,12 +271,12 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
               <div className="flex justify-between text-emerald-700 font-bold pt-1 border-t border-gray-200">
                 <span>Advance UPI Payable:</span>
                 <span className="text-sm font-black text-emerald-800">
-                  ₹{checkoutBreakdown.advanceRemainingPayable ?? checkoutBreakdown.advanceTotalPayable ?? (checkoutBreakdown.advanceFinalTotal + (checkoutBreakdown.previousOutstanding || 0))}
+                  ₹{checkoutBreakdown.advanceRemainingPayable ?? checkoutBreakdown.advanceFinalTotal}
                 </span>
               </div>
               <div className="flex justify-between text-gray-500 text-[11px]">
                 <span>COD Total (after door delivery):</span>
-                <span>₹{checkoutBreakdown.codRemainingPayable ?? checkoutBreakdown.codTotalPayable ?? (checkoutBreakdown.codFinalTotal + (checkoutBreakdown.previousOutstanding || 0))}</span>
+                <span>₹{checkoutBreakdown.codRemainingPayable ?? checkoutBreakdown.codFinalTotal}</span>
               </div>
             </div>
 

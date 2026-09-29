@@ -14,6 +14,7 @@ import {
   Address,
   WalletTransaction,
   AdminNotification,
+  ProductRequest,
 } from '../types';
 import {
   INITIAL_SETTINGS,
@@ -199,6 +200,13 @@ interface AppContextType {
   adminNotifications: AdminNotification[];
   markNotificationAsRead: (id: string) => void;
   markAllNotificationsAsRead: () => void;
+  productRequests: ProductRequest[];
+  requestProduct: (data: {
+    product: Product;
+    variant: ProductVariant;
+    quantity: number;
+    customerOverride?: { name?: string; phone?: string; id?: string };
+  }) => ProductRequest;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -382,6 +390,74 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return saved ? JSON.parse(saved) : [];
   });
 
+  const [productRequests, setProductRequests] = useState<ProductRequest[]>(() => {
+    try {
+      const saved = localStorage.getItem('om_product_requests');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const requestProduct = useCallback(
+    (data: {
+      product: Product;
+      variant: ProductVariant;
+      quantity: number;
+      customerOverride?: { name?: string; phone?: string; id?: string };
+    }): ProductRequest => {
+      const now = new Date();
+      const customerId = data.customerOverride?.id || currentUser.id || `cust-${now.getTime()}`;
+      const customerName = data.customerOverride?.name || currentUser.name || 'Customer';
+      const customerPhone = data.customerOverride?.phone || currentUser.phone || '';
+
+      const newRequest: ProductRequest = {
+        id: `preq-${now.getTime()}-${Math.floor(Math.random() * 1000)}`,
+        customer: {
+          id: customerId,
+          name: customerName,
+          phone: customerPhone,
+        },
+        customerId,
+        customerName,
+        customerPhone,
+        product: {
+          id: data.product.id,
+          name: data.product.name,
+          brand: data.product.brand,
+          variantId: data.variant.id,
+          variantName: data.variant.packLabel || formatVariantPack(data.variant),
+          packSize: formatVariantPack(data.variant),
+          unit: data.variant.unit,
+          price: data.variant.baseSellingPrice,
+        },
+        productId: data.product.id,
+        productName: data.product.name,
+        variantId: data.variant.id,
+        variantName: data.variant.packLabel || formatVariantPack(data.variant),
+        packSize: formatVariantPack(data.variant),
+        quantity: Math.max(1, data.quantity || 1),
+        requestDate: now.toISOString(),
+        createdAt: now.toISOString(),
+      };
+
+      setProductRequests((prev) => {
+        const updated = [newRequest, ...prev];
+        try {
+          localStorage.setItem('om_product_requests', JSON.stringify(updated));
+          const cleanPhone = customerPhone.replace(/\D/g, '').slice(-10);
+          if (cleanPhone) {
+            localStorage.setItem(`om_product_requests_${cleanPhone}`, JSON.stringify(updated));
+          }
+        } catch {}
+        return updated;
+      });
+
+      return newRequest;
+    },
+    [currentUser.id, currentUser.name, currentUser.phone]
+  );
+
   useEffect(() => {
     localStorage.setItem('om_wallet_transactions', JSON.stringify(walletTransactions));
   }, [walletTransactions]);
@@ -474,7 +550,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               totalPayable:
                 persisted.totalPayable ??
                 o.totalPayable ??
-                o.finalAmount + (persisted.previousOutstanding ?? o.previousOutstanding ?? 0),
+                o.finalAmount,
               paymentStatus: (persisted.paymentStatus as PaymentStatus) || o.paymentStatus,
               status: ((persisted as any).status as OrderStatus) || o.status,
             };
@@ -506,7 +582,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                   totalPayable:
                     persisted.totalPayable ??
                     o.totalPayable ??
-                    o.finalAmount + (persisted.previousOutstanding ?? o.previousOutstanding ?? 0),
+                    o.finalAmount,
                   paymentStatus: (persisted.paymentStatus as PaymentStatus) || o.paymentStatus,
                   status: ((persisted as any).status as OrderStatus) || o.status,
                 };
@@ -611,7 +687,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const userDebt = calculateCustomerOutstanding(orders, matchingUser.phone || matchingUser.id);
       const updatedUser = {
         ...matchingUser,
-        walletBalance: matchingUser.walletBalance >= 0 ? matchingUser.walletBalance : 0,
+        walletBalance: userDebt > 0 ? -userDebt : (matchingUser.walletBalance >= 0 ? matchingUser.walletBalance : 0),
         outstandingBalance: userDebt,
       };
       setCurrentUser(updatedUser);
@@ -940,8 +1016,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (currentUser.outstandingBalance && currentUser.outstandingBalance > 0) {
       return currentUser.outstandingBalance;
     }
+    if (currentUser.walletBalance && currentUser.walletBalance < 0) {
+      return Math.abs(currentUser.walletBalance);
+    }
     return 0;
-  }, [orders, currentUser.phone, currentUser.id, currentUser.outstandingBalance]);
+  }, [orders, currentUser.phone, currentUser.id, currentUser.outstandingBalance, currentUser.walletBalance]);
 
   const getCustomerOutstanding = useCallback(
     (phoneOrId?: string): number => {
@@ -954,29 +1033,59 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (hasCustomerOrders) {
         return fromOrders;
       }
+      const matchedUser = users.find((u) => isSameCustomer({ userPhone: u.phone, userId: u.id }, target));
+      if (matchedUser) {
+        if (matchedUser.outstandingBalance && matchedUser.outstandingBalance > 0) {
+          return matchedUser.outstandingBalance;
+        }
+        if (matchedUser.walletBalance && matchedUser.walletBalance < 0) {
+          return Math.abs(matchedUser.walletBalance);
+        }
+      }
       if (target === currentUser.phone || target === currentUser.id) {
         if (currentUser.outstandingBalance && currentUser.outstandingBalance > 0) {
           return currentUser.outstandingBalance;
         }
+        if (currentUser.walletBalance && currentUser.walletBalance < 0) {
+          return Math.abs(currentUser.walletBalance);
+        }
       }
       return 0;
     },
-    [orders, currentUser.phone, currentUser.id, currentUser.outstandingBalance]
+    [orders, currentUser.phone, currentUser.id, currentUser.outstandingBalance, currentUser.walletBalance, users]
   );
 
-  // Ensure customer COD outstanding debt is tracked in outstandingBalance,
-  // NEVER overwriting or reducing walletBalance!
+  // Ensure customer COD outstanding debt is tracked as negative walletBalance,
+  // showing -₹18 when customer owes ₹18 from previous COD order
   useEffect(() => {
     if (activeRole === Role.CUSTOMER && (currentUser.phone || currentUser.id)) {
-      if (
-        currentUser.outstandingBalance !== customerOutstanding ||
-        (currentUser.walletBalance !== undefined && currentUser.walletBalance < 0)
-      ) {
-        setCurrentUser((prev) => ({
-          ...prev,
-          outstandingBalance: customerOutstanding,
-          walletBalance: prev.walletBalance < 0 ? 0 : prev.walletBalance,
-        }));
+      if (customerOutstanding > 0) {
+        const targetWallet = -customerOutstanding;
+        if (currentUser.walletBalance !== targetWallet || currentUser.outstandingBalance !== customerOutstanding) {
+          setCurrentUser((prev) => {
+            const updated = {
+              ...prev,
+              outstandingBalance: customerOutstanding,
+              walletBalance: targetWallet,
+            };
+            try {
+              localStorage.setItem('om_current_user', JSON.stringify(updated));
+            } catch {}
+            return updated;
+          });
+        }
+      } else if (currentUser.walletBalance < 0 && customerOutstanding === 0) {
+        setCurrentUser((prev) => {
+          const updated = {
+            ...prev,
+            outstandingBalance: 0,
+            walletBalance: 0,
+          };
+          try {
+            localStorage.setItem('om_current_user', JSON.stringify(updated));
+          } catch {}
+          return updated;
+        });
       }
     }
   }, [activeRole, customerOutstanding, currentUser.phone, currentUser.id, currentUser.outstandingBalance, currentUser.walletBalance]);
@@ -1002,11 +1111,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         freeShippingMinAmount: settings.freeShippingMinAmount,
         baseDeliveryFee: settings.baseDeliveryFee,
       },
-      customerOutstanding,
+      0, // Never add previous outstanding to the next order
       currentUser.walletBalance > 0 ? currentUser.walletBalance : 0,
       useWalletBalance
     );
-  }, [cart, currentUser.codOrderCount, settings, customerOutstanding, currentUser.walletBalance, useWalletBalance]);
+  }, [cart, currentUser.codOrderCount, settings, currentUser.walletBalance, useWalletBalance]);
 
   // Order Management
   const createOrder = async (data: {
@@ -1026,10 +1135,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const discountAmount = isAdvance ? checkoutBreakdown.advanceDiscountAmount : 0;
     const codCharge = isAdvance ? 0 : checkoutBreakdown.codCharge;
 
-    const previousOutstanding = customerOutstanding;
-    const baseTotalPayable = isAdvance
-      ? (checkoutBreakdown.advanceTotalPayable ?? (finalAmount + previousOutstanding))
-      : finalAmount + previousOutstanding;
+    const previousOutstanding = 0; // Never add previous outstanding to the next order
+    const baseTotalPayable = finalAmount;
 
     // Wallet can ONLY be used inside Advance Payment as "Wallet Applied (Advance)"
     // Wallet must be deducted ONLY when:
@@ -1585,11 +1692,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, error: 'Collected amount cannot be negative.' };
     }
 
-    const orderPayable = order.totalPayable ?? (order.finalAmount + (order.previousOutstanding || 0));
-    if (collectedAmount > orderPayable) {
+    const customerPriorDebt = getCustomerOutstanding(order.userPhone || order.userId);
+    const maxCollectible = (Number(order.finalAmount) || 0) + customerPriorDebt;
+    if (collectedAmount > maxCollectible) {
       return {
         success: false,
-        error: `Collected amount (₹${collectedAmount}) cannot exceed the total payable amount (₹${orderPayable}).`,
+        error: `Collected amount (₹${collectedAmount}) cannot exceed the collectible total (₹${maxCollectible}).`,
       };
     }
 
@@ -1615,7 +1723,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (isSameCustomer({ userPhone: u.phone, userId: u.id }, targetCustomer)) {
           return {
             ...u,
-            walletBalance: u.walletBalance < 0 ? 0 : u.walletBalance,
+            walletBalance: newDebt > 0 ? -newDebt : (u.walletBalance < 0 ? 0 : u.walletBalance),
             outstandingBalance: newDebt,
           };
         }
@@ -1624,11 +1732,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
 
     if (isSameCustomer({ userPhone: currentUser.phone, userId: currentUser.id }, targetCustomer)) {
-      setCurrentUser((prev) => ({
-        ...prev,
-        walletBalance: prev.walletBalance < 0 ? 0 : prev.walletBalance,
-        outstandingBalance: newDebt,
-      }));
+      setCurrentUser((prev) => {
+        const updated = {
+          ...prev,
+          walletBalance: newDebt > 0 ? -newDebt : (prev.walletBalance < 0 ? 0 : prev.walletBalance),
+          outstandingBalance: newDebt,
+        };
+        try {
+          localStorage.setItem('om_current_user', JSON.stringify(updated));
+          const cleanP = updated.phone?.replace(/\D/g, '').slice(-10);
+          if (cleanP) {
+            localStorage.setItem(`om_profile_${cleanP}`, JSON.stringify(updated));
+          }
+        } catch {}
+        return updated;
+      });
     }
 
     // Persist permanently to backend database API and Supabase
@@ -1641,7 +1759,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       collectedAmount: cleanAmount,
       previousOutstanding: order.previousOutstanding || 0,
       orderAmount: order.finalAmount,
-      totalPayable: orderPayable,
+      totalPayable: order.totalPayable ?? order.finalAmount,
       markAsDelivered,
       allCustomerOrders: allocationResult.updatedOrders.filter(
         (o) => isSameCustomer(o, order.userPhone || order.userId)
@@ -1855,7 +1973,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         phone: cleanPhone,
         role: Role.CUSTOMER,
         referralCode: resolvedUser?.referralCode || `OM${cleanPhone.slice(-4)}`,
-        walletBalance: resolvedWalletBalance >= 0 ? resolvedWalletBalance : 0,
+        walletBalance: userDebt > 0 ? -userDebt : (resolvedWalletBalance >= 0 ? resolvedWalletBalance : 0),
         outstandingBalance: userDebt,
         codOrderCount: resolvedUser?.codOrderCount || 0,
         addresses: resolvedUser?.addresses || [],
@@ -2015,6 +2133,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         adminNotifications,
         markNotificationAsRead,
         markAllNotificationsAsRead,
+        productRequests,
+        requestProduct,
       }}
     >
       {children}
