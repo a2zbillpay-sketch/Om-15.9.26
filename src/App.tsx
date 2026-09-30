@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { AppProvider, useApp } from './context/AppContext';
 import { Role, Order } from './types';
 import { Navbar } from './components/Navbar';
@@ -35,6 +35,7 @@ const MainLayout: React.FC = () => {
     setIsAuthModalOpen,
     orders,
     settings,
+    editingOrder,
     isAdminSessionValid,
     checkAdminSession,
   } = useApp();
@@ -48,6 +49,13 @@ const MainLayout: React.FC = () => {
   const [isAddressModalOpen, setIsAddressModalOpen] = useState(false);
   const [selectedTrackingOrder, setSelectedTrackingOrder] = useState<Order | null>(null);
   const [activePolicy, setActivePolicy] = useState<PolicyType | null>(null);
+
+  // Automatically open cart drawer when an order is opened for editing
+  useEffect(() => {
+    if (editingOrder) {
+      setIsCartOpen(true);
+    }
+  }, [editingOrder]);
 
   const handleShopkeeperClick = async () => {
     const isValid = isAdminSessionValid || (await checkAdminSession());
@@ -109,6 +117,23 @@ const MainLayout: React.FC = () => {
       />
 
       {/* Main View: Orchestrated Customer Flow (Auth -> Profile -> Products/Shop) or Admin */}
+      {editingOrder && (
+        <div className="bg-[#0F2C59] text-white px-4 py-2 text-xs flex items-center justify-between border-b border-[#D4AF37]/40 shadow-sm sticky top-[73px] z-20">
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+            <span>
+              Editing <strong>Order #{editingOrder.orderNumber}</strong>. Browse to add items, then update your order in cart.
+            </span>
+          </div>
+          <button
+            onClick={() => setIsCartOpen(true)}
+            className="bg-[#FF6B00] hover:bg-[#e05e00] text-white font-bold px-3 py-1 rounded-lg text-xs cursor-pointer shadow-xs transition"
+          >
+            Review & Save
+          </button>
+        </div>
+      )}
+
       <div className="flex-1">
         {activeRole === Role.SHOPKEEPER ||
         activeRole === Role.SECONDARY_ADMIN ||
@@ -241,6 +266,9 @@ const MainLayout: React.FC = () => {
           setIsCartOpen(false);
           setIsCheckoutOpen(true);
         }}
+        onOrderUpdated={(updated) => {
+          setSelectedTrackingOrder(updated);
+        }}
       />
 
       <CheckoutModal
@@ -263,6 +291,7 @@ const MainLayout: React.FC = () => {
             : null
         }
         onClose={() => setSelectedTrackingOrder(null)}
+        onOpenCart={() => setIsCartOpen(true)}
       />
 
       <ReferralWalletModal

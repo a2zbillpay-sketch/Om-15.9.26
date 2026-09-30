@@ -8,6 +8,7 @@ import {
   SystemSetting,
   CartItem,
   Order,
+  OrderItem,
   OrderStatus,
   PaymentMethod,
   PaymentStatus,
@@ -45,6 +46,7 @@ import {
   fetchProductsFromSupabase,
   deleteProductFromSupabase,
   updateProductStockInSupabase,
+  saveEditedOrderToSupabase,
 } from '../lib/supabase';
 import {
   fetchCategoriesFromDb,
@@ -61,6 +63,8 @@ import {
 import {
   deductStockForOrder,
   restoreStockForOrder,
+  adjustStockForEditedOrder,
+  findProductAndVariant,
   isStockDeductedForOrder,
   markStockDeductedForOrder,
   isStockRestoredForOrder,
@@ -154,6 +158,10 @@ interface AppContextType {
   updateCartQty: (variantId: string, quantity: number) => void;
   removeFromCart: (variantId: string) => void;
   clearCart: () => void;
+  editingOrder: Order | null;
+  startEditingOrder: (order: Order) => void;
+  cancelEditingOrder: () => void;
+  saveEditedOrder: () => Promise<{ success: boolean; error?: string; updatedOrder?: Order }>;
   checkoutBreakdown: CheckoutBreakdown;
   useWalletBalance: boolean;
   setUseWalletBalance: (use: boolean) => void;
@@ -367,6 +375,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     return [];
   });
+
+  const [editingOrder, setEditingOrder] = useState<Order | null>(null);
+  const [savedPreEditCart, setSavedPreEditCart] = useState<CartItem[] | null>(null);
 
   const [orders, setOrders] = useState<Order[]>(() => {
     const saved = localStorage.getItem('om_orders');
@@ -1001,6 +1012,207 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       saveCustomerCart(currentUser.phone, []);
     }
   };
+
+  const startEditingOrder = useCallback(
+    (order: Order) => {
+      // Save current cart snapshot so it can be restored if user cancels edit
+      setSavedPreEditCart([...cart]);
+      setEditingOrder(order);
+
+      // Convert order items to CartItem[]
+      const itemsForCart: CartItem[] = (order.items || []).map((item) => {
+        const match = findProductAndVariant(item, products);
+        if (match) {
+          return {
+            productId: match.product.id,
+            product: match.product,
+            variantId: match.variant.id,
+            variant: match.variant,
+            quantity: Number(item.quantity) || 1,
+          };
+        }
+        const fallbackVariant: ProductVariant = {
+          id: item.variantId || `var-${item.id}`,
+          productId: item.productId || `prod-${item.id}`,
+          unit: (item.unit as any) || 'PACK',
+          packSize: item.packSize || 1,
+          packLabel: item.variantName || 'Standard',
+          mrp: item.unitPrice || item.price,
+          baseSellingPrice: item.unitPrice || item.price,
+          stockQuantity: 999,
+          maxOrderLimit: 999,
+          tieredPrices: [],
+        };
+        const fallbackProduct: Product = {
+          id: item.productId || `prod-${item.id}`,
+          name: item.productName || 'Grocery Item',
+          brand: item.brand || '',
+          description: '',
+          categoryId: 'ALL',
+          isDiscountExcluded: Boolean(item.isDiscountExcluded),
+          variants: [fallbackVariant],
+          createdAt: new Date().toISOString(),
+        };
+        return {
+          productId: fallbackProduct.id,
+          product: fallbackProduct,
+          variantId: fallbackVariant.id,
+          variant: fallbackVariant,
+          quantity: Number(item.quantity) || 1,
+        };
+      });
+
+      setCart(itemsForCart);
+    },
+    [cart, products]
+  );
+
+  const cancelEditingOrder = useCallback(() => {
+    if (savedPreEditCart !== null) {
+      setCart(savedPreEditCart);
+      setSavedPreEditCart(null);
+    }
+    setEditingOrder(null);
+  }, [savedPreEditCart]);
+
+  const saveEditedOrder = useCallback(async (): Promise<{
+    success: boolean;
+    error?: string;
+    updatedOrder?: Order;
+  }> => {
+    if (!editingOrder) {
+      return { success: false, error: 'No order is currently being edited.' };
+    }
+    if (!cart || cart.length === 0) {
+      return { success: false, error: 'Order must contain at least 1 item.' };
+    }
+
+    const currentOrder = orders.find((o) => o.id === editingOrder.id) || editingOrder;
+
+    // 1. Build updated OrderItem[] from cart
+    const updatedOrderItems: OrderItem[] = cart.map((item) => {
+      const unitPrice = getActiveUnitPrice(
+        item.variant.baseSellingPrice,
+        item.quantity,
+        item.variant.tieredPrices || []
+      );
+      return {
+        id: `item-${Date.now()}-${item.variantId}`,
+        orderId: currentOrder.id,
+        productId: item.productId || item.product.id,
+        variantId: item.variantId,
+        variantName: item.variant.packLabel,
+        productName: item.product.name,
+        brand: item.product.brand,
+        unit: item.variant.unit,
+        packSize: item.variant.packSize,
+        quantity: item.quantity,
+        unitPrice,
+        price: unitPrice * item.quantity,
+        isDiscountExcluded:
+          item.product.isDiscountExcluded === true ||
+          (item.product.isDiscountExcluded as any) === 'true',
+      };
+    });
+
+    // 2. Calculate updated checkout totals using checkout calculation engine
+    const variantItems = cart.map((item) => ({
+      variantId: item.variantId,
+      quantity: item.quantity,
+      baseSellingPrice: item.variant.baseSellingPrice,
+      isDiscountExcluded:
+        item.product.isDiscountExcluded === true ||
+        (item.product.isDiscountExcluded as any) === 'true',
+      tieredPrices: item.variant.tieredPrices || [],
+    }));
+
+    const breakdown = calculateCheckoutTotals(
+      variantItems,
+      { codOrderCount: currentUser.codOrderCount },
+      {
+        advancePaymentDiscountPct: settings.advancePaymentDiscountPct,
+        codBaseCharge: settings.codBaseCharge,
+        freeShippingMinAmount: settings.freeShippingMinAmount,
+        baseDeliveryFee: settings.baseDeliveryFee,
+      }
+    );
+
+    const isAdvance = currentOrder.paymentMethod === PaymentMethod.ADVANCE_ONLINE;
+    const finalAmount = isAdvance ? breakdown.advanceFinalTotal : breakdown.codFinalTotal;
+    const discountAmount = isAdvance ? breakdown.advanceDiscountAmount : 0;
+    const codCharge = isAdvance ? 0 : breakdown.codCharge;
+
+    // Preserve and recalculate wallet usage & payable
+    let walletUsed = 0;
+    if (isAdvance && (currentOrder.walletAmountUsed || 0) > 0) {
+      walletUsed = Math.min(finalAmount, currentOrder.walletAmountUsed || 0);
+    }
+    const totalPayable = isAdvance
+      ? Math.max(0, finalAmount - walletUsed)
+      : finalAmount;
+
+    // 3. Adjust stock ONLY by the difference between old and new quantities
+    const stockResult = adjustStockForEditedOrder(currentOrder, updatedOrderItems, products);
+    if (stockResult.affectedProducts.length > 0) {
+      setProducts(stockResult.updatedProducts);
+      try {
+        localStorage.setItem('om_products', JSON.stringify(stockResult.updatedProducts));
+      } catch {}
+
+      if (isSupabaseConfigured) {
+        stockResult.affectedProducts.forEach((p) => {
+          updateProductStockInSupabase(p.id, p.variants).catch(() => {});
+          saveProductToSupabase(p).catch((err) => {
+            console.warn('Background Supabase product stock adjust error:', err);
+          });
+        });
+      }
+    }
+
+    // 4. Build updated Order object - keeping same id, orderNumber, status, paymentMethod, etc.
+    const updatedOrder: Order = {
+      ...currentOrder,
+      items: updatedOrderItems,
+      subtotal: breakdown.subtotal,
+      discountAmount,
+      deliveryFee: breakdown.deliveryFee,
+      codCharge,
+      finalAmount,
+      totalPayable,
+      walletAmountUsed: walletUsed,
+    };
+
+    // 5. Update React state and localStorage
+    setOrders((prev) => {
+      const updated = prev.map((o) => (o.id === updatedOrder.id ? updatedOrder : o));
+      try {
+        localStorage.setItem('om_orders', JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+
+    // 6. Update database
+    if (isSupabaseConfigured) {
+      saveEditedOrderToSupabase(updatedOrder).catch((err) => {
+        console.warn('Background Supabase edited order save error:', err);
+      });
+    }
+
+    // 7. Clear cart & exit editing mode cleanly
+    setCart([]);
+    setSavedPreEditCart(null);
+    setEditingOrder(null);
+
+    return { success: true, updatedOrder };
+  }, [
+    editingOrder,
+    cart,
+    orders,
+    currentUser.codOrderCount,
+    settings,
+    products,
+    isSupabaseConfigured,
+  ]);
 
   // Customer outstanding balance calculation (Source of truth: persistent orders & DB)
   const customerOutstanding = useMemo(() => {
@@ -2105,6 +2317,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updateCartQty,
         removeFromCart,
         clearCart,
+        editingOrder,
+        startEditingOrder,
+        cancelEditingOrder,
+        saveEditedOrder,
         checkoutBreakdown,
         useWalletBalance,
         setUseWalletBalance,

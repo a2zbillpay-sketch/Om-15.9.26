@@ -139,7 +139,7 @@ export const CustomerOrdersDrawer: React.FC<CustomerOrdersDrawerProps> = ({
                   {isCancellable && (
                     <div className="bg-amber-100/70 border border-amber-300 text-amber-900 text-[10px] font-bold px-2 py-1 rounded flex items-center gap-1">
                       <Clock size={12} className="text-amber-700 animate-spin" />
-                      <span>{remainingMins} min left in 15-minute cancellation window!</span>
+                      <span>{remainingMins} min left in 15-minute edit window!</span>
                     </div>
                   )}
 

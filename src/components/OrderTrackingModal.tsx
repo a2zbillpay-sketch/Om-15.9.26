@@ -11,6 +11,7 @@ import {
   Calendar,
   MapPin,
   FileText,
+  Edit3,
 } from 'lucide-react';
 import { Order, OrderStatus, PaymentMethod, PaymentStatus } from '../types';
 import { useApp } from '../context/AppContext';
@@ -25,14 +26,16 @@ interface OrderTrackingModalProps {
   order: Order | null;
   isOpen: boolean;
   onClose: () => void;
+  onOpenCart?: () => void;
 }
 
 export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
   order,
   isOpen,
   onClose,
+  onOpenCart,
 }) => {
-  const { orders, cancelOrder, currentUser } = useApp();
+  const { orders, cancelOrder, startEditingOrder, currentUser } = useApp();
   const [secondsRemaining, setSecondsRemaining] = useState<number>(0);
   const [cancelMessage, setCancelMessage] = useState<string | null>(null);
 
@@ -122,6 +125,15 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
     }
   };
 
+  const handleEditOrder = () => {
+    if (!currentOrder) return;
+    startEditingOrder(currentOrder);
+    onClose();
+    if (onOpenCart) {
+      onOpenCart();
+    }
+  };
+
   const stepIndex = getFulfillmentStepIndex(currentOrder.status);
   const matchedStep = stepIndex >= 0 ? SIX_FULFILLMENT_STEPS[stepIndex] : null;
 
@@ -193,13 +205,13 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
                 <div>
                   <div className="font-extrabold">
                     {isCancellable
-                      ? '15-Minute Instant Cancellation Window Active'
-                      : 'Cancellation Window Closed'}
+                      ? '15-Minute Instant Edit Window Active'
+                      : 'Edit Window Closed'}
                   </div>
                   <div className="text-[11px] mt-0.5">
                     {isCancellable ? (
                       <span>
-                        You can cancel within{' '}
+                        You can edit your order items within{' '}
                         <strong className="font-mono text-xs font-black text-amber-950">
                           {String(minutesLeft).padStart(2, '0')}:{String(secondsLeft).padStart(2, '0')}
                         </strong>{' '}
@@ -215,10 +227,11 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
               {isCancellable && (
                 <button
                   id="cancel-order-btn"
-                  onClick={handleCancel}
-                  className="bg-red-600 hover:bg-red-700 text-white font-bold text-xs px-3 py-1.5 rounded-lg shrink-0 shadow-sm transition"
+                  onClick={handleEditOrder}
+                  className="bg-[#0F2C59] hover:bg-[#153e7d] text-white font-bold text-xs px-3 py-1.5 rounded-lg shrink-0 shadow-sm transition flex items-center gap-1.5 cursor-pointer"
                 >
-                  Edit Order
+                  <Edit3 size={13} className="text-[#D4AF37]" />
+                  <span>Edit Order</span>
                 </button>
               )}
             </div>

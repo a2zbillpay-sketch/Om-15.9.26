@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { X, Trash2, Plus, Minus, ArrowRight, ShieldCheck, Truck, Sparkles, Package, AlertCircle } from 'lucide-react';
+import { X, Trash2, Plus, Minus, ArrowRight, ShieldCheck, Truck, Sparkles, Package, AlertCircle, Check } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { PaymentMethod, Order } from '../types';
 import { getActiveUnitPrice } from '../lib/engine/checkout-calculator';
 import { formatVariantPack } from '../utils/variantFormatter';
 import { ImageLightboxModal } from './ImageLightboxModal';
@@ -9,15 +10,28 @@ interface CartDrawerProps {
   isOpen: boolean;
   onClose: () => void;
   onProceedToCheckout: () => void;
+  onOrderUpdated?: (order: Order) => void;
 }
 
 export const CartDrawer: React.FC<CartDrawerProps> = ({
   isOpen,
   onClose,
   onProceedToCheckout,
+  onOrderUpdated,
 }) => {
-  const { cart, updateCartQty, removeFromCart, clearCart, checkoutBreakdown, settings } = useApp();
+  const {
+    cart,
+    updateCartQty,
+    removeFromCart,
+    clearCart,
+    checkoutBreakdown,
+    settings,
+    editingOrder,
+    cancelEditingOrder,
+    saveEditedOrder,
+  } = useApp();
   const [zoomImage, setZoomImage] = useState<{ url: string; name: string; brand?: string } | null>(null);
+  const [isSavingOrder, setIsSavingOrder] = useState<boolean>(false);
 
   if (!isOpen) return null;
 
@@ -38,8 +52,13 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
         <div className="p-4 bg-[#0F2C59] text-white flex items-center justify-between border-b border-[#D4AF37]/30">
           <div className="flex items-center gap-2">
             <h2 className="font-extrabold text-base tracking-wide text-[#D4AF37]">
-              Shopping Cart ({cart.length})
+              {editingOrder ? `Edit Order #${editingOrder.orderNumber}` : `Shopping Cart (${cart.length})`}
             </h2>
+            {editingOrder && (
+              <span className="bg-amber-400/20 text-amber-300 text-[10px] font-bold px-2 py-0.5 rounded-full border border-amber-400/30">
+                Editing Mode
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-2">
             {cart.length > 0 && (
@@ -59,6 +78,24 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
             </button>
           </div>
         </div>
+
+        {/* Editing Order Announcement Bar */}
+        {editingOrder && (
+          <div className="bg-amber-50 p-3 border-b border-amber-200 flex items-center justify-between gap-2 text-xs text-amber-950">
+            <div className="flex items-center gap-1.5 font-medium">
+              <Sparkles size={14} className="text-[#FF6B00] shrink-0" />
+              <span>
+                Editing <strong>#{editingOrder.orderNumber}</strong>. Adjust quantities or add/remove items.
+              </span>
+            </div>
+            <button
+              onClick={cancelEditingOrder}
+              className="text-[11px] font-bold text-gray-600 hover:text-gray-900 underline shrink-0 cursor-pointer"
+            >
+              Cancel Edit
+            </button>
+          </div>
+        )}
 
         {/* Free Delivery Threshold Bar */}
         <div className="bg-amber-50 p-3 border-b border-amber-200">
@@ -223,81 +260,159 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
             ) : null}
 
             {/* Breakdown Summary */}
-            <div className="space-y-1 text-xs text-gray-600 border-t border-gray-200 pt-2">
-              <div className="flex justify-between">
-                <span>Items Subtotal:</span>
-                <span className="font-bold text-gray-900">₹{checkoutBreakdown.subtotal}</span>
-              </div>
-              {checkoutBreakdown.excludedSubtotal > 0 && checkoutBreakdown.eligibleSubtotal > 0 && (
-                <>
-                  <div className="flex justify-between text-[11px] text-gray-500 pl-2">
-                    <span>• Eligible for Discount:</span>
-                    <span>₹{checkoutBreakdown.eligibleSubtotal}</span>
-                  </div>
+            {editingOrder ? (
+              <div className="space-y-1 text-xs text-gray-600 border-t border-gray-200 pt-2 bg-gray-50/70 p-3 rounded-xl">
+                <div className="flex justify-between">
+                  <span>Items Subtotal ({cart.length} items):</span>
+                  <span className="font-bold text-gray-900">₹{checkoutBreakdown.subtotal}</span>
+                </div>
+                {checkoutBreakdown.excludedSubtotal > 0 && checkoutBreakdown.eligibleSubtotal > 0 && (
                   <div className="flex justify-between text-[11px] text-amber-800 pl-2 font-medium">
-                    <span>• Price Regulated (No Discount):</span>
+                    <span>• Price Regulated Items:</span>
                     <span>₹{checkoutBreakdown.excludedSubtotal}</span>
                   </div>
-                </>
-              )}
-              {checkoutBreakdown.advanceDiscountAmount > 0 && (
-                <div className="flex justify-between text-emerald-700 font-bold">
-                  <span>Advance UPI Discount ({settings.advancePaymentDiscountPct}% on eligible):</span>
-                  <span>-₹{checkoutBreakdown.advanceDiscountAmount}</span>
+                )}
+                {editingOrder.paymentMethod === PaymentMethod.ADVANCE_ONLINE && checkoutBreakdown.advanceDiscountAmount > 0 && (
+                  <div className="flex justify-between text-emerald-700 font-bold">
+                    <span>Advance UPI Discount ({settings.advancePaymentDiscountPct}%):</span>
+                    <span>-₹{checkoutBreakdown.advanceDiscountAmount}</span>
+                  </div>
+                )}
+                <div className="flex justify-between">
+                  <span>Delivery Fee:</span>
+                  <span>
+                    {checkoutBreakdown.deliveryFee === 0 ? (
+                      <span className="text-emerald-600 font-bold">FREE</span>
+                    ) : (
+                      `₹${checkoutBreakdown.deliveryFee}`
+                    )}
+                  </span>
                 </div>
-              )}
-              {checkoutBreakdown.advanceDiscountAmount === 0 && checkoutBreakdown.excludedSubtotal > 0 && (
+                {editingOrder.walletAmountUsed !== undefined && editingOrder.walletAmountUsed > 0 && (
+                  <div className="flex justify-between text-emerald-700 font-bold">
+                    <span>Wallet Applied (Advance):</span>
+                    <span>-₹{editingOrder.walletAmountUsed}</span>
+                  </div>
+                )}
+                <div className="flex justify-between text-emerald-700 font-bold pt-1.5 border-t border-gray-200">
+                  <span>
+                    Updated Total Payable ({editingOrder.paymentMethod === PaymentMethod.ADVANCE_ONLINE ? 'Advance UPI' : 'COD'}):
+                  </span>
+                  <span className="text-sm font-black text-emerald-800">
+                    ₹{editingOrder.paymentMethod === PaymentMethod.ADVANCE_ONLINE
+                      ? Math.max(0, checkoutBreakdown.advanceFinalTotal - (editingOrder.walletAmountUsed || 0))
+                      : checkoutBreakdown.codFinalTotal}
+                  </span>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-1 text-xs text-gray-600 border-t border-gray-200 pt-2">
+                <div className="flex justify-between">
+                  <span>Items Subtotal:</span>
+                  <span className="font-bold text-gray-900">₹{checkoutBreakdown.subtotal}</span>
+                </div>
+                {checkoutBreakdown.excludedSubtotal > 0 && checkoutBreakdown.eligibleSubtotal > 0 && (
+                  <>
+                    <div className="flex justify-between text-[11px] text-gray-500 pl-2">
+                      <span>• Eligible for Discount:</span>
+                      <span>₹{checkoutBreakdown.eligibleSubtotal}</span>
+                    </div>
+                    <div className="flex justify-between text-[11px] text-amber-800 pl-2 font-medium">
+                      <span>• Price Regulated (No Discount):</span>
+                      <span>₹{checkoutBreakdown.excludedSubtotal}</span>
+                    </div>
+                  </>
+                )}
+                {checkoutBreakdown.advanceDiscountAmount > 0 && (
+                  <div className="flex justify-between text-emerald-700 font-bold">
+                    <span>Advance UPI Discount ({settings.advancePaymentDiscountPct}% on eligible):</span>
+                    <span>-₹{checkoutBreakdown.advanceDiscountAmount}</span>
+                  </div>
+                )}
+                {checkoutBreakdown.advanceDiscountAmount === 0 && checkoutBreakdown.excludedSubtotal > 0 && (
+                  <div className="flex justify-between text-gray-500 text-[11px]">
+                    <span>Advance UPI Discount:</span>
+                    <span>₹0 (Price Regulated items)</span>
+                  </div>
+                )}
+                <div className="flex justify-between">
+                  <span>Delivery Fee:</span>
+                  <span>
+                    {checkoutBreakdown.deliveryFee === 0 ? (
+                      <span className="text-emerald-600 font-bold">FREE</span>
+                    ) : (
+                      `₹${checkoutBreakdown.deliveryFee}`
+                    )}
+                  </span>
+                </div>
+                {checkoutBreakdown.isWalletApplied && checkoutBreakdown.advanceWalletUsed && checkoutBreakdown.advanceWalletUsed > 0 ? (
+                  <div className="flex justify-between text-emerald-700 font-bold">
+                    <span>Wallet Applied (Advance):</span>
+                    <span>-₹{checkoutBreakdown.advanceWalletUsed}</span>
+                  </div>
+                ) : null}
+                <div className="flex justify-between text-emerald-700 font-bold pt-1 border-t border-gray-200">
+                  <span>Advance UPI Payable:</span>
+                  <span className="text-sm font-black text-emerald-800">
+                    ₹{checkoutBreakdown.advanceRemainingPayable ?? checkoutBreakdown.advanceFinalTotal}
+                  </span>
+                </div>
                 <div className="flex justify-between text-gray-500 text-[11px]">
-                  <span>Advance UPI Discount:</span>
-                  <span>₹0 (Price Regulated items)</span>
+                  <span>COD Total (after door delivery):</span>
+                  <span>₹{checkoutBreakdown.codRemainingPayable ?? checkoutBreakdown.codFinalTotal}</span>
                 </div>
-              )}
-              <div className="flex justify-between">
-                <span>Delivery Fee:</span>
-                <span>
-                  {checkoutBreakdown.deliveryFee === 0 ? (
-                    <span className="text-emerald-600 font-bold">FREE</span>
-                  ) : (
-                    `₹${checkoutBreakdown.deliveryFee}`
-                  )}
-                </span>
               </div>
-              {checkoutBreakdown.isWalletApplied && checkoutBreakdown.advanceWalletUsed && checkoutBreakdown.advanceWalletUsed > 0 ? (
-                <div className="flex justify-between text-emerald-700 font-bold">
-                  <span>Wallet Applied (Advance):</span>
-                  <span>-₹{checkoutBreakdown.advanceWalletUsed}</span>
-                </div>
-              ) : null}
-              <div className="flex justify-between text-emerald-700 font-bold pt-1 border-t border-gray-200">
-                <span>Advance UPI Payable:</span>
-                <span className="text-sm font-black text-emerald-800">
-                  ₹{checkoutBreakdown.advanceRemainingPayable ?? checkoutBreakdown.advanceFinalTotal}
-                </span>
-              </div>
-              <div className="flex justify-between text-gray-500 text-[11px]">
-                <span>COD Total (after door delivery):</span>
-                <span>₹{checkoutBreakdown.codRemainingPayable ?? checkoutBreakdown.codFinalTotal}</span>
-              </div>
-            </div>
+            )}
 
-            {/* Checkout Button */}
-            <button
-              id="proceed-to-checkout-btn"
-              onClick={onProceedToCheckout}
-              className="w-full bg-[#0F2C59] hover:bg-[#153e7d] text-white p-3.5 rounded-xl font-extrabold text-sm flex items-center justify-between shadow-lg transition hover:scale-[1.01]"
-            >
-              <div>
-                <div className="text-[10px] text-[#D4AF37] font-medium leading-none">
-                  SELECT PAYMENT & ADDRESS
+            {/* Action Button: Update Order or Proceed to Checkout */}
+            {editingOrder ? (
+              <button
+                id="save-edited-order-btn"
+                disabled={cart.length === 0 || isSavingOrder}
+                onClick={async () => {
+                  setIsSavingOrder(true);
+                  const result = await saveEditedOrder();
+                  setIsSavingOrder(false);
+                  if (result.success && result.updatedOrder) {
+                    onClose();
+                    if (onOrderUpdated) {
+                      onOrderUpdated(result.updatedOrder);
+                    }
+                  }
+                }}
+                className="w-full bg-[#0F2C59] hover:bg-[#153e7d] text-white p-3.5 rounded-xl font-extrabold text-sm flex items-center justify-between shadow-lg transition hover:scale-[1.01] disabled:opacity-50 cursor-pointer"
+              >
+                <div>
+                  <div className="text-[10px] text-[#D4AF37] font-medium leading-none">
+                    SAVE CHANGES TO ORDER
+                  </div>
+                  <div className="text-base font-black leading-tight text-white">
+                    {isSavingOrder ? 'Updating Order...' : `Update Order #${editingOrder.orderNumber}`}
+                  </div>
                 </div>
-                <div className="text-base font-black leading-tight text-white">
-                  Proceed to Checkout
+                <div className="bg-[#D4AF37] text-[#0F2C59] p-1.5 rounded-lg">
+                  <Check size={18} />
                 </div>
-              </div>
-              <div className="bg-[#D4AF37] text-[#0F2C59] p-1.5 rounded-lg">
-                <ArrowRight size={18} />
-              </div>
-            </button>
+              </button>
+            ) : (
+              <button
+                id="proceed-to-checkout-btn"
+                onClick={onProceedToCheckout}
+                className="w-full bg-[#0F2C59] hover:bg-[#153e7d] text-white p-3.5 rounded-xl font-extrabold text-sm flex items-center justify-between shadow-lg transition hover:scale-[1.01]"
+              >
+                <div>
+                  <div className="text-[10px] text-[#D4AF37] font-medium leading-none">
+                    SELECT PAYMENT & ADDRESS
+                  </div>
+                  <div className="text-base font-black leading-tight text-white">
+                    Proceed to Checkout
+                  </div>
+                </div>
+                <div className="bg-[#D4AF37] text-[#0F2C59] p-1.5 rounded-lg">
+                  <ArrowRight size={18} />
+                </div>
+              </button>
+            )}
           </div>
         )}
       </div>

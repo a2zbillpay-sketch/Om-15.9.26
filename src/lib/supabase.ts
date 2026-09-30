@@ -912,6 +912,69 @@ export async function saveOrderToSupabase(order: Order): Promise<boolean> {
 }
 
 /**
+ * Updates an edited order centrally in Supabase.
+ * Preserves the existing order ID, number, status, customer, address, payment method and timestamps,
+ * while updating items, subtotal, discount, final_total, and COD_META.
+ */
+export async function saveEditedOrderToSupabase(order: Order): Promise<boolean> {
+  if (!supabase) return false;
+
+  try {
+    const metaPayload = JSON.stringify({
+      codCollected: order.codCollectedAmount || 0,
+      prevOutstanding: order.previousOutstanding || 0,
+      totalPayable: order.totalPayable !== undefined ? order.totalPayable : order.finalAmount,
+      walletAmountUsed: order.walletAmountUsed || 0,
+      stockDeducted: order.stockDeducted ?? false,
+      stockRestored: order.stockRestored ?? false,
+      items: order.items?.map((it) => ({
+        id: it.id,
+        orderId: it.orderId || order.id,
+        productId: it.productId,
+        variantId: it.variantId,
+        variantName: it.variantName,
+        productName: it.productName,
+        brand: it.brand,
+        unit: it.unit,
+        packSize: it.packSize,
+        quantity: it.quantity,
+        unitPrice: it.unitPrice,
+        price: it.price,
+        isDiscountExcluded: it.isDiscountExcluded,
+      })),
+    });
+    const orderNotes = `Order #${order.orderNumber} | COD_META:${metaPayload}`;
+
+    const updatePayload = {
+      'Product Name': serializeOrderItemsToProductName(order.items),
+      subtotal: order.subtotal,
+      discount_amount: order.discountAmount,
+      final_total: order.finalAmount,
+      notes: orderNotes,
+      updated_at: new Date().toISOString(),
+    };
+
+    let query = supabase.from('orders').update(updatePayload);
+    if (order.id.startsWith('OM-')) {
+      query = query.ilike('notes', `%${order.id}%`);
+    } else {
+      query = query.eq('id', order.id);
+    }
+
+    const { error } = await query;
+    if (error) {
+      console.error('Failed to update edited order in Supabase:', error);
+      return false;
+    }
+
+    return true;
+  } catch (err) {
+    console.error('Exception in saveEditedOrderToSupabase:', err);
+    return false;
+  }
+}
+
+/**
  * Fetch all orders for the Shopkeeper admin view.
  */
 export async function fetchAllOrdersForAdmin(): Promise<Order[] | null> {
