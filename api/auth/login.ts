@@ -4,11 +4,11 @@ import {
   SESSION_MAX_AGE_MS,
   AdminSession,
   getSessionSecret,
-} from './verify';
+} from './verify.js';
 import {
   verifyAdminPassword,
   checkRateLimit,
-} from './store';
+} from './store.js';
 
 function readJsonBody(req: IncomingMessage): Promise<any> {
   return new Promise((resolve, reject) => {
