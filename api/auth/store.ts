@@ -123,7 +123,7 @@ const ADMIN_CREDENTIAL_PHONE_KEY = '__admin_credential__';
 /**
  * Loads the persistent admin password hash from Supabase.
  */
-async function loadPersistedAdminHashFromDb(): Promise<{ hash: string; updatedAt: string } | null> {
+async function loadPersistedAdminHashFromDb(): Promise<{ hash: string; updatedAt: string; isReset?: boolean } | null> {
   const supabase = await getServerSupabaseClient();
   if (!supabase) return null;
 
@@ -138,12 +138,13 @@ async function loadPersistedAdminHashFromDb(): Promise<{ hash: string; updatedAt
       return null;
     }
 
-    // Address column contains structured metadata JSON: { hash: "salt:derivedHex", updated_at: "..." }
+    // Address column contains structured metadata JSON: { hash: "salt:derivedHex", updated_at: "...", is_reset?: boolean }
     const parsed = JSON.parse(data.address);
     if (parsed && typeof parsed.hash === 'string' && parsed.hash.includes(':')) {
       return {
         hash: parsed.hash.trim(),
         updatedAt: parsed.updated_at || data.updated_at || '',
+        isReset: Boolean(parsed.is_reset),
       };
     }
     return null;
@@ -155,7 +156,7 @@ async function loadPersistedAdminHashFromDb(): Promise<{ hash: string; updatedAt
 /**
  * Persists the admin password hash to Supabase.
  */
-async function savePersistedAdminHashToDb(formattedHash: string): Promise<boolean> {
+async function savePersistedAdminHashToDb(formattedHash: string, isReset: boolean = false): Promise<boolean> {
   const supabase = await getServerSupabaseClient();
   if (!supabase) return false;
 
@@ -163,6 +164,7 @@ async function savePersistedAdminHashToDb(formattedHash: string): Promise<boolea
   const payload = {
     hash: formattedHash.trim(),
     updated_at: nowIso,
+    is_reset: isReset,
   };
 
   try {
@@ -191,12 +193,10 @@ async function savePersistedAdminHashToDb(formattedHash: string): Promise<boolea
  * Retrieves the currently active admin password hash.
  * Priority:
  * 1. In-memory cache (runtimeAdminPasswordHash)
- * 2. Persistent Supabase database record (admin_credential_store)
- * 3. Initial bootstrap seed ONLY if database has no record yet:
- *    - ADMIN_PASSWORD_HASH if configured
- *    - Or lazily derived scrypt hash from ADMIN_SETUP_PASSWORD
- *    - The bootstrap hash is immediately persisted to the database so future restarts
- *      will load from the database and never re-read the setup seed.
+ * 2. Persistent Supabase Database record (admin_credential_store)
+ *    - Respects verified user password resets (isReset: true)
+ *    - Reconciles stale non-reset database records with configured ADMIN_SETUP_PASSWORD or ADMIN_PASSWORD_HASH
+ * 3. Initial Bootstrap seed if no record exists
  */
 export async function getActiveAdminPasswordHash(): Promise<string | null> {
   // 1. In-memory cache
@@ -204,29 +204,52 @@ export async function getActiveAdminPasswordHash(): Promise<string | null> {
     return runtimeAdminPasswordHash;
   }
 
+  const setupPassword = process.env.ADMIN_SETUP_PASSWORD?.trim();
+  const envHash = process.env.ADMIN_PASSWORD_HASH?.trim();
+
   // 2. Persistent Supabase Database
   const dbRecord = await loadPersistedAdminHashFromDb();
   if (dbRecord && dbRecord.hash) {
+    // If a legitimate password reset was previously performed via recovery flow, respect it
+    if (dbRecord.isReset) {
+      runtimeAdminPasswordHash = dbRecord.hash;
+      return runtimeAdminPasswordHash;
+    }
+
+    // Check if the persisted record matches the currently configured credentials
+    if (setupPassword && verifyScryptHash(setupPassword, dbRecord.hash)) {
+      runtimeAdminPasswordHash = dbRecord.hash;
+      return runtimeAdminPasswordHash;
+    }
+    if (envHash && (dbRecord.hash === envHash || safeTimingCompare(dbRecord.hash, envHash))) {
+      runtimeAdminPasswordHash = dbRecord.hash;
+      return runtimeAdminPasswordHash;
+    }
+
+    // A stale/outdated credential record must not silently override the configured setup password.
+    // Reconcile by re-hashing configured setup credential and synchronizing the database record.
+    if (setupPassword || envHash) {
+      const freshHash = envHash || hashPasswordWithScrypt(setupPassword!);
+      runtimeAdminPasswordHash = freshHash;
+      await savePersistedAdminHashToDb(freshHash, false);
+      return runtimeAdminPasswordHash;
+    }
+
     runtimeAdminPasswordHash = dbRecord.hash;
     return runtimeAdminPasswordHash;
   }
 
-  // 3. Initial Bootstrap: ONLY when no credential exists in the database
+  // 3. Initial Bootstrap: when database has no record yet
   let bootstrapHash: string | null = null;
-  const envHash = process.env.ADMIN_PASSWORD_HASH;
   if (envHash && typeof envHash === 'string' && envHash.trim().length > 0) {
     bootstrapHash = envHash.trim();
-  } else {
-    const setupPassword = process.env.ADMIN_SETUP_PASSWORD;
-    if (setupPassword && typeof setupPassword === 'string' && setupPassword.trim().length > 0) {
-      bootstrapHash = hashPasswordWithScrypt(setupPassword.trim());
-    }
+  } else if (setupPassword && typeof setupPassword === 'string' && setupPassword.trim().length > 0) {
+    bootstrapHash = hashPasswordWithScrypt(setupPassword.trim());
   }
 
   if (bootstrapHash) {
     runtimeAdminPasswordHash = bootstrapHash;
-    // Persist bootstrap hash into database so subsequent restarts read from DB
-    await savePersistedAdminHashToDb(bootstrapHash);
+    await savePersistedAdminHashToDb(bootstrapHash, false);
     return runtimeAdminPasswordHash;
   }
 
@@ -245,22 +268,22 @@ export function getActiveAdminPasswordHashSync(): string | null {
  * Persists the new hash to Supabase database so it survives server restarts,
  * updates in-memory cache, and records the reset timestamp to invalidate sessions.
  */
-export async function setActiveAdminPasswordHash(formattedHash: string): Promise<boolean> {
+export async function setActiveAdminPasswordHash(formattedHash: string, isReset: boolean = true): Promise<boolean> {
   runtimeAdminPasswordHash = formattedHash;
   lastPasswordResetTime = Date.now();
 
-  const persisted = await savePersistedAdminHashToDb(formattedHash);
+  const persisted = await savePersistedAdminHashToDb(formattedHash, isReset);
   return persisted;
 }
 
 /**
  * Synchronous setter for in-memory cache and timestamp.
  */
-export function setActiveAdminPasswordHashSync(formattedHash: string): void {
+export function setActiveAdminPasswordHashSync(formattedHash: string, isReset: boolean = true): void {
   runtimeAdminPasswordHash = formattedHash;
   lastPasswordResetTime = Date.now();
   // Asynchronously persist to database in background
-  savePersistedAdminHashToDb(formattedHash).catch((err) => {
+  savePersistedAdminHashToDb(formattedHash, isReset).catch((err) => {
     console.error('Background admin hash save error:', err);
   });
 }
@@ -273,14 +296,42 @@ export function getLastPasswordResetTime(): number {
 }
 
 /**
- * Verifies the admin password against the active persistent hash.
+ * Verifies the admin password against the active persistent hash
+ * with seamless fallback and auto-synchronization for the configured ADMIN_SETUP_PASSWORD.
  */
 export async function verifyAdminPassword(password: string): Promise<boolean> {
-  const activeHash = await getActiveAdminPasswordHash();
-  if (!activeHash) {
+  if (!password || typeof password !== 'string' || !password.trim()) {
     return false;
   }
-  return verifyScryptHash(password, activeHash);
+
+  const trimmed = password.trim();
+
+  // 1. Primary verification: verify against active persistent hash
+  const activeHash = await getActiveAdminPasswordHash();
+  if (activeHash && verifyScryptHash(trimmed, activeHash)) {
+    return true;
+  }
+
+  // 2. Direct verification against configured environment setup password or hash.
+  // Guarantees that the currently configured ADMIN_SETUP_PASSWORD authenticates successfully
+  // and immediately synchronizes the persistent database record without duplicates.
+  const setupPassword = process.env.ADMIN_SETUP_PASSWORD?.trim();
+  const envHash = process.env.ADMIN_PASSWORD_HASH?.trim();
+
+  let matchesEnv = false;
+  if (setupPassword && safeTimingCompare(trimmed, setupPassword)) {
+    matchesEnv = true;
+  } else if (envHash && verifyScryptHash(trimmed, envHash)) {
+    matchesEnv = true;
+  }
+
+  if (matchesEnv) {
+    const synchronizedHash = envHash || hashPasswordWithScrypt(trimmed);
+    await setActiveAdminPasswordHash(synchronizedHash, false);
+    return true;
+  }
+
+  return false;
 }
 
 /**
