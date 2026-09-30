@@ -3,7 +3,7 @@ import {
   verifyRecoveryCode,
   createResetToken,
   checkRateLimit,
-} from './store.ts';
+} from './store';
 
 function readJsonBody(req: IncomingMessage): Promise<any> {
   return new Promise((resolve, reject) => {

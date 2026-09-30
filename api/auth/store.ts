@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { createClient } from '@supabase/supabase-js';
 
 /**
  * In-memory Store for Admin Authentication & Password Recovery
@@ -107,7 +108,6 @@ async function getServerSupabaseClient() {
   }
 
   try {
-    const { createClient } = await import('@supabase/supabase-js');
     return createClient(url, key, {
       auth: { persistSession: false },
     });
@@ -380,7 +380,6 @@ export async function matchesRecoveryIdentity(input: string): Promise<boolean> {
     // Dynamic Supabase validation for any registered SHOPKEEPER phone
     if (process.env.VITE_SUPABASE_URL && process.env.VITE_SUPABASE_ANON_KEY) {
       try {
-        const { createClient } = await import('@supabase/supabase-js');
         const supabase = createClient(process.env.VITE_SUPABASE_URL, process.env.VITE_SUPABASE_ANON_KEY);
         const { data } = await supabase
           .from('users')

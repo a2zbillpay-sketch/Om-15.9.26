@@ -1,11 +1,11 @@
 import { IncomingMessage, ServerResponse } from 'http';
 import { createClient } from '@supabase/supabase-js';
-import { verifyAdminSession } from './auth/verify.ts';
+import { verifyAdminSession } from './auth/verify';
 import {
   normalizeAndValidateProduct,
   saveProductWithCascadeSync,
   deleteProductWithCascade,
-} from '../src/lib/product-service.ts';
+} from '../src/lib/product-service';
 
 function sendJson(res: ServerResponse, statusCode: number, data: any) {
   res.statusCode = statusCode;

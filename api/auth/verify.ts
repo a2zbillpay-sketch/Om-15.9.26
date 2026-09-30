@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 import crypto from 'crypto';
-import { getLastPasswordResetTime } from './store.ts';
+import { getLastPasswordResetTime } from './store';
 
 export interface AdminSession {
   role: 'SHOPKEEPER';

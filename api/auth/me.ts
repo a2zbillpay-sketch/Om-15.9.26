@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'http';
-import { verifyAdminSession } from './verify.ts';
+import { verifyAdminSession } from './verify';
 
 export default function handler(req: IncomingMessage, res: ServerResponse) {
   if (req.method !== 'GET') {
