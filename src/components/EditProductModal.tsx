@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Save, Layers, Check, Trash2, AlertCircle, Scan } from 'lucide-react';
+import { X, Save, Layers, Check, Trash2, AlertCircle, Scan, Loader2 } from 'lucide-react';
 import { Product, ProductVariant } from '../types';
 import { useApp } from '../context/AppContext';
 import { INITIAL_CATEGORIES } from '../data/seedData';
@@ -12,7 +12,10 @@ interface EditProductModalProps {
   product: Product | null;
   isOpen: boolean;
   onClose: () => void;
-  onSave: (productId: string, updates: Partial<Product>) => void;
+  onSave: (
+    productId: string,
+    updates: Partial<Product>
+  ) => Promise<{ success: boolean; error?: string }> | void;
   existingProducts?: Product[];
 }
 
@@ -36,6 +39,7 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
   const [isDiscountExcluded, setIsDiscountExcluded] = useState(false);
   const [variants, setVariants] = useState<ProductVariant[]>([]);
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [variantError, setVariantError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -50,6 +54,7 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
       setIsDiscountExcluded(Boolean(product.isDiscountExcluded));
       setVariants(product.variants ? JSON.parse(JSON.stringify(product.variants)) : []);
       setSavedSuccess(false);
+      setIsSaving(false);
       setVariantError(null);
     }
   }, [product]);
@@ -63,9 +68,17 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
   ) => {
     setVariants((prev) => {
       const updated = [...prev];
+      let formattedVal: any = value;
+      if (field === 'stockQuantity') {
+        const num = Number(value);
+        formattedVal = isNaN(num) || num < 0 ? 0 : num;
+      } else if (typeof updated[index][field] === 'number') {
+        const num = Number(value);
+        formattedVal = isNaN(num) ? 0 : num;
+      }
       updated[index] = {
         ...updated[index],
-        [field]: typeof updated[index][field] === 'number' ? Number(value) : value,
+        [field]: formattedVal,
       };
       return updated;
     });
@@ -90,7 +103,7 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
       )
     : null;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return;
 
@@ -110,22 +123,37 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
       validatedBarcode = barcodeValidation.barcode || undefined;
     }
 
-    onSave(product.id, {
-      name: name.trim(),
-      brand: brand.trim(),
-      categoryId,
-      imageUrl: imageUrl.trim(),
-      barcode: validatedBarcode,
-      description: description.trim(),
-      isDiscountExcluded,
-      variants,
-    });
+    setIsSaving(true);
+    setVariantError(null);
 
-    setSavedSuccess(true);
-    setTimeout(() => {
-      setSavedSuccess(false);
-      onClose();
-    }, 400);
+    try {
+      const res = await onSave(product.id, {
+        name: name.trim(),
+        brand: brand.trim(),
+        categoryId,
+        imageUrl: imageUrl.trim(),
+        barcode: validatedBarcode,
+        description: description.trim(),
+        isDiscountExcluded,
+        variants,
+      });
+
+      if (res && !res.success) {
+        setVariantError(res.error || 'Failed to save product updates.');
+        setIsSaving(false);
+        return;
+      }
+
+      setSavedSuccess(true);
+      setTimeout(() => {
+        setSavedSuccess(false);
+        setIsSaving(false);
+        onClose();
+      }, 400);
+    } catch (err: any) {
+      setVariantError(err?.message || 'Failed to save product updates.');
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -437,10 +465,15 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
             <button
               type="submit"
               id="btn-save-edit-product"
-              className="px-5 py-2 rounded-xl bg-[#0F2C59] hover:bg-[#163a6e] text-white font-bold transition text-xs flex items-center gap-1.5 shadow-md active:scale-95"
+              disabled={isSaving}
+              className="px-5 py-2 rounded-xl bg-[#0F2C59] hover:bg-[#163a6e] text-white font-bold transition text-xs flex items-center gap-1.5 shadow-md active:scale-95 disabled:opacity-60 cursor-pointer"
             >
-              <Save size={14} className="text-[#D4AF37]" />
-              <span>Save Changes</span>
+              {isSaving ? (
+                <Loader2 size={14} className="animate-spin text-[#D4AF37]" />
+              ) : (
+                <Save size={14} className="text-[#D4AF37]" />
+              )}
+              <span>{isSaving ? 'Saving...' : 'Save Changes'}</span>
             </button>
           </div>
         </form>

@@ -42,6 +42,7 @@ import { LogoUploadModal } from './LogoUploadModal';
 import { EditProductModal } from './EditProductModal';
 import { AddVariantModal } from './AddVariantModal';
 import { StockAdjustmentModal } from './StockAdjustmentModal';
+import { InlineVariantStockEditor } from './InlineVariantStockEditor';
 import { BarcodeScannerModal } from './BarcodeScannerModal';
 import { BarcodeLookupBanner } from './BarcodeLookupBanner';
 import { CodCollectionModal } from './CodCollectionModal';
@@ -137,8 +138,8 @@ export const AdminDashboard: React.FC = () => {
   // Fullscreen photo preview lightbox state
   const [zoomImageProduct, setZoomImageProduct] = useState<Product | null>(null);
 
-  const handleSaveEditProduct = (productId: string, updates: Partial<Product>) => {
-    updateProduct(productId, updates);
+  const handleSaveEditProduct = async (productId: string, updates: Partial<Product>) => {
+    return await updateProduct(productId, updates);
   };
 
   const handleAddVariantToProduct = (productId: string, newVariant: ProductVariant) => {
@@ -156,6 +157,7 @@ export const AdminDashboard: React.FC = () => {
   ): Promise<{ success: boolean; error?: string }> => {
     if (
       barcodeLookupResult &&
+      barcodeLookupResult.product?.id === productId &&
       (barcodeLookupResult.status === 'duplicate_found' || barcodeLookupResult.status === 'not_found')
     ) {
       return { success: false, error: 'Cannot modify stock: duplicate or invalid barcode conflict detected.' };
@@ -1219,7 +1221,7 @@ export const AdminDashboard: React.FC = () => {
                         <div className="mt-0.5">
                           <h4 className="text-sm font-extrabold text-gray-900 line-clamp-1">{p.name}</h4>
                           
-                          {/* Two action buttons in front of every individual item */}
+                          {/* Action buttons in front of every individual item */}
                           <div className="mt-2 flex flex-wrap items-center gap-1.5">
                             <button
                               type="button"
@@ -1243,18 +1245,20 @@ export const AdminDashboard: React.FC = () => {
                               <span>+ Add Variant</span>
                             </button>
 
-                            {highlightedProductId === p.id && (
-                              <button
-                                type="button"
-                                id={`item-adjust-stock-btn-${p.id}`}
-                                onClick={() => setStockAdjustProduct(p)}
-                                className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-[#FF6B00] hover:bg-[#e05e00] text-white text-xs font-bold rounded-lg shadow-2xs transition active:scale-95 cursor-pointer touch-manipulation"
-                                title={`Adjust Stock for ${p.name}`}
-                              >
-                                <Boxes size={13} />
-                                <span>Adjust Stock</span>
-                              </button>
-                            )}
+                            <button
+                              type="button"
+                              id={`item-adjust-stock-btn-${p.id}`}
+                              onClick={() => setStockAdjustProduct(p)}
+                              className={`inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-bold rounded-lg shadow-2xs transition active:scale-95 cursor-pointer touch-manipulation ${
+                                highlightedProductId === p.id
+                                  ? 'bg-[#FF6B00] hover:bg-[#e05e00] text-white'
+                                  : 'bg-orange-50 hover:bg-orange-100 text-[#FF6B00] border border-[#FF6B00]/30'
+                              }`}
+                              title={`Adjust Stock for ${p.name}`}
+                            >
+                              <Boxes size={13} />
+                              <span>Adjust Stock</span>
+                            </button>
                           </div>
                         </div>
 
@@ -1266,14 +1270,18 @@ export const AdminDashboard: React.FC = () => {
 
                     <div className="mt-3 space-y-2">
                       {p.variants.map((v) => (
-                        <div key={v.id} className="bg-gray-50 p-2 rounded-lg border border-gray-200 text-xs">
+                        <div key={v.id} className="bg-gray-50 p-2.5 rounded-lg border border-gray-200 text-xs">
                           <div className="flex justify-between items-center font-bold">
                             <span>{formatVariantPack(v)}</span>
                             <span className="text-[#0F2C59]">₹{v.baseSellingPrice} (MRP ₹{v.mrp})</span>
                           </div>
-                          <div className="flex justify-between items-center text-[10px] text-gray-500 mt-1">
-                            <span>Stock: {v.stockQuantity} units</span>
-                            <span>Max Order: {v.maxOrderLimit}</span>
+                          <div className="flex justify-between items-center text-[10px] text-gray-500 mt-2 pt-1.5 border-t border-gray-200">
+                            <InlineVariantStockEditor
+                              product={p}
+                              variant={v}
+                              onSaveStock={handleSaveStock}
+                            />
+                            <span className="text-[10px] text-gray-400">Max: {v.maxOrderLimit}</span>
                           </div>
                           {v.tieredPrices && v.tieredPrices.length > 0 && (
                             <div className="mt-1 pt-1 border-t border-gray-200 text-[9px] text-emerald-800 font-semibold">
