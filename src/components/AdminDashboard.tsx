@@ -29,7 +29,6 @@ import {
   Barcode,
   CheckCircle2,
   AlertTriangle,
-  Boxes,
   Banknote,
   ZoomIn,
   Tag,
@@ -41,7 +40,6 @@ import { CategoryManagement } from './CategoryManagement';
 import { LogoUploadModal } from './LogoUploadModal';
 import { EditProductModal } from './EditProductModal';
 import { AddVariantModal } from './AddVariantModal';
-import { StockAdjustmentModal } from './StockAdjustmentModal';
 import { InlineVariantStockEditor } from './InlineVariantStockEditor';
 import { BarcodeScannerModal } from './BarcodeScannerModal';
 import { BarcodeLookupBanner } from './BarcodeLookupBanner';
@@ -134,8 +132,6 @@ export const AdminDashboard: React.FC = () => {
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   // Add variant to individual product state
   const [addingVariantProduct, setAddingVariantProduct] = useState<Product | null>(null);
-  // Barcode-assisted stock management modal state
-  const [stockAdjustProduct, setStockAdjustProduct] = useState<Product | null>(null);
   // Fullscreen photo preview lightbox state
   const [zoomImageProduct, setZoomImageProduct] = useState<Product | null>(null);
 
@@ -1324,7 +1320,6 @@ export const AdminDashboard: React.FC = () => {
               onOpenEditor={(p) => setEditingProduct(p)}
               onAddVariant={(p) => setAddingVariantProduct(p)}
               onAddProductWithBarcode={(barcode) => handleOpenAddProductModalWithBarcode(barcode)}
-              onUpdateStock={(p) => setStockAdjustProduct(p)}
               onlyShowMatched={onlyShowLookupMatched}
               onToggleOnlyShowMatched={() => setOnlyShowLookupMatched((prev) => !prev)}
             />
@@ -1480,21 +1475,6 @@ export const AdminDashboard: React.FC = () => {
                                 >
                                   <Plus size={13} className="text-[#D4AF37]" />
                                   <span>+ Add Variant</span>
-                                </button>
-
-                                <button
-                                  type="button"
-                                  id={`item-adjust-stock-btn-${p.id}`}
-                                  onClick={() => setStockAdjustProduct(p)}
-                                  className={`inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-bold rounded-lg shadow-2xs transition active:scale-95 cursor-pointer touch-manipulation ${
-                                    highlightedProductId === p.id
-                                      ? 'bg-[#FF6B00] hover:bg-[#e05e00] text-white'
-                                      : 'bg-orange-50 hover:bg-orange-100 text-[#FF6B00] border border-[#FF6B00]/30'
-                                  }`}
-                                  title={`Adjust Stock for ${p.name}`}
-                                >
-                                  <Boxes size={13} />
-                                  <span>Adjust Stock</span>
                                 </button>
                               </div>
                             </div>
@@ -2164,18 +2144,6 @@ export const AdminDashboard: React.FC = () => {
         subtitle="Align product package barcode within camera frame"
         currentBarcode={newProductData.barcode}
         existingProducts={products}
-      />
-
-      {/* Barcode-Assisted Stock Adjustment Modal */}
-      <StockAdjustmentModal
-        product={stockAdjustProduct}
-        isOpen={Boolean(stockAdjustProduct)}
-        onClose={() => setStockAdjustProduct(null)}
-        onSaveStock={handleSaveStock}
-        onOpenEditor={(p) => {
-          setStockAdjustProduct(null);
-          setEditingProduct(p);
-        }}
       />
 
       {/* Barcode Scanner for Inventory Lookup & Product Identification */}
