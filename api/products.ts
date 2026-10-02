@@ -1,6 +1,6 @@
 import { IncomingMessage, ServerResponse } from 'http';
 import { createClient } from '@supabase/supabase-js';
-import { verifyAdminSession } from './auth/verify.js';
+import { verifyAdminSession } from './auth/verify';
 import {
   normalizeAndValidateProduct,
   saveProductWithCascadeSync,
