@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { Check, AlertCircle, Loader2 } from 'lucide-react';
+import { Check, AlertCircle, AlertTriangle, Loader2 } from 'lucide-react';
 import { Product, ProductVariant } from '../types';
+import { useApp } from '../context/AppContext';
 
 interface InlineVariantStockEditorProps {
   product: Product;
   variant: ProductVariant;
+  threshold?: number;
   onSaveStock: (
     productId: string,
     updatedVariants: ProductVariant[]
@@ -14,8 +16,11 @@ interface InlineVariantStockEditorProps {
 export const InlineVariantStockEditor: React.FC<InlineVariantStockEditorProps> = ({
   product,
   variant,
+  threshold: customThreshold,
   onSaveStock,
 }) => {
+  const { settings } = useApp();
+  const threshold = customThreshold ?? product.lowStockThreshold ?? variant.lowStockThreshold ?? settings.lowStockThreshold ?? 10;
   const currentStock = Math.max(0, Number(variant.stockQuantity) || 0);
   const [stockInput, setStockInput] = useState<string>(String(currentStock));
   const [isSaving, setIsSaving] = useState(false);
@@ -33,6 +38,9 @@ export const InlineVariantStockEditor: React.FC<InlineVariantStockEditorProps> =
     Number.isInteger(parsedVal) &&
     parsedVal >= 0;
   const isChanged = isValidNumber && parsedVal !== currentStock;
+
+  const isOutOfStock = currentStock === 0;
+  const isLowStock = !isOutOfStock && currentStock <= threshold;
 
   const handleSave = async (e?: React.FormEvent | React.MouseEvent) => {
     if (e) e.preventDefault();
@@ -91,16 +99,43 @@ export const InlineVariantStockEditor: React.FC<InlineVariantStockEditorProps> =
               }
             }}
             disabled={isSaving}
-            className={`w-16 px-1.5 py-0.5 text-xs font-bold text-gray-900 bg-white border rounded-md outline-none transition text-center ${
+            className={`w-16 px-1.5 py-0.5 text-xs font-bold bg-white border rounded-md outline-none transition text-center ${
               isChanged
-                ? 'border-[#FF6B00] ring-1 ring-[#FF6B00]/40 bg-orange-50/40'
-                : 'border-gray-300 focus:border-[#0F2C59]'
+                ? 'border-[#FF6B00] ring-1 ring-[#FF6B00]/40 bg-orange-50/40 text-gray-900'
+                : isOutOfStock
+                ? 'border-red-300 bg-red-50/30 text-red-700 focus:border-red-500'
+                : isLowStock
+                ? 'border-amber-300 bg-amber-50/30 text-amber-900 focus:border-amber-500'
+                : 'border-gray-300 focus:border-[#0F2C59] text-gray-900'
             }`}
             title="Edit stock quantity and press Enter or click Save"
           />
           <span className="text-[10px] text-gray-500 ml-1">units</span>
         </div>
       </div>
+
+      {/* Low-Stock / Out-of-Stock Warning Badge on the Variant */}
+      {!isChanged && isOutOfStock && (
+        <span
+          id={`variant-out-of-stock-badge-${variant.id}`}
+          className="inline-flex items-center gap-0.5 text-[9px] font-bold text-red-700 bg-red-100/90 px-1.5 py-0.5 rounded border border-red-200 shadow-2xs"
+          title="Stock depleted: 0 units"
+        >
+          <AlertCircle size={10} className="text-red-600 shrink-0" />
+          <span>Out of stock</span>
+        </span>
+      )}
+
+      {!isChanged && isLowStock && (
+        <span
+          id={`variant-low-stock-badge-${variant.id}`}
+          className="inline-flex items-center gap-0.5 text-[9px] font-bold text-amber-900 bg-amber-100/90 px-1.5 py-0.5 rounded border border-amber-300 shadow-2xs"
+          title={`Low stock alert: ${currentStock} units left (Threshold: ${threshold})`}
+        >
+          <AlertTriangle size={10} className="text-amber-600 shrink-0 animate-pulse" />
+          <span>Low stock ({currentStock})</span>
+        </span>
+      )}
 
       {isChanged && (
         <button

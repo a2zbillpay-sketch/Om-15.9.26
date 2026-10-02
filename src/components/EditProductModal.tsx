@@ -26,7 +26,7 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
   onSave,
   existingProducts = [],
 }) => {
-  const { categories } = useApp();
+  const { categories, settings } = useApp();
   const availableCategories = categories && categories.length > 0 ? categories : INITIAL_CATEGORIES;
   const [name, setName] = useState('');
   const [brand, setBrand] = useState('');
@@ -37,6 +37,7 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
   const [barcodeError, setBarcodeError] = useState<string | null>(null);
   const [description, setDescription] = useState('');
   const [isDiscountExcluded, setIsDiscountExcluded] = useState(false);
+  const [lowStockThreshold, setLowStockThreshold] = useState<string>('');
   const [variants, setVariants] = useState<ProductVariant[]>([]);
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -52,6 +53,11 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
       setBarcodeError(null);
       setDescription(product.description || '');
       setIsDiscountExcluded(Boolean(product.isDiscountExcluded));
+      setLowStockThreshold(
+        product.lowStockThreshold !== undefined && product.lowStockThreshold !== null
+          ? String(product.lowStockThreshold)
+          : ''
+      );
       setVariants(product.variants ? JSON.parse(JSON.stringify(product.variants)) : []);
       setSavedSuccess(false);
       setIsSaving(false);
@@ -126,6 +132,11 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
     setIsSaving(true);
     setVariantError(null);
 
+    const parsedThreshold =
+      lowStockThreshold.trim() !== '' && !isNaN(Number(lowStockThreshold))
+        ? Math.max(1, parseInt(lowStockThreshold, 10))
+        : undefined;
+
     try {
       const res = await onSave(product.id, {
         name: name.trim(),
@@ -135,6 +146,7 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
         barcode: validatedBarcode,
         description: description.trim(),
         isDiscountExcluded,
+        lowStockThreshold: parsedThreshold,
         variants,
       });
 
@@ -343,6 +355,30 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
               />
               <div className="w-9 h-5 bg-gray-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#FF6B00]"></div>
             </label>
+          </div>
+
+          {/* Low-Stock Alert Warning Threshold (Units) */}
+          <div className="bg-amber-50/50 border border-amber-200/80 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <label className="font-bold text-gray-900 text-xs block">
+                Low-Stock Alert Warning Threshold (Units)
+              </label>
+              <p className="text-[11px] text-gray-500 mt-0.5">
+                Displays a warning badge on this product in inventory when quantity drops at or below this number.
+              </p>
+            </div>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <input
+                type="number"
+                min="1"
+                id="edit-product-threshold-input"
+                value={lowStockThreshold}
+                onChange={(e) => setLowStockThreshold(e.target.value)}
+                placeholder={`Store default (${settings?.lowStockThreshold ?? 10})`}
+                className="w-36 p-2 text-xs border border-gray-300 rounded-lg bg-white text-gray-900 focus:border-[#0F2C59] outline-none font-bold text-center"
+              />
+              <span className="text-xs text-gray-500 font-medium">units</span>
+            </div>
           </div>
 
           {/* Existing Pack Variants for this Item */}

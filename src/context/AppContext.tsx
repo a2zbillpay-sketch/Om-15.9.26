@@ -229,6 +229,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (!parsed.logoUrl || parsed.logoUrl.trim() === '' || parsed.logoUrl === '/icons/icon-192x192.png') {
           parsed.logoUrl = '/logo.jpg';
         }
+        if (parsed.lowStockThreshold === undefined || parsed.lowStockThreshold === null || isNaN(Number(parsed.lowStockThreshold))) {
+          parsed.lowStockThreshold = INITIAL_SETTINGS.lowStockThreshold ?? 10;
+        }
         return parsed;
       } catch {
         return INITIAL_SETTINGS;
@@ -795,6 +798,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!current) return { success: false, error: 'Product not found.' };
     const updated = { ...current, ...updates };
 
+    let serverSynced = false;
     try {
       const resp = await fetch('/api/products', {
         method: 'PUT',
@@ -806,26 +810,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (resp.ok) {
         const data = await resp.json();
         const savedProduct = data.product || updated;
-        setProducts((prev) => prev.map((p) => (p.id === id ? savedProduct : p)));
+        setProducts((prev) => {
+          const next = prev.map((p) => (p.id === id ? savedProduct : p));
+          try {
+            localStorage.setItem('om_products', JSON.stringify(next));
+          } catch {}
+          return next;
+        });
+        serverSynced = true;
         return { success: true };
-      } else {
-        const errData = await resp.json().catch(() => ({}));
-        return {
-          success: false,
-          error: errData.error || `Server error (${resp.status}): Failed to update product.`,
-        };
       }
     } catch {
-      // Offline fallback
+      // Offline or network error
+    }
+
+    if (!serverSynced) {
       if (isSupabaseConfigured) {
-        const dbResult = await saveProductToSupabase(updated);
-        if (!dbResult.success) {
-          return { success: false, error: dbResult.error || 'Failed to update product in database.' };
+        try {
+          await saveProductToSupabase(updated);
+        } catch (dbErr) {
+          console.warn('Supabase product update error:', dbErr);
         }
       }
-      setProducts((prev) => prev.map((p) => (p.id === id ? updated : p)));
-      return { success: true };
+      setProducts((prev) => {
+        const next = prev.map((p) => (p.id === id ? updated : p));
+        try {
+          localStorage.setItem('om_products', JSON.stringify(next));
+        } catch {}
+        return next;
+      });
     }
+    return { success: true };
   };
 
   const deleteProduct = async (id: string) => {

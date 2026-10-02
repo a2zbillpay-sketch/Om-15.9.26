@@ -17,6 +17,7 @@ export const AdminSettingsControl: React.FC = () => {
     freeShippingMinAmount: settings.freeShippingMinAmount,
     referralRewardAmount: settings.referralRewardAmount,
     baseDeliveryFee: settings.baseDeliveryFee,
+    lowStockThreshold: settings.lowStockThreshold ?? 10,
   });
 
   const [savedSuccess, setSavedSuccess] = useState(false);
@@ -32,6 +33,7 @@ export const AdminSettingsControl: React.FC = () => {
       freeShippingMinAmount: formData.freeShippingMinAmount,
       baseDeliveryFee: formData.baseDeliveryFee,
       referralRewardAmount: formData.referralRewardAmount,
+      lowStockThreshold: formData.lowStockThreshold,
     });
     setPricingSavedSuccess(true);
     setTimeout(() => {
@@ -48,6 +50,7 @@ export const AdminSettingsControl: React.FC = () => {
       freeShippingMinAmount: settings.freeShippingMinAmount,
       baseDeliveryFee: settings.baseDeliveryFee,
       referralRewardAmount: settings.referralRewardAmount,
+      lowStockThreshold: settings.lowStockThreshold ?? 10,
     }));
     setIsEditingPricing(false);
   };
@@ -89,6 +92,7 @@ export const AdminSettingsControl: React.FC = () => {
       freeShippingMinAmount: INITIAL_SETTINGS.freeShippingMinAmount,
       referralRewardAmount: INITIAL_SETTINGS.referralRewardAmount,
       baseDeliveryFee: INITIAL_SETTINGS.baseDeliveryFee,
+      lowStockThreshold: INITIAL_SETTINGS.lowStockThreshold ?? 10,
     });
     updateSettings(INITIAL_SETTINGS);
   };
@@ -434,6 +438,33 @@ export const AdminSettingsControl: React.FC = () => {
             />
             <span className="text-[10px] text-gray-500 mt-0.5 block">
               Credited directly to customer wallet upon referred friend’s first completed order.
+            </span>
+          </div>
+
+          <div className="pt-2 border-t border-gray-150">
+            <label className="text-xs font-bold text-gray-700 block mb-1">
+              Low-Stock Alert Warning Threshold (Units)
+            </label>
+            <input
+              type="number"
+              min="1"
+              max="999"
+              disabled={!isEditingPricing}
+              value={formData.lowStockThreshold}
+              onChange={(e) =>
+                setFormData({
+                  ...formData,
+                  lowStockThreshold: Math.max(1, parseInt(e.target.value) || 1),
+                })
+              }
+              className={`w-full p-2.5 text-xs border rounded-lg transition ${
+                !isEditingPricing
+                  ? 'bg-gray-100/80 text-gray-700 border-gray-200 cursor-not-allowed select-none'
+                  : 'bg-white text-gray-900 border-gray-300 focus:ring-2 focus:ring-[#0F2C59] outline-none shadow-sm'
+              }`}
+            />
+            <span className="text-[10px] text-gray-500 mt-0.5 block">
+              Items with stock at or below this number display a warning badge in Inventory.
             </span>
           </div>
 

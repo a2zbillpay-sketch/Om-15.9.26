@@ -89,6 +89,7 @@ export interface ProductVariant {
   maxOrderLimit: number;
   tieredPrices: TieredPrice[];
   imageUrl?: string;
+  lowStockThreshold?: number;
 }
 
 export interface Product {
@@ -100,6 +101,7 @@ export interface Product {
   imageUrl?: string;
   barcode?: string | null;
   isDiscountExcluded: boolean;
+  lowStockThreshold?: number;
   variants: ProductVariant[];
   createdAt: string;
 }
@@ -186,6 +188,7 @@ export interface SystemSetting {
   freeShippingMinAmount: number;
   baseDeliveryFee: number;
   referralRewardAmount: number;
+  lowStockThreshold?: number;
   updatedAt: string;
 }
 

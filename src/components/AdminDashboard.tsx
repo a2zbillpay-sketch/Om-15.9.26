@@ -122,6 +122,7 @@ export const AdminDashboard: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'ORDERS' | 'INVENTORY' | 'CATEGORIES' | 'SETTINGS' | 'CUSTOMERS'>('ORDERS');
   const [orderFilter, setOrderFilter] = useState<string>('ALL');
   const [inventorySearch, setInventorySearch] = useState<string>('');
+  const [inventoryStockFilter, setInventoryStockFilter] = useState<'ALL' | 'LOW_STOCK' | 'OUT_OF_STOCK' | 'IN_STOCK'>('ALL');
   const [customerSearch, setCustomerSearch] = useState<string>('');
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isLogoModalOpen, setIsLogoModalOpen] = useState(false);
@@ -188,6 +189,7 @@ export const AdminDashboard: React.FC = () => {
     imageUrl: '',
     barcode: '',
     isDiscountExcluded: false,
+    lowStockThreshold: '',
   });
 
   // Multiple variants state for the new product - always starts with a 100% BLANK row
@@ -371,8 +373,36 @@ export const AdminDashboard: React.FC = () => {
 
   const customerUsers = users.filter((u) => u.role === Role.CUSTOMER);
 
+  const getProductThreshold = (p: Product) => p.lowStockThreshold ?? settings.lowStockThreshold ?? 10;
+  const getProductStock = (p: Product) => (p.variants || []).reduce((sum, v) => sum + (Number(v.stockQuantity) || 0), 0);
+  const isProductOutOfStock = (p: Product) => {
+    const total = getProductStock(p);
+    return total === 0 || !p.variants || p.variants.length === 0 || p.variants.every((v) => (Number(v.stockQuantity) || 0) === 0);
+  };
+  const isProductLowStock = (p: Product) => {
+    if (isProductOutOfStock(p)) return false;
+    const total = getProductStock(p);
+    const threshold = getProductThreshold(p);
+    if (total <= threshold) return true;
+    return (p.variants || []).some((v) => {
+      const qty = Number(v.stockQuantity) || 0;
+      const vThresh = v.lowStockThreshold ?? threshold;
+      return qty > 0 && qty <= vThresh;
+    });
+  };
+
+  const lowStockProductsCount = products.filter((p) => isProductLowStock(p)).length;
+  const outOfStockProductsCount = products.filter((p) => isProductOutOfStock(p)).length;
+  const inStockProductsCount = products.filter((p) => !isProductOutOfStock(p) && !isProductLowStock(p)).length;
+
   const lowStockCount = products.reduce(
-    (acc, p) => acc + p.variants.filter((v) => v.stockQuantity <= 10).length,
+    (acc, p) =>
+      acc +
+      (p.variants || []).filter((v) => {
+        const qty = Number(v.stockQuantity) || 0;
+        const thresh = v.lowStockThreshold ?? p.lowStockThreshold ?? settings.lowStockThreshold ?? 10;
+        return qty <= thresh;
+      }).length,
     0
   );
 
@@ -385,12 +415,24 @@ export const AdminDashboard: React.FC = () => {
     return o.status === orderFilter;
   });
 
-  const filteredProducts = products.filter(
-    (p) =>
+  const filteredProducts = products.filter((p) => {
+    const matchesSearch =
       p.name.toLowerCase().includes(inventorySearch.toLowerCase()) ||
       (p.brand && p.brand.toLowerCase().includes(inventorySearch.toLowerCase())) ||
-      (p.barcode && p.barcode.toLowerCase().includes(inventorySearch.toLowerCase()))
-  );
+      (p.barcode && p.barcode.toLowerCase().includes(inventorySearch.toLowerCase()));
+    if (!matchesSearch) return false;
+
+    if (inventoryStockFilter === 'LOW_STOCK') {
+      return isProductLowStock(p);
+    }
+    if (inventoryStockFilter === 'OUT_OF_STOCK') {
+      return isProductOutOfStock(p);
+    }
+    if (inventoryStockFilter === 'IN_STOCK') {
+      return !isProductOutOfStock(p) && !isProductLowStock(p);
+    }
+    return true;
+  });
 
   const displayedProducts =
     onlyShowLookupMatched && barcodeLookupResult?.status === 'found' && barcodeLookupResult.product
@@ -545,6 +587,11 @@ export const AdminDashboard: React.FC = () => {
       };
     });
 
+    const parsedThresh =
+      newProductData.lowStockThreshold.trim() !== '' && !isNaN(Number(newProductData.lowStockThreshold))
+        ? Math.max(1, parseInt(newProductData.lowStockThreshold, 10))
+        : undefined;
+
     const product = {
       name: trimmedName,
       brand: trimmedBrand,
@@ -553,6 +600,7 @@ export const AdminDashboard: React.FC = () => {
       imageUrl: newProductData.imageUrl.trim() || undefined,
       barcode: validatedBarcode,
       isDiscountExcluded: newProductData.isDiscountExcluded,
+      lowStockThreshold: parsedThresh,
       variants: constructedVariants,
     };
 
@@ -713,12 +761,22 @@ export const AdminDashboard: React.FC = () => {
             <div className="text-[9px] text-gray-500 mt-1 truncate">Verified accounts</div>
           </div>
 
-          <div className="bg-white p-3.5 rounded-xl border border-gray-200 shadow-xs">
-            <div className="text-[10px] font-bold text-gray-500 uppercase truncate">Low Stock Packs</div>
-            <div className={`text-xl font-black mt-1 ${lowStockCount > 0 ? 'text-rose-600' : 'text-gray-700'}`}>
-              {lowStockCount}
+          <div
+            onClick={() => {
+              setActiveTab('INVENTORY');
+              setInventoryStockFilter('LOW_STOCK');
+            }}
+            className="bg-white p-3.5 rounded-xl border border-gray-200 shadow-xs cursor-pointer hover:border-amber-400 hover:shadow-sm transition"
+            title="Click to view all low-stock inventory items"
+          >
+            <div className="text-[10px] font-bold text-gray-500 uppercase truncate flex items-center justify-between">
+              <span>Low Stock Alerts</span>
+              <AlertTriangle size={12} className={lowStockProductsCount > 0 ? 'text-amber-500' : 'text-gray-400'} />
             </div>
-            <div className="text-[9px] text-gray-500 mt-1 truncate">&le; 10 units remaining</div>
+            <div className={`text-xl font-black mt-1 ${lowStockProductsCount > 0 ? 'text-amber-600' : 'text-gray-700'}`}>
+              {lowStockProductsCount} <span className="text-xs font-semibold text-gray-500">items</span>
+            </div>
+            <div className="text-[9px] text-gray-500 mt-1 truncate">&le; {settings.lowStockThreshold ?? 10} units threshold</div>
           </div>
         </div>
 
@@ -1144,6 +1202,121 @@ export const AdminDashboard: React.FC = () => {
               </div>
             )}
 
+            {/* Low-Stock Inventory Alert Banner */}
+            {lowStockProductsCount > 0 && (
+              <div
+                id="inventory-low-stock-alert-banner"
+                className="bg-amber-50/90 border border-amber-300 rounded-2xl p-3.5 flex flex-wrap items-center justify-between gap-3 text-xs shadow-xs"
+              >
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-amber-500/15 border border-amber-400 flex items-center justify-center text-amber-800 shrink-0">
+                    <AlertTriangle size={18} className="animate-pulse text-amber-600" />
+                  </div>
+                  <div>
+                    <h4 className="font-extrabold text-amber-950 flex items-center gap-2">
+                      <span>Low-Stock Inventory Warning</span>
+                      <span className="px-2 py-0.5 bg-amber-200 text-amber-900 font-black rounded-full text-[10px]">
+                        {lowStockProductsCount} {lowStockProductsCount === 1 ? 'Product' : 'Products'} Below Threshold
+                      </span>
+                    </h4>
+                    <p className="text-[11px] text-amber-800 mt-0.5">
+                      {lowStockProductsCount} {lowStockProductsCount === 1 ? 'item has' : 'items have'} stock at or below the warning threshold (&le; {settings.lowStockThreshold ?? 10} units). Reorder or adjust stock.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    id="filter-low-stock-toggle-btn"
+                    onClick={() =>
+                      setInventoryStockFilter(
+                        inventoryStockFilter === 'LOW_STOCK' ? 'ALL' : 'LOW_STOCK'
+                      )
+                    }
+                    className={`px-3 py-1.5 rounded-xl font-bold text-xs transition cursor-pointer flex items-center gap-1.5 ${
+                      inventoryStockFilter === 'LOW_STOCK'
+                        ? 'bg-amber-600 text-white shadow-xs'
+                        : 'bg-white hover:bg-amber-100 text-amber-900 border border-amber-300'
+                    }`}
+                  >
+                    <AlertTriangle size={13} />
+                    <span>{inventoryStockFilter === 'LOW_STOCK' ? 'Showing Low Stock Only' : 'Filter Low Stock Items'}</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Inventory Status Filter Bar */}
+            <div className="flex flex-wrap items-center justify-between gap-2 bg-white p-2.5 rounded-xl border border-gray-200 text-xs">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="text-[11px] font-bold text-gray-500 uppercase mr-1">Filter:</span>
+                <button
+                  type="button"
+                  id="filter-stock-all-btn"
+                  onClick={() => setInventoryStockFilter('ALL')}
+                  className={`px-2.5 py-1 rounded-lg font-bold transition cursor-pointer ${
+                    inventoryStockFilter === 'ALL'
+                      ? 'bg-[#0F2C59] text-white shadow-2xs'
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  }`}
+                >
+                  All Items ({products.length})
+                </button>
+                <button
+                  type="button"
+                  id="filter-stock-low-btn"
+                  onClick={() => setInventoryStockFilter('LOW_STOCK')}
+                  className={`px-2.5 py-1 rounded-lg font-bold transition cursor-pointer flex items-center gap-1 ${
+                    inventoryStockFilter === 'LOW_STOCK'
+                      ? 'bg-amber-600 text-white shadow-2xs'
+                      : 'bg-amber-50 text-amber-900 hover:bg-amber-100 border border-amber-200'
+                  }`}
+                >
+                  <AlertTriangle size={12} className={lowStockProductsCount > 0 ? 'text-amber-500' : ''} />
+                  <span>Low Stock ({lowStockProductsCount})</span>
+                </button>
+                <button
+                  type="button"
+                  id="filter-stock-out-btn"
+                  onClick={() => setInventoryStockFilter('OUT_OF_STOCK')}
+                  className={`px-2.5 py-1 rounded-lg font-bold transition cursor-pointer flex items-center gap-1 ${
+                    inventoryStockFilter === 'OUT_OF_STOCK'
+                      ? 'bg-red-600 text-white shadow-2xs'
+                      : 'bg-red-50 text-red-700 hover:bg-red-100 border border-red-200'
+                  }`}
+                >
+                  <AlertCircle size={12} />
+                  <span>Out of Stock ({outOfStockProductsCount})</span>
+                </button>
+                <button
+                  type="button"
+                  id="filter-stock-in-btn"
+                  onClick={() => setInventoryStockFilter('IN_STOCK')}
+                  className={`px-2.5 py-1 rounded-lg font-bold transition cursor-pointer flex items-center gap-1 ${
+                    inventoryStockFilter === 'IN_STOCK'
+                      ? 'bg-emerald-700 text-white shadow-2xs'
+                      : 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-200'
+                  }`}
+                >
+                  In Stock ({inStockProductsCount})
+                </button>
+              </div>
+
+              <div className="flex items-center gap-1.5 text-[11px] text-gray-500">
+                <span className="font-medium">Warning Threshold:</span>
+                <span className="font-bold text-gray-800 bg-gray-100 px-2 py-0.5 rounded border border-gray-200">
+                  &le; {settings.lowStockThreshold ?? 10} units
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('SETTINGS')}
+                  className="text-[#FF6B00] hover:underline font-bold text-[10px] cursor-pointer"
+                >
+                  Configure
+                </button>
+              </div>
+            </div>
+
             {/* Barcode-Based Product Lookup Banner (Found, Not Found, or Duplicate) */}
             <BarcodeLookupBanner
               result={barcodeLookupResult}
@@ -1156,158 +1329,225 @@ export const AdminDashboard: React.FC = () => {
               onToggleOnlyShowMatched={() => setOnlyShowLookupMatched((prev) => !prev)}
             />
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {displayedProducts.map((p) => (
-                <div
-                  key={p.id}
-                  id={`inventory-product-${p.id}`}
-                  className={`bg-white rounded-xl border p-4 shadow-sm flex flex-col justify-between transition-all duration-300 ${
-                    highlightedProductId === p.id
-                      ? 'border-[#FF6B00] ring-4 ring-[#FF6B00]/30 shadow-lg bg-orange-50/15'
-                      : 'border-gray-200'
-                  }`}
-                >
-                  <div>
-                    {highlightedProductId === p.id && (
-                      <div className="mb-2.5 flex items-center justify-between bg-[#FF6B00]/10 border border-[#FF6B00]/30 px-2.5 py-1 rounded-lg">
-                        <span className="text-[10px] font-black uppercase text-[#FF6B00] flex items-center gap-1">
-                          <CheckCircle2 size={12} />
-                          <span>Exact Barcode Match</span>
-                        </span>
-                        <span className="text-[10px] font-mono font-bold text-gray-700">
-                          {p.barcode}
-                        </span>
-                      </div>
-                    )}
-                    <div className="flex gap-3">
-                      {p.imageUrl && p.imageUrl.trim() ? (
-                        <button
-                          type="button"
-                          onClick={() => setZoomImageProduct(p)}
-                          className="w-16 h-16 rounded-lg overflow-hidden border border-gray-200 shrink-0 relative group/thumb cursor-pointer focus:outline-hidden focus:ring-2 focus:ring-[#0F2C59]"
-                          title={`Click to preview full photo of ${p.name}`}
-                          aria-label={`View larger photo of ${p.name}`}
-                        >
-                          <img
-                            src={p.imageUrl}
-                            alt={p.name}
-                            loading="lazy"
-                            className="w-full h-full object-cover group-hover/thumb:scale-105 transition-transform duration-200"
-                          />
-                          <span className="absolute inset-0 bg-black/30 opacity-0 group-hover/thumb:opacity-100 flex items-center justify-center text-white transition-opacity">
-                            <ZoomIn size={14} />
-                          </span>
-                        </button>
-                      ) : (
-                        <div className="w-16 h-16 rounded-lg bg-gray-100 border border-gray-200 shrink-0 flex items-center justify-center text-gray-400">
-                          <Package size={24} />
-                        </div>
-                      )}
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between gap-1">
-                          {p.brand ? (
-                            <span className="text-[10px] font-bold text-[#FF6B00] uppercase truncate">{p.brand}</span>
-                          ) : (
-                            <span />
-                          )}
-                          {p.barcode && (
-                            <span className="text-[9px] font-mono bg-gray-100 text-gray-700 px-1.5 py-0.5 rounded border border-gray-200 shrink-0" title={`Barcode: ${p.barcode}`}>
+            {displayedProducts.length === 0 ? (
+              <div className="bg-white rounded-2xl border border-gray-200 p-12 text-center">
+                <div className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center mx-auto text-gray-400 mb-3">
+                  <Package size={24} />
+                </div>
+                <h3 className="font-bold text-gray-800 text-sm">No products found</h3>
+                <p className="text-xs text-gray-500 mt-1 max-w-sm mx-auto">
+                  {inventoryStockFilter === 'LOW_STOCK'
+                    ? `No products currently have stock at or below the warning threshold (≤ ${settings.lowStockThreshold ?? 10} units).`
+                    : inventoryStockFilter === 'OUT_OF_STOCK'
+                    ? 'No products are currently out of stock.'
+                    : 'Try adjusting your search or filters.'}
+                </p>
+                {inventoryStockFilter !== 'ALL' && (
+                  <button
+                    type="button"
+                    onClick={() => setInventoryStockFilter('ALL')}
+                    className="mt-3 px-3.5 py-1.5 bg-[#0F2C59] text-white text-xs font-bold rounded-lg hover:bg-[#163a6e] transition cursor-pointer"
+                  >
+                    View All Items
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {displayedProducts.map((p) => {
+                  const totalStock = getProductStock(p);
+                  const threshold = getProductThreshold(p);
+                  const outOfStock = isProductOutOfStock(p);
+                  const lowStock = isProductLowStock(p);
+
+                  return (
+                    <div
+                      key={p.id}
+                      id={`inventory-product-${p.id}`}
+                      className={`bg-white rounded-xl border p-4 shadow-sm flex flex-col justify-between transition-all duration-300 relative ${
+                        highlightedProductId === p.id
+                          ? 'border-[#FF6B00] ring-4 ring-[#FF6B00]/30 shadow-lg bg-orange-50/15'
+                          : outOfStock
+                          ? 'border-red-300 ring-1 ring-red-200/70 bg-red-50/5'
+                          : lowStock
+                          ? 'border-amber-300 ring-1 ring-amber-200/70 bg-amber-50/5'
+                          : 'border-gray-200'
+                      }`}
+                    >
+                      <div>
+                        {highlightedProductId === p.id && (
+                          <div className="mb-2.5 flex items-center justify-between bg-[#FF6B00]/10 border border-[#FF6B00]/30 px-2.5 py-1 rounded-lg">
+                            <span className="text-[10px] font-black uppercase text-[#FF6B00] flex items-center gap-1">
+                              <CheckCircle2 size={12} />
+                              <span>Exact Barcode Match</span>
+                            </span>
+                            <span className="text-[10px] font-mono font-bold text-gray-700">
                               {p.barcode}
                             </span>
-                          )}
-                        </div>
-                        
-                        {/* Item Name and Action Buttons */}
-                        <div className="mt-0.5">
-                          <h4 className="text-sm font-extrabold text-gray-900 line-clamp-1">{p.name}</h4>
-                          
-                          {/* Action buttons in front of every individual item */}
-                          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                          </div>
+                        )}
+                        <div className="flex gap-3">
+                          {p.imageUrl && p.imageUrl.trim() ? (
                             <button
                               type="button"
-                              id={`item-edit-btn-${p.id}`}
-                              onClick={() => setEditingProduct(p)}
-                              className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-white hover:bg-gray-100 text-[#0F2C59] border border-[#0F2C59]/30 hover:border-[#0F2C59] text-xs font-bold rounded-lg shadow-2xs transition active:scale-95 cursor-pointer touch-manipulation"
-                              title={`Edit ${p.name}`}
+                              onClick={() => setZoomImageProduct(p)}
+                              className="w-16 h-16 rounded-lg overflow-hidden border border-gray-200 shrink-0 relative group/thumb cursor-pointer focus:outline-hidden focus:ring-2 focus:ring-[#0F2C59]"
+                              title={`Click to preview full photo of ${p.name}`}
+                              aria-label={`View larger photo of ${p.name}`}
                             >
-                              <Edit3 size={13} className="text-[#0F2C59]" />
-                              <span>Edit</span>
+                              <img
+                                src={p.imageUrl}
+                                alt={p.name}
+                                loading="lazy"
+                                className="w-full h-full object-cover group-hover/thumb:scale-105 transition-transform duration-200"
+                              />
+                              <span className="absolute inset-0 bg-black/30 opacity-0 group-hover/thumb:opacity-100 flex items-center justify-center text-white transition-opacity">
+                                <ZoomIn size={14} />
+                              </span>
                             </button>
-
-                            <button
-                              type="button"
-                              id={`item-add-variant-btn-${p.id}`}
-                              onClick={() => setAddingVariantProduct(p)}
-                              className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-[#0F2C59] hover:bg-[#163a6e] text-white text-xs font-bold rounded-lg shadow-2xs transition active:scale-95 cursor-pointer touch-manipulation"
-                              title={`+ Add Variant for ${p.name}`}
-                            >
-                              <Plus size={13} className="text-[#D4AF37]" />
-                              <span>+ Add Variant</span>
-                            </button>
-
-                            <button
-                              type="button"
-                              id={`item-adjust-stock-btn-${p.id}`}
-                              onClick={() => setStockAdjustProduct(p)}
-                              className={`inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-bold rounded-lg shadow-2xs transition active:scale-95 cursor-pointer touch-manipulation ${
-                                highlightedProductId === p.id
-                                  ? 'bg-[#FF6B00] hover:bg-[#e05e00] text-white'
-                                  : 'bg-orange-50 hover:bg-orange-100 text-[#FF6B00] border border-[#FF6B00]/30'
-                              }`}
-                              title={`Adjust Stock for ${p.name}`}
-                            >
-                              <Boxes size={13} />
-                              <span>Adjust Stock</span>
-                            </button>
-                          </div>
-                        </div>
-
-                        <div className="text-[10px] text-gray-500 mt-1.5 font-medium">
-                          {p.variants.length} Pack Sizes / Variants
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="mt-3 space-y-2">
-                      {p.variants.map((v) => (
-                        <div key={v.id} className="bg-gray-50 p-2.5 rounded-lg border border-gray-200 text-xs">
-                          <div className="flex justify-between items-center font-bold">
-                            <span>{formatVariantPack(v)}</span>
-                            <span className="text-[#0F2C59]">₹{v.baseSellingPrice} (MRP ₹{v.mrp})</span>
-                          </div>
-                          <div className="flex justify-between items-center text-[10px] text-gray-500 mt-2 pt-1.5 border-t border-gray-200">
-                            <InlineVariantStockEditor
-                              product={p}
-                              variant={v}
-                              onSaveStock={handleSaveStock}
-                            />
-                            <span className="text-[10px] text-gray-400">Max: {v.maxOrderLimit}</span>
-                          </div>
-                          {v.tieredPrices && v.tieredPrices.length > 0 && (
-                            <div className="mt-1 pt-1 border-t border-gray-200 text-[9px] text-emerald-800 font-semibold">
-                              Bulk Slab: {v.tieredPrices[0].minQty}+ units @ ₹{v.tieredPrices[0].unitPrice}
+                          ) : (
+                            <div className="w-16 h-16 rounded-lg bg-gray-100 border border-gray-200 shrink-0 flex items-center justify-center text-gray-400">
+                              <Package size={24} />
                             </div>
                           )}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center justify-between gap-1">
+                              {p.brand ? (
+                                <span className="text-[10px] font-bold text-[#FF6B00] uppercase truncate">{p.brand}</span>
+                              ) : (
+                                <span />
+                              )}
+                              {p.barcode && (
+                                <span className="text-[9px] font-mono bg-gray-100 text-gray-700 px-1.5 py-0.5 rounded border border-gray-200 shrink-0" title={`Barcode: ${p.barcode}`}>
+                                  {p.barcode}
+                                </span>
+                              )}
+                            </div>
+                            
+                            {/* Item Name */}
+                            <div className="mt-0.5">
+                              <h4 className="text-sm font-extrabold text-gray-900 line-clamp-1">{p.name}</h4>
 
-                  <div className="mt-4 pt-3 border-t border-gray-100 flex justify-between items-center">
-                    <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${p.isDiscountExcluded ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'}`}>
-                      {p.isDiscountExcluded ? 'Price Regulated' : 'Full Discount Eligible'}
-                    </span>
-                    <button
-                      onClick={() => deleteProduct(p.id)}
-                      className="text-gray-400 hover:text-red-600 transition"
-                      title="Delete Product"
-                    >
-                      <Trash2 size={15} />
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
+                              {/* Low-Stock Warning Badge or Out of Stock Badge */}
+                              <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+                                {outOfStock ? (
+                                  <span
+                                    id={`product-badge-out-of-stock-${p.id}`}
+                                    className="inline-flex items-center gap-1 px-2 py-0.5 bg-red-100 text-red-700 border border-red-200 rounded-md text-[10px] font-black uppercase tracking-wider shadow-2xs"
+                                    title="Stock depleted: 0 units across all variants"
+                                  >
+                                    <AlertCircle size={11} className="text-red-600 shrink-0" />
+                                    <span>Out of Stock (0 units)</span>
+                                  </span>
+                                ) : lowStock ? (
+                                  <span
+                                    id={`product-badge-low-stock-${p.id}`}
+                                    className="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-100 text-amber-900 border border-amber-300 rounded-md text-[10px] font-black uppercase tracking-wider shadow-2xs animate-pulse"
+                                    title={`Low stock alert: total quantity (${totalStock}) is at or below defined threshold (${threshold})`}
+                                  >
+                                    <AlertTriangle size={11} className="text-amber-700 shrink-0" />
+                                    <span>Low Stock Alert ({totalStock} left &le; {threshold})</span>
+                                  </span>
+                                ) : (
+                                  <span
+                                    id={`product-badge-in-stock-${p.id}`}
+                                    className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-md text-[10px] font-bold"
+                                  >
+                                    <span>In Stock ({totalStock} units)</span>
+                                  </span>
+                                )}
+                              </div>
+                              
+                              {/* Action buttons in front of every individual item */}
+                              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                                <button
+                                  type="button"
+                                  id={`item-edit-btn-${p.id}`}
+                                  onClick={() => setEditingProduct(p)}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-white hover:bg-gray-100 text-[#0F2C59] border border-[#0F2C59]/30 hover:border-[#0F2C59] text-xs font-bold rounded-lg shadow-2xs transition active:scale-95 cursor-pointer touch-manipulation"
+                                  title={`Edit ${p.name}`}
+                                >
+                                  <Edit3 size={13} className="text-[#0F2C59]" />
+                                  <span>Edit</span>
+                                </button>
+
+                                <button
+                                  type="button"
+                                  id={`item-add-variant-btn-${p.id}`}
+                                  onClick={() => setAddingVariantProduct(p)}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-[#0F2C59] hover:bg-[#163a6e] text-white text-xs font-bold rounded-lg shadow-2xs transition active:scale-95 cursor-pointer touch-manipulation"
+                                  title={`+ Add Variant for ${p.name}`}
+                                >
+                                  <Plus size={13} className="text-[#D4AF37]" />
+                                  <span>+ Add Variant</span>
+                                </button>
+
+                                <button
+                                  type="button"
+                                  id={`item-adjust-stock-btn-${p.id}`}
+                                  onClick={() => setStockAdjustProduct(p)}
+                                  className={`inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-bold rounded-lg shadow-2xs transition active:scale-95 cursor-pointer touch-manipulation ${
+                                    highlightedProductId === p.id
+                                      ? 'bg-[#FF6B00] hover:bg-[#e05e00] text-white'
+                                      : 'bg-orange-50 hover:bg-orange-100 text-[#FF6B00] border border-[#FF6B00]/30'
+                                  }`}
+                                  title={`Adjust Stock for ${p.name}`}
+                                >
+                                  <Boxes size={13} />
+                                  <span>Adjust Stock</span>
+                                </button>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center justify-between text-[10px] text-gray-500 mt-1.5 font-medium">
+                              <span>{p.variants.length} Pack Sizes / Variants</span>
+                              <span className="font-bold text-gray-700">Total: {totalStock} units</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="mt-3 space-y-2">
+                          {p.variants.map((v) => (
+                            <div key={v.id} className="bg-gray-50 p-2.5 rounded-lg border border-gray-200 text-xs">
+                              <div className="flex justify-between items-center font-bold">
+                                <span>{formatVariantPack(v)}</span>
+                                <span className="text-[#0F2C59]">₹{v.baseSellingPrice} (MRP ₹{v.mrp})</span>
+                              </div>
+                              <div className="flex justify-between items-center text-[10px] text-gray-500 mt-2 pt-1.5 border-t border-gray-200">
+                                <InlineVariantStockEditor
+                                  product={p}
+                                  variant={v}
+                                  onSaveStock={handleSaveStock}
+                                />
+                                <span className="text-[10px] text-gray-400">Max: {v.maxOrderLimit}</span>
+                              </div>
+                              {v.tieredPrices && v.tieredPrices.length > 0 && (
+                                <div className="mt-1 pt-1 border-t border-gray-200 text-[9px] text-emerald-800 font-semibold">
+                                  Bulk Slab: {v.tieredPrices[0].minQty}+ units @ ₹{v.tieredPrices[0].unitPrice}
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="mt-4 pt-3 border-t border-gray-100 flex justify-between items-center">
+                        <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${p.isDiscountExcluded ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'}`}>
+                          {p.isDiscountExcluded ? 'Price Regulated' : 'Full Discount Eligible'}
+                        </span>
+                        <button
+                          onClick={() => deleteProduct(p.id)}
+                          className="text-gray-400 hover:text-red-600 transition cursor-pointer"
+                          title="Delete Product"
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
 
@@ -1576,6 +1816,32 @@ export const AdminDashboard: React.FC = () => {
                       />
                       <span>Price Regulated / Discount Excluded</span>
                     </label>
+                  </div>
+
+                  {/* Optional Low-Stock Alert Warning Threshold */}
+                  <div className="bg-amber-50/50 border border-amber-200 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                    <div>
+                      <label className="font-bold text-gray-900 block">
+                        Low-Stock Alert Warning Threshold (Units)
+                      </label>
+                      <p className="text-[11px] text-gray-500 mt-0.5">
+                        Displays a warning badge on this product in inventory when quantity drops at or below this number.
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <input
+                        type="number"
+                        min="1"
+                        id="new-product-threshold-input"
+                        placeholder={`Store default (${settings?.lowStockThreshold ?? 10})`}
+                        value={newProductData.lowStockThreshold}
+                        onChange={(e) =>
+                          setNewProductData({ ...newProductData, lowStockThreshold: e.target.value })
+                        }
+                        className="w-36 p-2 text-xs border border-gray-300 rounded-lg bg-white text-gray-900 focus:border-[#0F2C59] outline-none font-bold text-center"
+                      />
+                      <span className="text-xs text-gray-500 font-medium">units</span>
+                    </div>
                   </div>
                 </div>
               </div>

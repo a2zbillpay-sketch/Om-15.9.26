@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { X, Save, Boxes, Check, AlertCircle, RotateCcw, Plus, Minus } from 'lucide-react';
+import { X, Save, Boxes, Check, AlertCircle, AlertTriangle, RotateCcw, Plus, Minus } from 'lucide-react';
 import { Product, ProductVariant } from '../types';
 import { formatVariantPack } from '../utils/variantFormatter';
+import { useApp } from '../context/AppContext';
 
 export interface StockAdjustmentModalProps {
   product: Product | null;
@@ -30,6 +31,7 @@ export const StockAdjustmentModal: React.FC<StockAdjustmentModalProps> = ({
   onSaveStock,
   onOpenEditor,
 }) => {
+  const { settings } = useApp();
   const [variantStates, setVariantStates] = useState<VariantStockState[]>([]);
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -256,22 +258,25 @@ export const StockAdjustmentModal: React.FC<StockAdjustmentModalProps> = ({
             {variantStates.map((state, idx) => {
               const v = state.variant;
               const delta = state.newStock - state.originalStock;
+              const threshold = product.lowStockThreshold ?? v.lowStockThreshold ?? settings?.lowStockThreshold ?? 10;
 
               let statusBadge = (
-                <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-100 text-emerald-800">
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-200">
                   In Stock ({state.originalStock})
                 </span>
               );
               if (state.originalStock === 0) {
                 statusBadge = (
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-red-100 text-red-700">
-                    Out of Stock (0)
+                  <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded bg-red-100 text-red-700 border border-red-200">
+                    <AlertCircle size={11} className="text-red-600" />
+                    <span>Out of Stock (0)</span>
                   </span>
                 );
-              } else if (state.originalStock <= 10) {
+              } else if (state.originalStock <= threshold) {
                 statusBadge = (
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-amber-100 text-amber-800">
-                    Low Stock ({state.originalStock})
+                  <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300 shadow-2xs">
+                    <AlertTriangle size={11} className="text-amber-600 animate-pulse" />
+                    <span>Low Stock Alert ({state.originalStock} &le; {threshold})</span>
                   </span>
                 );
               }

@@ -307,6 +307,10 @@ export function normalizeAndValidateVariant(
       stockQuantity,
       maxOrderLimit,
       tieredPrices,
+      lowStockThreshold:
+        raw.lowStockThreshold !== undefined && raw.lowStockThreshold !== null && !isNaN(Number(raw.lowStockThreshold))
+          ? Math.max(1, Number(raw.lowStockThreshold))
+          : undefined,
     },
   };
 }
@@ -365,6 +369,10 @@ export function normalizeAndValidateProduct(raw: any): ProductValidationResult {
       imageUrl,
       barcode,
       isDiscountExcluded,
+      lowStockThreshold:
+        raw.lowStockThreshold !== undefined && raw.lowStockThreshold !== null && !isNaN(Number(raw.lowStockThreshold))
+          ? Math.max(1, Number(raw.lowStockThreshold))
+          : undefined,
       createdAt: raw.createdAt || new Date().toISOString(),
       variants: normalizedVariants,
     },

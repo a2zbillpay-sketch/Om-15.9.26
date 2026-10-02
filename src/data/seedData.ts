@@ -23,6 +23,7 @@ export const INITIAL_SETTINGS: SystemSetting = {
   freeShippingMinAmount: 500.0,
   baseDeliveryFee: 40.0,
   referralRewardAmount: 50.0,
+  lowStockThreshold: 10,
   updatedAt: new Date().toISOString(),
 };
 
