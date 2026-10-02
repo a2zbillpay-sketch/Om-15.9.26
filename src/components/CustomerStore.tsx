@@ -24,7 +24,7 @@ export const CustomerStore: React.FC<CustomerStoreProps> = ({
   onOpenCart,
   onOpenWallet,
 }) => {
-  const { categories, products, settings, cart, checkoutBreakdown } = useApp();
+  const { categories, products, settings, cart, checkoutBreakdown, editingOrder } = useApp();
   const [selectedCategoryId, setSelectedCategoryId] = useState<string>('ALL');
 
   // Filter products by category and search
@@ -213,7 +213,7 @@ export const CustomerStore: React.FC<CustomerStoreProps> = ({
               </span>
               <div className="text-left">
                 <div className="text-[10px] text-gray-300 uppercase leading-tight font-bold">
-                  Cart Total
+                  {editingOrder ? `Editing #${editingOrder.orderNumber}` : 'Cart Total'}
                 </div>
                 <div className="text-sm font-black text-[#D4AF37] leading-none">
                   ₹{checkoutBreakdown.subtotal}
@@ -222,7 +222,7 @@ export const CustomerStore: React.FC<CustomerStoreProps> = ({
             </div>
 
             <div className="flex items-center gap-1 text-xs font-black text-white bg-white/10 px-3 py-1.5 rounded-xl">
-              <span>View Cart & Checkout</span>
+              <span>{editingOrder ? 'Review & Save' : 'View Cart & Checkout'}</span>
               <ChevronRight size={16} />
             </div>
           </button>

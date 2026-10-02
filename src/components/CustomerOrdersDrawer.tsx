@@ -1,5 +1,5 @@
 import React from 'react';
-import { X, Clock, CheckCircle2, AlertTriangle, ChevronRight, Package, Truck, ArrowRight } from 'lucide-react';
+import { X, Clock, CheckCircle2, AlertTriangle, ChevronRight, Package, Truck, ArrowRight, Edit3 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { Order, OrderStatus, PaymentMethod, PaymentStatus } from '../types';
 import { canCancelOrder, getRemainingCancellationMinutes } from '../lib/engine/checkout-calculator';
@@ -19,7 +19,7 @@ export const CustomerOrdersDrawer: React.FC<CustomerOrdersDrawerProps> = ({
   onClose,
   onSelectOrder,
 }) => {
-  const { orders, currentUser } = useApp();
+  const { orders, currentUser, startEditingOrder } = useApp();
 
   if (!isOpen) return null;
 
@@ -165,10 +165,26 @@ export const CustomerOrdersDrawer: React.FC<CustomerOrdersDrawerProps> = ({
                       </span>
                     </div>
 
-                    <span className="text-[#0F2C59] font-bold text-[11px] flex items-center gap-0.5 hover:underline">
-                      <span>Track Details</span>
-                      <ChevronRight size={14} />
-                    </span>
+                    <div className="flex items-center gap-2">
+                      {isCancellable && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            startEditingOrder(order);
+                            onClose();
+                          }}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 bg-[#0F2C59] hover:bg-[#153e7d] text-white text-[11px] font-bold rounded-lg shadow-xs transition active:scale-95 cursor-pointer"
+                        >
+                          <Edit3 size={12} className="text-[#D4AF37]" />
+                          <span>Edit Order</span>
+                        </button>
+                      )}
+                      <span className="text-[#0F2C59] font-bold text-[11px] flex items-center gap-0.5 hover:underline">
+                        <span>Track Details</span>
+                        <ChevronRight size={14} />
+                      </span>
+                    </div>
                   </div>
                 </div>
               );

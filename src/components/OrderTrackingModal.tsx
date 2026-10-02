@@ -129,9 +129,6 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
     if (!currentOrder) return;
     startEditingOrder(currentOrder);
     onClose();
-    if (onOpenCart) {
-      onOpenCart();
-    }
   };
 
   const stepIndex = getFulfillmentStepIndex(currentOrder.status);
