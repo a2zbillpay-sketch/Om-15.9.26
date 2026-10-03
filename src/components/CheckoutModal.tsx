@@ -13,13 +13,13 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { Address, PaymentMethod } from '../types';
+import { Address, PaymentMethod, Order } from '../types';
 import { DualPaymentModal } from './DualPaymentModal';
 
 interface CheckoutModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onOrderSuccess: (orderId: string) => void;
+  onOrderSuccess: (orderId: string, order?: Order) => void;
 }
 
 export const CheckoutModal: React.FC<CheckoutModalProps> = ({
@@ -104,7 +104,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
         });
         setIsDualPaymentOpen(false);
         onClose();
-        onOrderSuccess(order.id);
+        onOrderSuccess(order.id, order);
       } catch (err) {
         console.error('Error creating COD order:', err);
         throw err;
@@ -124,7 +124,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
       });
       setIsSimulatingRazorpay(false);
       onClose();
-      onOrderSuccess(order.id);
+      onOrderSuccess(order.id, order);
     } catch (err: any) {
       console.error('Error creating advance order:', err);
     }

@@ -22,6 +22,7 @@ import { CustomerAuthPage } from './components/CustomerAuthPage';
 import { CustomerProfilePage } from './components/CustomerProfilePage';
 import { StorePolicyModal, PolicyType } from './components/StorePolicyModal';
 import { AdminLoginModal } from './components/AdminLoginModal';
+import { OrderSuccessModal } from './components/OrderSuccessModal';
 import { ShieldCheck, Phone, MapPin, Mail, Award, ShoppingBag } from 'lucide-react';
 
 const MainLayout: React.FC = () => {
@@ -50,6 +51,7 @@ const MainLayout: React.FC = () => {
   const [isWalletOpen, setIsWalletOpen] = useState(false);
   const [isAddressModalOpen, setIsAddressModalOpen] = useState(false);
   const [selectedTrackingOrder, setSelectedTrackingOrder] = useState<Order | null>(null);
+  const [placedSuccessOrder, setPlacedSuccessOrder] = useState<Order | null>(null);
   const [activePolicy, setActivePolicy] = useState<PolicyType | null>(null);
 
   // When an order is opened for editing, open the Store/Product browsing screen
@@ -93,12 +95,20 @@ const MainLayout: React.FC = () => {
     setActiveRole(Role.SHOPKEEPER);
   };
 
-  const handleOrderSuccess = (orderId: string) => {
+  const handleOrderSuccess = (orderId: string, createdOrder?: Order) => {
     setIsCheckoutOpen(false);
     setIsCartOpen(false);
-    const placedOrder = orders.find((o) => o.id === orderId);
+    const placedOrder = createdOrder || orders.find((o) => o.id === orderId);
     if (placedOrder) {
-      setSelectedTrackingOrder(placedOrder);
+      setPlacedSuccessOrder(placedOrder);
+    }
+  };
+
+  const handleCloseOrderSuccessModal = () => {
+    const order = placedSuccessOrder;
+    setPlacedSuccessOrder(null);
+    if (order) {
+      setSelectedTrackingOrder(order);
     }
   };
 
@@ -292,6 +302,13 @@ const MainLayout: React.FC = () => {
         isOpen={isCheckoutOpen}
         onClose={() => setIsCheckoutOpen(false)}
         onOrderSuccess={handleOrderSuccess}
+      />
+
+      {/* Immediate Order Placed Confirmation Popup */}
+      <OrderSuccessModal
+        isOpen={Boolean(placedSuccessOrder)}
+        order={placedSuccessOrder}
+        onClose={handleCloseOrderSuccessModal}
       />
 
       <CustomerOrdersDrawer
