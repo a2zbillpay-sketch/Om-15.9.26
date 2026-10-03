@@ -165,7 +165,7 @@ export const CustomerStore: React.FC<CustomerStoreProps> = ({
                 : categories.find((c) => c.id === selectedCategoryId)?.name}
             </h2>
             <p className="text-xs text-gray-500">
-              Showing {filteredProducts.length} verified products • Live mandi stock
+              Showing {filteredProducts.length} verified products • Live mandi rates
             </p>
           </div>
 

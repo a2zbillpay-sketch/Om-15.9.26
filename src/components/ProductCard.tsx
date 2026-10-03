@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Plus, Minus, Layers, AlertCircle, AlertTriangle, Package, ZoomIn, BellRing, CheckCircle2 } from 'lucide-react';
+import { Plus, Minus, Layers, AlertCircle, Package, ZoomIn, BellRing, CheckCircle2 } from 'lucide-react';
 import { Product, ProductVariant } from '../types';
 import { useApp } from '../context/AppContext';
 import { getActiveUnitPrice } from '../lib/engine/checkout-calculator';
@@ -77,14 +77,6 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
       (!product.variants || product.variants.length === 0 || product.variants.every((v) => Number(v.stockQuantity || 0) <= 0))) ||
     (!product.variants || product.variants.length === 0 || product.variants.every((v) => Number(v.stockQuantity || 0) <= 0));
 
-  const threshold =
-    product.lowStockThreshold ??
-    currentVariant.lowStockThreshold ??
-    settings.lowStockThreshold ??
-    10;
-  const variantStock = Math.max(0, Number(currentVariant?.stockQuantity) || 0);
-  const isLowStock = !isOutOfStock && variantStock <= threshold;
-
   return (
     <div
       id={`product-card-${product.id}`}
@@ -133,15 +125,10 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
             </div>
           )}
 
-          {/* Out of Stock, Low Stock Warning, or Discount Badge */}
+          {/* Out of Stock or Discount Badge */}
           {isOutOfStock ? (
             <div className="absolute top-2.5 left-2.5 bg-red-600 text-white font-black text-[10px] px-2.5 py-0.5 rounded-full uppercase tracking-wider shadow-sm pointer-events-none z-10">
               Out of Stock
-            </div>
-          ) : isLowStock ? (
-            <div className="absolute top-2.5 left-2.5 bg-amber-600 text-white font-black text-[10px] px-2.5 py-0.5 rounded-full uppercase tracking-wider shadow-sm pointer-events-none z-10 flex items-center gap-1 animate-pulse">
-              <AlertTriangle size={11} className="shrink-0" />
-              <span>Only {variantStock} left</span>
             </div>
           ) : discountPercent > 0 ? (
             <div className="absolute top-2.5 left-2.5 bg-emerald-600 text-white font-black text-[10px] px-2 py-0.5 rounded-full uppercase tracking-wider shadow-sm pointer-events-none">
@@ -219,14 +206,6 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
                   </div>
                 ))}
               </div>
-            </div>
-          )}
-
-          {/* Low Stock Warning Alert notice */}
-          {isLowStock && (
-            <div className="mt-2.5 flex items-center gap-1.5 text-[11px] font-bold text-amber-900 bg-amber-50 border border-amber-300 px-2.5 py-1 rounded-xl shadow-2xs">
-              <AlertTriangle size={13} className="text-amber-600 shrink-0 animate-pulse" />
-              <span>Low Stock Alert: Only {variantStock} {variantStock === 1 ? 'unit' : 'units'} left!</span>
             </div>
           )}
         </div>
