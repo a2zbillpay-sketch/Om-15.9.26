@@ -241,6 +241,7 @@ export async function getOrCreateCustomerByPhone(
       shop_name: name ? `${name}'s Kirana Store` : (role === Role.SHOPKEEPER ? 'Om Distributors' : ''),
       address: '',
       outstanding_balance: 0,
+      wallet_balance: 0,
       updated_at: new Date().toISOString(),
     };
 
@@ -268,7 +269,7 @@ export async function getOrCreateCustomerByPhone(
           phone: u.phone,
           role: u.role as Role,
           referralCode,
-          walletBalance: 100,
+          walletBalance: Number(u.wallet_balance || 0),
           codOrderCount: 0,
           addresses: fullAddress ? [{ id: `addr-${u.id}`, userId: u.id, fullAddress, landmark, pincode, isDefault: true }] : [],
           createdAt: u.updated_at || new Date().toISOString(),
@@ -284,7 +285,7 @@ export async function getOrCreateCustomerByPhone(
       phone: insertedUser.phone,
       role: insertedUser.role as Role,
       referralCode,
-      walletBalance: 100,
+      walletBalance: 0,
       codOrderCount: 0,
       addresses: [],
       createdAt: insertedUser.updated_at || new Date().toISOString(),

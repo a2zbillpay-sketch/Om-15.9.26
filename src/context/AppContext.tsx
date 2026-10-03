@@ -338,7 +338,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           phone: session.phone,
           role: Role.CUSTOMER,
           referralCode: `OM${session.phone.slice(-4)}`,
-          walletBalance: 100,
+          walletBalance: 0,
           codOrderCount: 0,
           addresses: [],
           createdAt: new Date().toISOString(),
@@ -2250,13 +2250,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     // NEW CUSTOMER FLOW:
-    // Check if phone already has a stored wallet balance from an advance refund
-    let initialNewWalletBalance = 100; // Welcome ₹100 bonus
+    // Every new customer must start with Wallet Balance = ₹0
+    let initialNewWalletBalance = 0;
     try {
       const localProfileStr = localStorage.getItem(`om_profile_${cleanPhone}`);
       if (localProfileStr) {
         const parsed = JSON.parse(localProfileStr);
-        if (typeof parsed.walletBalance === 'number' && parsed.walletBalance > 0) {
+        if (typeof parsed.walletBalance === 'number') {
           initialNewWalletBalance = parsed.walletBalance;
         }
       }
