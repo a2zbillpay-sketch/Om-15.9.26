@@ -32,6 +32,7 @@ import {
   Banknote,
   ZoomIn,
   Tag,
+  Printer,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { Order, OrderStatus, PaymentMethod, Product, ProductVariant, TieredPrice, UnitType, Role } from '../types';
@@ -44,6 +45,7 @@ import { InlineVariantStockEditor } from './InlineVariantStockEditor';
 import { BarcodeScannerModal } from './BarcodeScannerModal';
 import { BarcodeLookupBanner } from './BarcodeLookupBanner';
 import { CodCollectionModal } from './CodCollectionModal';
+import { BillPrintModal } from './BillPrintModal';
 import { ProductImageUploader } from './ProductImageUploader';
 import { ImageLightboxModal } from './ImageLightboxModal';
 import { formatVariantPack } from '../utils/variantFormatter';
@@ -125,6 +127,7 @@ export const AdminDashboard: React.FC = () => {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isLogoModalOpen, setIsLogoModalOpen] = useState(false);
   const [codCollectingOrder, setCodCollectingOrder] = useState<Order | null>(null);
+  const [printingOrder, setPrintingOrder] = useState<Order | null>(null);
 
   // Add product modal state
   const [isAddProductModalOpen, setIsAddProductModalOpen] = useState(false);
@@ -857,7 +860,7 @@ export const AdminDashboard: React.FC = () => {
                     <th className="p-3">Items</th>
                     <th className="p-3">Total</th>
                     <th className="p-3">Status</th>
-                    <th className="p-3 text-right">Advance Stage</th>
+                    <th className="p-3 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
@@ -871,7 +874,17 @@ export const AdminDashboard: React.FC = () => {
                     filteredOrders.map((order) => (
                       <tr key={order.id} className="hover:bg-gray-50">
                         <td className="p-3 font-mono font-bold text-[#0F2C59]">
-                          #{order.orderNumber}
+                          <div className="flex items-center gap-1.5">
+                            <span>#{order.orderNumber}</span>
+                            <button
+                              type="button"
+                              onClick={() => setPrintingOrder(order)}
+                              className="text-gray-400 hover:text-[#0F2C59] p-0.5 rounded transition cursor-pointer"
+                              title={`Print Bill for Order #${order.orderNumber}`}
+                            >
+                              <Printer size={12} />
+                            </button>
+                          </div>
                           <div className="text-[10px] text-gray-400 font-normal">
                             {new Date(order.createdAt).toLocaleDateString()}
                           </div>
@@ -990,47 +1003,61 @@ export const AdminDashboard: React.FC = () => {
                           </span>
                         </td>
                         <td className="p-3 text-right">
-                          {order.status !== OrderStatus.CANCELLED && order.status !== OrderStatus.DELIVERED ? (
-                            <div className="flex items-center justify-end gap-1.5">
-                              {order.status === OrderStatus.ORDER_PENDING && (
-                                <button
-                                  id={`accept-order-btn-${order.id}`}
-                                  onClick={() => updateOrderStatus(order.id, OrderStatus.ORDER_ACCEPTED)}
-                                  className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-extrabold rounded-lg shadow-sm transition flex items-center gap-1 shrink-0"
-                                  title="Accept Order"
+                          <div className="flex items-center justify-end gap-1.5 flex-wrap">
+                            {/* Bill Print Option */}
+                            <button
+                              type="button"
+                              id={`btn-print-bill-${order.id}`}
+                              onClick={() => setPrintingOrder(order)}
+                              className="px-2.5 py-1.5 bg-white hover:bg-gray-100 text-[#0F2C59] border border-[#0F2C59]/30 hover:border-[#0F2C59] text-[11px] font-bold rounded-lg shadow-2xs transition flex items-center gap-1 shrink-0 cursor-pointer active:scale-95 touch-manipulation"
+                              title={`Print Bill for Order #${order.orderNumber}`}
+                            >
+                              <Printer size={12} className="text-[#0F2C59]" />
+                              <span>Bill Print</span>
+                            </button>
+
+                            {order.status !== OrderStatus.CANCELLED && order.status !== OrderStatus.DELIVERED ? (
+                              <>
+                                {order.status === OrderStatus.ORDER_PENDING && (
+                                  <button
+                                    id={`accept-order-btn-${order.id}`}
+                                    onClick={() => updateOrderStatus(order.id, OrderStatus.ORDER_ACCEPTED)}
+                                    className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-extrabold rounded-lg shadow-sm transition flex items-center gap-1 shrink-0 cursor-pointer"
+                                    title="Accept Order"
+                                  >
+                                    <CheckCircle2 size={12} />
+                                    <span>Accept Order</span>
+                                  </button>
+                                )}
+                                <select
+                                  value={order.status}
+                                  onChange={(e) => {
+                                    const newStatus = e.target.value as OrderStatus;
+                                    if (
+                                      newStatus === OrderStatus.DELIVERED &&
+                                      order.paymentMethod === PaymentMethod.COD &&
+                                      order.codCollectedAmount === undefined
+                                    ) {
+                                      setCodCollectingOrder(order);
+                                    } else {
+                                      updateOrderStatus(order.id, newStatus);
+                                    }
+                                  }}
+                                  className="bg-white border border-gray-300 text-gray-800 text-[11px] font-bold rounded-lg p-1.5 outline-none focus:ring-1 focus:ring-[#0F2C59] cursor-pointer"
                                 >
-                                  <CheckCircle2 size={12} />
-                                  <span>Accept Order</span>
-                                </button>
-                              )}
-                              <select
-                                value={order.status}
-                                onChange={(e) => {
-                                  const newStatus = e.target.value as OrderStatus;
-                                  if (
-                                    newStatus === OrderStatus.DELIVERED &&
-                                    order.paymentMethod === PaymentMethod.COD &&
-                                    order.codCollectedAmount === undefined
-                                  ) {
-                                    setCodCollectingOrder(order);
-                                  } else {
-                                    updateOrderStatus(order.id, newStatus);
-                                  }
-                                }}
-                                className="bg-white border border-gray-300 text-gray-800 text-[11px] font-bold rounded-lg p-1.5 outline-none focus:ring-1 focus:ring-[#0F2C59]"
-                              >
-                                <option value={OrderStatus.ORDER_PENDING}>Order Pending</option>
-                                <option value={OrderStatus.ORDER_ACCEPTED}>Order Accepted</option>
-                                <option value={OrderStatus.PACKING_IN_PROGRESS}>Packing</option>
-                                <option value={OrderStatus.READY_FOR_DELIVERY}>Ready</option>
-                                <option value={OrderStatus.ON_THE_WAY}>On The Way</option>
-                                <option value={OrderStatus.DELIVERED}>Mark Delivered</option>
-                                <option value={OrderStatus.CANCELLED}>Cancel Order</option>
-                              </select>
-                            </div>
-                          ) : (
-                            <span className="text-[11px] text-gray-400 font-semibold">Completed</span>
-                          )}
+                                  <option value={OrderStatus.ORDER_PENDING}>Order Pending</option>
+                                  <option value={OrderStatus.ORDER_ACCEPTED}>Order Accepted</option>
+                                  <option value={OrderStatus.PACKING_IN_PROGRESS}>Packing</option>
+                                  <option value={OrderStatus.READY_FOR_DELIVERY}>Ready</option>
+                                  <option value={OrderStatus.ON_THE_WAY}>On The Way</option>
+                                  <option value={OrderStatus.DELIVERED}>Mark Delivered</option>
+                                  <option value={OrderStatus.CANCELLED}>Cancel Order</option>
+                                </select>
+                              </>
+                            ) : (
+                              <span className="text-[11px] text-gray-400 font-semibold px-1">Completed</span>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     ))
@@ -2179,6 +2206,13 @@ export const AdminDashboard: React.FC = () => {
         imageUrl={zoomImageProduct?.imageUrl}
         title={zoomImageProduct?.name}
         subtitle={zoomImageProduct?.brand}
+      />
+
+      {/* Order Bill Print Modal */}
+      <BillPrintModal
+        order={printingOrder}
+        isOpen={Boolean(printingOrder)}
+        onClose={() => setPrintingOrder(null)}
       />
     </div>
   );
