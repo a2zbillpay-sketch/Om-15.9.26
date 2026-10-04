@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Package,
   Layers,
@@ -45,7 +45,7 @@ import { InlineVariantStockEditor } from './InlineVariantStockEditor';
 import { BarcodeScannerModal } from './BarcodeScannerModal';
 import { BarcodeLookupBanner } from './BarcodeLookupBanner';
 import { CodCollectionModal } from './CodCollectionModal';
-import { BillPrintModal } from './BillPrintModal';
+import { OrderBillLayout } from './OrderBillLayout';
 import { ProductImageUploader } from './ProductImageUploader';
 import { ImageLightboxModal } from './ImageLightboxModal';
 import { formatVariantPack } from '../utils/variantFormatter';
@@ -128,6 +128,34 @@ export const AdminDashboard: React.FC = () => {
   const [isLogoModalOpen, setIsLogoModalOpen] = useState(false);
   const [codCollectingOrder, setCodCollectingOrder] = useState<Order | null>(null);
   const [printingOrder, setPrintingOrder] = useState<Order | null>(null);
+
+  const handlePrintBill = (order: Order) => {
+    setPrintingOrder(order);
+  };
+
+  useEffect(() => {
+    if (!printingOrder) return;
+
+    const timer = setTimeout(() => {
+      try {
+        window.focus();
+        window.print();
+      } catch (err) {
+        console.error('System printer selection trigger error:', err);
+      }
+    }, 60);
+
+    const onAfterPrint = () => {
+      setPrintingOrder(null);
+    };
+
+    window.addEventListener('afterprint', onAfterPrint);
+
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener('afterprint', onAfterPrint);
+    };
+  }, [printingOrder]);
 
   // Add product modal state
   const [isAddProductModalOpen, setIsAddProductModalOpen] = useState(false);
@@ -874,17 +902,7 @@ export const AdminDashboard: React.FC = () => {
                     filteredOrders.map((order) => (
                       <tr key={order.id} className="hover:bg-gray-50">
                         <td className="p-3 font-mono font-bold text-[#0F2C59]">
-                          <div className="flex items-center gap-1.5">
-                            <span>#{order.orderNumber}</span>
-                            <button
-                              type="button"
-                              onClick={() => setPrintingOrder(order)}
-                              className="text-gray-400 hover:text-[#0F2C59] p-0.5 rounded transition cursor-pointer"
-                              title={`Print Bill for Order #${order.orderNumber}`}
-                            >
-                              <Printer size={12} />
-                            </button>
-                          </div>
+                          #{order.orderNumber}
                           <div className="text-[10px] text-gray-400 font-normal">
                             {new Date(order.createdAt).toLocaleDateString()}
                           </div>
@@ -1004,11 +1022,11 @@ export const AdminDashboard: React.FC = () => {
                         </td>
                         <td className="p-3 text-right">
                           <div className="flex items-center justify-end gap-1.5 flex-wrap">
-                            {/* Bill Print Option */}
+                            {/* Single Bill Print Button */}
                             <button
                               type="button"
                               id={`btn-print-bill-${order.id}`}
-                              onClick={() => setPrintingOrder(order)}
+                              onClick={() => handlePrintBill(order)}
                               className="px-2.5 py-1.5 bg-white hover:bg-gray-100 text-[#0F2C59] border border-[#0F2C59]/30 hover:border-[#0F2C59] text-[11px] font-bold rounded-lg shadow-2xs transition flex items-center gap-1 shrink-0 cursor-pointer active:scale-95 touch-manipulation"
                               title={`Print Bill for Order #${order.orderNumber}`}
                             >
@@ -2208,12 +2226,10 @@ export const AdminDashboard: React.FC = () => {
         subtitle={zoomImageProduct?.brand}
       />
 
-      {/* Order Bill Print Modal */}
-      <BillPrintModal
-        order={printingOrder}
-        isOpen={Boolean(printingOrder)}
-        onClose={() => setPrintingOrder(null)}
-      />
+      {/* Printable Bill: rendered into DOM for system printer dialog, hidden on screen */}
+      {printingOrder && (
+        <OrderBillLayout order={printingOrder} settings={settings} />
+      )}
     </div>
   );
 };

@@ -133,9 +133,9 @@ export const Navbar: React.FC<NavbarProps> = ({
           </button>
         )}
 
-        {/* Search Bar - Displayed only in customer store when authenticated & profile saved */}
+        {/* Search Bar - Desktop View (Hidden on mobile, preserved on desktop) */}
         {activeRole === Role.CUSTOMER && customerFlowStep === 'SHOP' && !isAuthModalOpen && (
-          <div className="flex-1 max-w-xl relative">
+          <div className="hidden md:block flex-1 max-w-xl relative">
             <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" />
             <input
               id="product-search-input"
@@ -273,6 +273,33 @@ export const Navbar: React.FC<NavbarProps> = ({
           )}
         </div>
       </div>
+
+      {/* Mobile Search Bar - Occupies one complete separate row across the available screen width */}
+      {activeRole === Role.CUSTOMER && customerFlowStep === 'SHOP' && !isAuthModalOpen && (
+        <div className="md:hidden px-4 pb-3 pt-1 border-t border-white/5">
+          <div className="w-full relative">
+            <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input
+              id="product-search-input-mobile"
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search Basmati Rice, Toor Dal, Atta, Cooking Oil, Spices..."
+              className="w-full pl-9 pr-8 py-2.5 bg-white text-gray-900 rounded-xl text-xs font-medium outline-none focus:ring-2 focus:ring-[#D4AF37] shadow-inner placeholder:text-gray-400"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-700 text-xs font-bold p-1 cursor-pointer"
+                aria-label="Clear search"
+              >
+                ✕
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       <LogoUploadModal
         isOpen={isLogoModalOpen}

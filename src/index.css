@@ -1,1 +1,49 @@
 @import "tailwindcss";
+
+/* Position printable bill offscreen on screen, clean in print */
+@media screen {
+  #printable-order-bill {
+    position: fixed !important;
+    left: -9999px !important;
+    top: -9999px !important;
+    width: 210mm !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+  }
+}
+
+/* System Printer Selection & Bill Print Rules */
+@media print {
+  /* Hide everything on page by default */
+  body * {
+    visibility: hidden !important;
+  }
+
+  /* Make sure bill content and all its children are visible */
+  #printable-order-bill,
+  #printable-order-bill * {
+    visibility: visible !important;
+  }
+
+  /* Position bill cleanly at the top of the printed page */
+  #printable-order-bill {
+    display: block !important;
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 6mm 10mm !important;
+    border: none !important;
+    box-shadow: none !important;
+    background: #ffffff !important;
+    color: #111827 !important;
+    z-index: 9999999 !important;
+  }
+
+  @page {
+    size: auto;
+    margin: 8mm;
+  }
+}
