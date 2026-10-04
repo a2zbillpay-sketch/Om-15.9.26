@@ -21,11 +21,13 @@ export const DualPaymentModal: React.FC<DualPaymentModalProps> = ({
 }) => {
   const [selectedMethod, setSelectedMethod] = useState<'COD' | 'ADVANCE_ONLINE' | null>(null);
   const [isPlacingOrder, setIsPlacingOrder] = useState(false);
+  const [showCodConfirmPopup, setShowCodConfirmPopup] = useState(false);
 
   useEffect(() => {
     if (isOpen) {
       setSelectedMethod(null);
       setIsPlacingOrder(false);
+      setShowCodConfirmPopup(false);
     }
   }, [isOpen]);
 
@@ -46,9 +48,13 @@ export const DualPaymentModal: React.FC<DualPaymentModalProps> = ({
     setSelectedMethod('COD');
   };
 
-  const handleConfirmCodOrder = async (e: React.MouseEvent) => {
-    // ONLY clicking the explicit "Confirm COD Order" button triggers order creation.
+  const handleConfirmCodOrder = (e: React.MouseEvent) => {
+    // Show confirmation popup before placing the COD order
     e.stopPropagation();
+    setShowCodConfirmPopup(true);
+  };
+
+  const handleFinalPlaceCodOrder = async () => {
     if (isPlacingOrder) return;
     setIsPlacingOrder(true);
     try {
@@ -56,6 +62,7 @@ export const DualPaymentModal: React.FC<DualPaymentModalProps> = ({
     } catch (err) {
       console.error('Failed to create COD order:', err);
       setIsPlacingOrder(false);
+      setShowCodConfirmPopup(false);
     }
   };
 
@@ -298,6 +305,56 @@ export const DualPaymentModal: React.FC<DualPaymentModalProps> = ({
         >
           Go Back to Cart
         </button>
+
+        {/* COD Confirmation Popup */}
+        {showCodConfirmPopup && (
+          <div
+            id="cod-confirmation-popup"
+            className="fixed inset-0 z-[60] bg-black/70 backdrop-blur-xs flex items-center justify-center p-4 animate-fadeIn"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) {
+                setShowCodConfirmPopup(false);
+              }
+            }}
+          >
+            <div className="bg-white w-full max-w-sm rounded-2xl p-6 shadow-2xl border-t-4 border-amber-500 animate-scaleUp">
+              <div className="text-left space-y-3">
+                <h3 className="text-base font-extrabold text-[#0F2C59] leading-tight">
+                  Cash On Delivery निवडले आहे 💵
+                </h3>
+
+                <p className="text-xs text-gray-700 leading-relaxed font-medium">
+                  तुमची ऑर्डर डिलिव्हरीच्या वेळी पूर्ण पेमेंट घेऊन दिली जाईल. कृपया पूर्ण रक्कम तयार ठेवा. पूर्ण पेमेंट न मिळाल्यास COD चार्जेस लागू होऊ शकतात.
+                </p>
+
+                <p className="text-xs font-bold text-gray-900 pt-1">
+                  ऑर्डर Confirm करायची आहे?
+                </p>
+              </div>
+
+              <div className="mt-5 flex items-center gap-3">
+                <button
+                  type="button"
+                  id="cod-popup-cancel-btn"
+                  onClick={() => setShowCodConfirmPopup(false)}
+                  className="flex-1 py-2.5 px-4 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-xs rounded-xl transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  id="cod-popup-confirm-btn"
+                  disabled={isPlacingOrder}
+                  onClick={handleFinalPlaceCodOrder}
+                  className="flex-1 py-2.5 px-4 bg-[#0F2C59] hover:bg-[#153e7d] active:scale-98 text-white font-extrabold text-xs rounded-xl shadow-md transition cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1.5"
+                >
+                  <CheckCircle2 size={14} className="text-[#D4AF37]" />
+                  <span>{isPlacingOrder ? 'Placing Order...' : 'Confirm Order'}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
