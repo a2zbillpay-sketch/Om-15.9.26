@@ -161,11 +161,13 @@ const MainLayout: React.FC = () => {
         </div>
       )}
 
-      <div className="flex-1">
+      <div className="flex-1 min-w-0 w-full max-w-full">
         {activeRole === Role.SHOPKEEPER ||
         activeRole === Role.SECONDARY_ADMIN ||
         activeRole === Role.ACCOUNTS ? (
-          <AdminDashboard />
+          <div className="w-full max-w-full min-w-0 overflow-x-hidden">
+            <AdminDashboard />
+          </div>
         ) : customerFlowStep === 'AUTH' ? (
           <CustomerAuthPage onSuccess={() => setCustomerFlowStep('PROFILE')} />
         ) : customerFlowStep === 'PROFILE' ? (

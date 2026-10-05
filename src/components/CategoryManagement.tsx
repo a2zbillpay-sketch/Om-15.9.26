@@ -224,7 +224,7 @@ export const CategoryManagement: React.FC = () => {
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 w-full max-w-full min-w-0">
       {/* Success Notification Banner */}
       {successMessage && (
         <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs sm:text-sm px-4 py-3 rounded-2xl flex items-center justify-between shadow-xs animate-in fade-in duration-200">
@@ -243,7 +243,7 @@ export const CategoryManagement: React.FC = () => {
       )}
 
       {/* Header Bar */}
-      <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-200 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+      <div className="bg-white p-3.5 sm:p-4 rounded-2xl shadow-sm border border-gray-200 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 w-full max-w-full min-w-0">
         <div>
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 rounded-xl bg-orange-100 flex items-center justify-center text-[#FF6B00]">
@@ -327,7 +327,7 @@ export const CategoryManagement: React.FC = () => {
           )}
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3.5">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3.5 w-full max-w-full min-w-0">
           {filteredCategories.map((cat) => {
             const count = productCountMap.get(cat.id) || 0;
             const hasProducts = count > 0;
@@ -336,7 +336,7 @@ export const CategoryManagement: React.FC = () => {
               <div
                 key={cat.id}
                 id={`category-card-${cat.id}`}
-                className="bg-white rounded-2xl border border-gray-200 p-3.5 shadow-xs hover:shadow-md transition-all flex flex-col justify-between group"
+                className="bg-white rounded-2xl border border-gray-200 p-3.5 shadow-xs hover:shadow-md transition-all flex flex-col justify-between group w-full max-w-full min-w-0 overflow-hidden"
               >
                 <div>
                   <div className="flex gap-3 items-center">

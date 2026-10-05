@@ -98,7 +98,10 @@ export const AdminSettingsControl: React.FC = () => {
   };
 
   return (
-    <div id="admin-settings-container" className="p-6 max-w-4xl mx-auto bg-white rounded-xl shadow-md border border-gray-100">
+    <div
+      id="admin-settings-container"
+      className="w-full max-w-4xl mx-auto min-w-0 overflow-hidden box-border p-4 sm:p-6 bg-white rounded-xl shadow-md border border-gray-100"
+    >
       <div className="flex flex-wrap justify-between items-center pb-4 mb-6 border-b gap-3">
         <div>
           <h1 className="text-xl font-bold text-[#0F2C59]">Shopkeeper Store Settings</h1>

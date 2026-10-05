@@ -677,29 +677,32 @@ export const AdminDashboard: React.FC = () => {
   };
 
   return (
-    <div id="admin-dashboard-page" className="min-h-screen bg-gray-100 py-6 px-4 sm:px-6">
-      <div className="max-w-7xl mx-auto space-y-6">
+    <div
+      id="admin-dashboard-page"
+      className="w-full max-w-full min-w-0 overflow-x-hidden box-border bg-gray-100 py-3 sm:py-6 px-2 sm:px-4 md:px-6"
+    >
+      <div className="w-full max-w-7xl mx-auto space-y-4 sm:space-y-6 min-w-0">
         {/* Portal Header */}
-        <div className="bg-[#0F2C59] text-white p-6 rounded-2xl shadow-md border-b-4 border-[#D4AF37] flex flex-wrap justify-between items-center gap-4">
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="bg-[#D4AF37] text-[#0F2C59] font-black text-xs px-2.5 py-0.5 rounded">
+        <div className="bg-[#0F2C59] text-white p-3.5 sm:p-6 rounded-2xl shadow-md border-b-4 border-[#D4AF37] flex flex-col md:flex-row md:justify-between md:items-center gap-3 sm:gap-4 w-full max-w-full min-w-0">
+          <div className="min-w-0 max-w-full">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="bg-[#D4AF37] text-[#0F2C59] font-black text-xs px-2.5 py-0.5 rounded shrink-0">
                 ADMIN ACCESS
               </span>
-              <h1 className="text-xl font-black tracking-wide text-white">
+              <h1 className="text-lg sm:text-xl font-black tracking-wide text-white break-words">
                 Om Distributors Management Center
               </h1>
             </div>
-            <p className="text-xs text-gray-300 mt-1">
+            <p className="text-xs text-gray-300 mt-1 break-words">
               Wholesale fulfillment pipeline, live tiered pricing, stock control & engine variables
             </p>
           </div>
 
           {/* Tab Selector & Logo Quick Action */}
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 w-full md:w-auto min-w-0">
             <button
               onClick={() => setActiveRole(Role.CUSTOMER)}
-              className="px-3 py-1.5 rounded-xl flex items-center gap-1.5 transition bg-white/10 hover:bg-white/20 text-white border border-white/20 text-xs font-bold shadow-sm"
+              className="px-3 py-1.5 rounded-xl flex items-center gap-1.5 transition bg-white/10 hover:bg-white/20 text-white border border-white/20 text-xs font-bold shadow-xs shrink-0"
               title="Return to customer store view"
             >
               <ShoppingBag size={13} className="text-[#FF6B00]" />
@@ -708,14 +711,14 @@ export const AdminDashboard: React.FC = () => {
 
             <button
               onClick={() => setIsLogoModalOpen(true)}
-              className="px-3 py-1.5 rounded-xl flex items-center gap-1.5 transition bg-[#D4AF37]/20 hover:bg-[#D4AF37]/30 text-[#D4AF37] border border-[#D4AF37]/40 text-xs font-black shadow-sm"
+              className="px-3 py-1.5 rounded-xl flex items-center gap-1.5 transition bg-[#D4AF37]/20 hover:bg-[#D4AF37]/30 text-[#D4AF37] border border-[#D4AF37]/40 text-xs font-black shadow-xs shrink-0"
               title="Upload your authentic logo file without alterations"
             >
               <Upload size={13} />
               <span>Upload Logo As-Is</span>
             </button>
 
-            <div className="flex flex-wrap items-center bg-[#0a1e3d] p-1 rounded-xl border border-white/10 text-xs font-bold gap-1">
+            <div className="flex items-center bg-[#0a1e3d] p-1 rounded-xl border border-white/10 text-xs font-bold gap-1 w-full sm:w-auto min-w-0 overflow-x-auto scrollbar-none flex-nowrap sm:flex-wrap">
               <button
                 onClick={() => setActiveTab('ORDERS')}
                 className={`px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition ${
@@ -784,37 +787,37 @@ export const AdminDashboard: React.FC = () => {
         </div>
 
         {/* Top KPI Cards - 6 Key Health Metrics */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-          <div className="bg-white p-3.5 rounded-xl border border-gray-200 shadow-xs">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 sm:gap-3 w-full max-w-full min-w-0">
+          <div className="bg-white p-3 rounded-xl border border-gray-200 shadow-xs min-w-0 overflow-hidden">
             <div className="text-[10px] font-bold text-gray-500 uppercase truncate">Gross Sales</div>
-            <div className="text-xl font-black text-[#0F2C59] mt-1">₹{totalRevenue.toLocaleString('en-IN')}</div>
+            <div className="text-lg sm:text-xl font-black text-[#0F2C59] mt-1 truncate">₹{totalRevenue.toLocaleString('en-IN')}</div>
             <div className="text-[9px] text-emerald-600 font-bold mt-1 flex items-center gap-0.5 truncate">
-              <TrendingUp size={10} />
-              <span>All Active</span>
+              <TrendingUp size={10} className="shrink-0" />
+              <span className="truncate">All Active</span>
             </div>
           </div>
 
-          <div className="bg-white p-3.5 rounded-xl border border-gray-200 shadow-xs">
+          <div className="bg-white p-3 rounded-xl border border-gray-200 shadow-xs min-w-0 overflow-hidden">
             <div className="text-[10px] font-bold text-gray-500 uppercase truncate">Pending Packing</div>
-            <div className="text-xl font-black text-[#FF6B00] mt-1">{pendingOrdersCount}</div>
+            <div className="text-lg sm:text-xl font-black text-[#FF6B00] mt-1 truncate">{pendingOrdersCount}</div>
             <div className="text-[9px] text-gray-500 mt-1 truncate">In fulfillment queue</div>
           </div>
 
-          <div className="bg-white p-3.5 rounded-xl border border-gray-200 shadow-xs">
+          <div className="bg-white p-3 rounded-xl border border-gray-200 shadow-xs min-w-0 overflow-hidden">
             <div className="text-[10px] font-bold text-gray-500 uppercase truncate">Delivered Orders</div>
-            <div className="text-xl font-black text-emerald-700 mt-1">{deliveredCount}</div>
+            <div className="text-lg sm:text-xl font-black text-emerald-700 mt-1 truncate">{deliveredCount}</div>
             <div className="text-[9px] text-gray-500 mt-1 truncate">Completed</div>
           </div>
 
-          <div className="bg-white p-3.5 rounded-xl border border-gray-200 shadow-xs">
+          <div className="bg-white p-3 rounded-xl border border-gray-200 shadow-xs min-w-0 overflow-hidden">
             <div className="text-[10px] font-bold text-gray-500 uppercase truncate">Catalog Products</div>
-            <div className="text-xl font-black text-purple-700 mt-1">{products.length}</div>
+            <div className="text-lg sm:text-xl font-black text-purple-700 mt-1 truncate">{products.length}</div>
             <div className="text-[9px] text-gray-500 mt-1 truncate">Across {categories.length} categories</div>
           </div>
 
-          <div className="bg-white p-3.5 rounded-xl border border-gray-200 shadow-xs">
+          <div className="bg-white p-3 rounded-xl border border-gray-200 shadow-xs min-w-0 overflow-hidden">
             <div className="text-[10px] font-bold text-gray-500 uppercase truncate">Registered Customers</div>
-            <div className="text-xl font-black text-blue-700 mt-1">{customerUsers.length}</div>
+            <div className="text-lg sm:text-xl font-black text-blue-700 mt-1 truncate">{customerUsers.length}</div>
             <div className="text-[9px] text-gray-500 mt-1 truncate">Verified accounts</div>
           </div>
 
@@ -823,14 +826,14 @@ export const AdminDashboard: React.FC = () => {
               setActiveTab('INVENTORY');
               setInventoryStockFilter('LOW_STOCK');
             }}
-            className="bg-white p-3.5 rounded-xl border border-gray-200 shadow-xs cursor-pointer hover:border-amber-400 hover:shadow-sm transition"
+            className="bg-white p-3 rounded-xl border border-gray-200 shadow-xs cursor-pointer hover:border-amber-400 hover:shadow-sm transition min-w-0 overflow-hidden"
             title="Click to view all low-stock inventory items"
           >
-            <div className="text-[10px] font-bold text-gray-500 uppercase truncate flex items-center justify-between">
-              <span>Low Stock Alerts</span>
-              <AlertTriangle size={12} className={lowStockProductsCount > 0 ? 'text-amber-500' : 'text-gray-400'} />
+            <div className="text-[10px] font-bold text-gray-500 uppercase truncate flex items-center justify-between gap-1">
+              <span className="truncate">Low Stock Alerts</span>
+              <AlertTriangle size={12} className={`shrink-0 ${lowStockProductsCount > 0 ? 'text-amber-500' : 'text-gray-400'}`} />
             </div>
-            <div className={`text-xl font-black mt-1 ${lowStockProductsCount > 0 ? 'text-amber-600' : 'text-gray-700'}`}>
+            <div className={`text-lg sm:text-xl font-black mt-1 truncate ${lowStockProductsCount > 0 ? 'text-amber-600' : 'text-gray-700'}`}>
               {lowStockProductsCount} <span className="text-xs font-semibold text-gray-500">items</span>
             </div>
             <div className="text-[9px] text-gray-500 mt-1 truncate">&le; {settings.lowStockThreshold ?? 10} units threshold</div>
@@ -839,15 +842,15 @@ export const AdminDashboard: React.FC = () => {
 
         {/* TAB 1: ORDERS FULFILLMENT PIPELINE */}
         {activeTab === 'ORDERS' && (
-          <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
-            <div className="p-4 border-b border-gray-200 flex flex-wrap justify-between items-center gap-3">
-              <div>
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden w-full max-w-full min-w-0">
+            <div className="p-3 sm:p-4 border-b border-gray-200 flex flex-col md:flex-row md:justify-between md:items-center gap-3 w-full max-w-full min-w-0">
+              <div className="min-w-0">
                 <h2 className="text-base font-extrabold text-[#0F2C59]">Order Fulfillment Operations</h2>
                 <p className="text-xs text-gray-500">Update fulfillment stage from acceptance to doorstep delivery</p>
               </div>
 
               {/* Status Filters */}
-              <div className="flex flex-wrap gap-1.5 text-xs">
+              <div className="flex flex-wrap gap-1.5 text-xs w-full md:w-auto min-w-0">
                 {['ALL', 'ORDER_PENDING', 'ORDER_ACCEPTED', 'PACKING_IN_PROGRESS', 'READY_FOR_DELIVERY', 'ON_THE_WAY', 'DELIVERED', 'CANCELLED'].map(
                   (status) => (
                     <button
@@ -908,8 +911,8 @@ export const AdminDashboard: React.FC = () => {
             )}
 
             {/* Orders Table */}
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs text-gray-700">
+            <div className="overflow-x-auto w-full max-w-full">
+              <table className="w-full text-left text-xs text-gray-700 min-w-[640px] sm:min-w-full">
                 <thead className="bg-gray-50 text-gray-500 font-bold border-b border-gray-200">
                   <tr>
                     <th className="p-3">Order ID</th>
@@ -1118,10 +1121,10 @@ export const AdminDashboard: React.FC = () => {
 
         {/* TAB 2: INVENTORY & WHOLESALE SLABS */}
         {activeTab === 'INVENTORY' && (
-          <div className="space-y-4">
-            <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-200 flex flex-wrap justify-between items-center gap-3">
+          <div className="space-y-4 w-full max-w-full min-w-0">
+            <div className="bg-white p-3 sm:p-4 rounded-2xl shadow-sm border border-gray-200 flex flex-col lg:flex-row lg:justify-between lg:items-center gap-3 w-full max-w-full min-w-0">
               {/* Standard Catalog Search */}
-              <div className="flex-1 min-w-[220px] max-w-sm relative">
+              <div className="w-full lg:flex-1 min-w-0 lg:max-w-xs relative">
                 <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                 <input
                   type="text"
@@ -1143,8 +1146,8 @@ export const AdminDashboard: React.FC = () => {
               </div>
 
               {/* Barcode Quick Lookup Control Group */}
-              <div className="flex items-center gap-1.5 bg-gray-50 border border-gray-200 p-1 rounded-xl">
-                <div className="relative">
+              <div className="flex items-center gap-1.5 bg-gray-50 border border-gray-200 p-1 rounded-xl w-full sm:w-auto min-w-0 overflow-hidden">
+                <div className="relative flex-1 sm:w-40 min-w-0">
                   <Barcode size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
                   <input
                     type="text"
@@ -1163,7 +1166,7 @@ export const AdminDashboard: React.FC = () => {
                         }
                       }
                     }}
-                    className="w-32 sm:w-40 pl-7 pr-2 py-1 text-xs font-mono border border-gray-300 rounded-lg outline-none focus:border-[#0F2C59] bg-white text-gray-900"
+                    className="w-full pl-7 pr-2 py-1 text-xs font-mono border border-gray-300 rounded-lg outline-none focus:border-[#0F2C59] bg-white text-gray-900"
                   />
                 </div>
                 <button
@@ -1176,7 +1179,7 @@ export const AdminDashboard: React.FC = () => {
                       setIsInventoryLookupScannerOpen(true);
                     }
                   }}
-                  className="px-2.5 py-1 bg-white hover:bg-gray-100 text-[#0F2C59] border border-gray-300 text-xs font-bold rounded-lg shadow-2xs transition active:scale-95 cursor-pointer"
+                  className="px-2.5 py-1 bg-white hover:bg-gray-100 text-[#0F2C59] border border-gray-300 text-xs font-bold rounded-lg shadow-2xs transition active:scale-95 shrink-0 cursor-pointer"
                   title={manualBarcodeInput.trim() ? "Lookup entered barcode" : "Scan barcode with camera"}
                 >
                   <span>Lookup</span>
@@ -1185,7 +1188,7 @@ export const AdminDashboard: React.FC = () => {
                   type="button"
                   id="inventory-barcode-scan-btn"
                   onClick={() => setIsInventoryLookupScannerOpen(true)}
-                  className="inline-flex items-center gap-1 px-2.5 py-1 bg-[#0F2C59] hover:bg-[#1a3f7a] text-white text-xs font-bold rounded-lg shadow-2xs transition active:scale-95 cursor-pointer"
+                  className="inline-flex items-center gap-1 px-2.5 py-1 bg-[#0F2C59] hover:bg-[#1a3f7a] text-white text-xs font-bold rounded-lg shadow-2xs transition active:scale-95 shrink-0 cursor-pointer"
                   title="Scan barcode with camera"
                 >
                   <Scan size={12} className="text-[#FF6B00]" />
@@ -1194,12 +1197,13 @@ export const AdminDashboard: React.FC = () => {
                 </button>
               </div>
 
-              <div className="flex items-center gap-2 shrink-0">
+              {/* Action Buttons: Categories, Bulk Upload, Add Product */}
+              <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto min-w-0">
                 <button
                   type="button"
                   id="btn-inventory-manage-categories"
                   onClick={() => setActiveTab('CATEGORIES')}
-                  className="bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition border border-gray-200 cursor-pointer"
+                  className="bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition border border-gray-200 cursor-pointer flex-1 sm:flex-none"
                   title="Manage product categories"
                 >
                   <Tag size={13} className="text-[#FF6B00]" />
@@ -1210,20 +1214,20 @@ export const AdminDashboard: React.FC = () => {
                   type="button"
                   id="open-bulk-upload-btn"
                   onClick={() => setIsBulkUploadModalOpen(true)}
-                  className="bg-emerald-700 hover:bg-emerald-800 text-white px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition active:scale-95 cursor-pointer"
+                  className="bg-emerald-700 hover:bg-emerald-800 text-white px-3 py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shadow-xs transition active:scale-95 cursor-pointer flex-1 sm:flex-none"
                   title="Bulk import products from Excel (.xlsx, .xls) or CSV"
                 >
                   <FileSpreadsheet size={14} className="text-emerald-200" />
-                  <span>Bulk Upload (Excel/CSV)</span>
+                  <span>Bulk Upload</span>
                 </button>
 
                 <button
                   id="open-add-product-btn"
                   onClick={handleOpenAddProductModal}
-                  className="bg-[#0F2C59] hover:bg-[#153e7d] text-white px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow transition cursor-pointer"
+                  className="bg-[#0F2C59] hover:bg-[#153e7d] text-white px-3.5 py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shadow-sm transition cursor-pointer w-full sm:w-auto"
                 >
                   <Plus size={14} className="text-[#D4AF37]" />
-                  <span>Add New Product & Tier Slabs</span>
+                  <span>Add Product</span>
                 </button>
               </div>
             </div>
@@ -1434,7 +1438,7 @@ export const AdminDashboard: React.FC = () => {
                 )}
               </div>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 w-full max-w-full min-w-0">
                 {displayedProducts.map((p) => {
                   const totalStock = getProductStock(p);
                   const threshold = getProductThreshold(p);
@@ -1445,7 +1449,7 @@ export const AdminDashboard: React.FC = () => {
                     <div
                       key={p.id}
                       id={`inventory-product-${p.id}`}
-                      className={`bg-white rounded-xl border p-4 shadow-sm flex flex-col justify-between transition-all duration-300 relative ${
+                      className={`bg-white rounded-xl border p-3.5 sm:p-4 shadow-sm flex flex-col justify-between transition-all duration-300 relative w-full max-w-full min-w-0 overflow-hidden ${
                         highlightedProductId === p.id
                           ? 'border-[#FF6B00] ring-4 ring-[#FF6B00]/30 shadow-lg bg-orange-50/15'
                           : outOfStock
@@ -1646,9 +1650,9 @@ export const AdminDashboard: React.FC = () => {
 
         {/* TAB 4: REGISTERED CUSTOMERS */}
         {activeTab === 'CUSTOMERS' && (
-          <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
-            <div className="p-4 sm:p-5 border-b border-gray-200 flex flex-wrap justify-between items-center gap-3">
-              <div>
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden w-full max-w-full min-w-0">
+            <div className="p-3.5 sm:p-5 border-b border-gray-200 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 w-full max-w-full min-w-0">
+              <div className="min-w-0">
                 <h2 className="text-base font-extrabold text-[#0F2C59] flex items-center gap-2">
                   <Users size={18} className="text-[#FF6B00]" />
                   <span>Verified Customer Directory ({customerUsers.length})</span>
@@ -1658,7 +1662,7 @@ export const AdminDashboard: React.FC = () => {
                 </p>
               </div>
 
-              <div className="relative min-w-[240px]">
+              <div className="relative w-full sm:w-72 min-w-0">
                 <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                 <input
                   type="text"
@@ -1675,8 +1679,8 @@ export const AdminDashboard: React.FC = () => {
                 No customer accounts match your search.
               </div>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs border-collapse">
+              <div className="overflow-x-auto w-full max-w-full">
+                <table className="w-full text-left text-xs border-collapse min-w-[640px] sm:min-w-full">
                   <thead>
                     <tr className="bg-[#0F2C59] text-white uppercase text-[10px] tracking-wider">
                       <th className="p-3">Customer</th>
@@ -1980,9 +1984,9 @@ export const AdminDashboard: React.FC = () => {
                 </div>
 
                 {/* The Variants Table */}
-                <div className="border border-gray-200 rounded-xl overflow-hidden shadow-xs bg-white">
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left border-collapse min-w-[920px]">
+                <div className="border border-gray-200 rounded-xl overflow-hidden shadow-xs bg-white w-full max-w-full min-w-0">
+                  <div className="overflow-x-auto w-full max-w-full">
+                    <table className="w-full text-left border-collapse min-w-[760px] sm:min-w-[920px]">
                       <thead>
                         <tr className="bg-[#0F2C59] text-white text-[10.5px] uppercase tracking-wider">
                           <th className="p-2.5 text-center w-8">#</th>
