@@ -241,10 +241,14 @@ export function normalizeAndValidateVariant(
     return { valid: false, error: `Variant #${index + 1}: MRP must be greater than 0.` };
   }
 
-  // Base Selling Price
-  const baseSellingPrice = Number(raw.baseSellingPrice);
+  // Base Selling Price - allow decimal values such as ₹9.50, ₹9.5, ₹10.25 (never restrict to whole numbers)
+  const rawBaseSelling =
+    typeof raw.baseSellingPrice === 'string'
+      ? raw.baseSellingPrice.replace(/,/g, '.').replace(/[^0-9.]/g, '')
+      : raw.baseSellingPrice;
+  const baseSellingPrice = Number(rawBaseSelling);
   if (isNaN(baseSellingPrice) || baseSellingPrice <= 0) {
-    return { valid: false, error: `Variant #${index + 1}: Retail selling price must be greater than 0.` };
+    return { valid: false, error: `Variant #${index + 1}: Retail selling price must be greater than 0 (e.g. ₹9.50, ₹10.25).` };
   }
 
   if (baseSellingPrice > mrp) {
@@ -304,6 +308,14 @@ export function normalizeAndValidateVariant(
       packLabel,
       mrp,
       baseSellingPrice,
+      purchasePrice:
+        raw.purchasePrice !== undefined && raw.purchasePrice !== null && !isNaN(Number(raw.purchasePrice))
+          ? Number(raw.purchasePrice)
+          : undefined,
+      discount:
+        raw.discount !== undefined && raw.discount !== null && !isNaN(Number(raw.discount))
+          ? Number(raw.discount)
+          : undefined,
       stockQuantity,
       maxOrderLimit,
       tieredPrices,
@@ -368,6 +380,14 @@ export function normalizeAndValidateProduct(raw: any): ProductValidationResult {
       categoryId,
       imageUrl,
       barcode,
+      purchasePrice:
+        raw.purchasePrice !== undefined && raw.purchasePrice !== null && !isNaN(Number(raw.purchasePrice))
+          ? Number(raw.purchasePrice)
+          : normalizedVariants[0]?.purchasePrice,
+      discount:
+        raw.discount !== undefined && raw.discount !== null && !isNaN(Number(raw.discount))
+          ? Number(raw.discount)
+          : normalizedVariants[0]?.discount,
       isDiscountExcluded,
       lowStockThreshold:
         raw.lowStockThreshold !== undefined && raw.lowStockThreshold !== null && !isNaN(Number(raw.lowStockThreshold))

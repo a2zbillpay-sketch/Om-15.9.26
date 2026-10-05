@@ -83,69 +83,77 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
       className="bg-white rounded-2xl border border-gray-200 overflow-hidden shadow-sm hover:shadow-md transition-all flex flex-col justify-between group"
     >
       <div>
-        {/* Product Image & Badges */}
-        <div
-          onClick={() => {
-            if (product.imageUrl && product.imageUrl.trim()) {
-              setIsZoomOpen(true);
-            }
-          }}
-          onKeyDown={(e) => {
-            if ((e.key === 'Enter' || e.key === ' ') && product.imageUrl && product.imageUrl.trim()) {
-              e.preventDefault();
-              setIsZoomOpen(true);
-            }
-          }}
-          role={product.imageUrl && product.imageUrl.trim() ? 'button' : undefined}
-          tabIndex={product.imageUrl && product.imageUrl.trim() ? 0 : undefined}
-          aria-label={product.imageUrl && product.imageUrl.trim() ? `Zoom photo for ${product.name}` : undefined}
-          className={`relative w-full aspect-square bg-gray-100 overflow-hidden flex items-center justify-center ${
-            product.imageUrl && product.imageUrl.trim() ? 'cursor-pointer' : ''
-          }`}
-        >
-          {product.imageUrl && product.imageUrl.trim() ? (
-            <>
-              <img
-                src={product.imageUrl}
-                alt={product.name}
-                className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                loading="lazy"
-              />
-              <div
-                className="absolute bottom-2 right-2 bg-black/45 hover:bg-black/60 text-white p-1.5 rounded-lg backdrop-blur-xs opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none shadow-xs"
-                aria-hidden="true"
-              >
-                <ZoomIn size={13} />
-              </div>
-            </>
-          ) : (
-            <div className="w-full h-full flex flex-col items-center justify-center text-gray-400 bg-gray-50/80">
-              <Package size={36} className="text-gray-300 stroke-[1.5]" />
-              <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mt-1.5">{product.brand || product.name}</span>
-            </div>
-          )}
-
-          {/* Out of Stock or Discount Badge */}
+        {/* Top Badges Bar */}
+        <div className="pt-2.5 px-3 flex items-center justify-between gap-1 min-h-[28px]">
           {isOutOfStock ? (
-            <div className="absolute top-2.5 left-2.5 bg-red-600 text-white font-black text-[10px] px-2.5 py-0.5 rounded-full uppercase tracking-wider shadow-sm pointer-events-none z-10">
+            <span className="bg-red-600 text-white font-black text-[10px] px-2 py-0.5 rounded-full uppercase tracking-wider shadow-xs">
               Out of Stock
-            </div>
+            </span>
           ) : discountPercent > 0 ? (
-            <div className="absolute top-2.5 left-2.5 bg-emerald-600 text-white font-black text-[10px] px-2 py-0.5 rounded-full uppercase tracking-wider shadow-sm pointer-events-none">
+            <span className="bg-emerald-600 text-white font-black text-[10px] px-2 py-0.5 rounded-full uppercase tracking-wider shadow-xs">
               {discountPercent}% OFF
-            </div>
-          ) : null}
-
-          {/* Excluded from advance discount badge or wholesale badge */}
-          {isExcluded ? (
-            <div className="absolute top-2.5 right-2.5 bg-amber-600 text-white font-bold text-[9px] px-2.5 py-0.5 rounded-full shadow-sm pointer-events-none">
-              Price Regulated (No UPI Discount)
-            </div>
+            </span>
           ) : (
-            <div className="absolute top-2.5 right-2.5 bg-[#0F2C59]/90 backdrop-blur-sm text-[#D4AF37] font-extrabold text-[9px] px-2 py-0.5 rounded-full border border-[#D4AF37]/30 pointer-events-none">
-              Wholesale Eligible
-            </div>
+            <span />
           )}
+
+          {isExcluded ? (
+            <span className="bg-amber-600 text-white font-bold text-[9px] px-2 py-0.5 rounded-full shadow-xs">
+              Price Regulated
+            </span>
+          ) : (
+            <span className="bg-[#0F2C59]/90 text-[#D4AF37] font-extrabold text-[9px] px-2 py-0.5 rounded-full border border-[#D4AF37]/30">
+              Wholesale Eligible
+            </span>
+          )}
+        </div>
+
+        {/* Product Image Thumbnail (Reduced to 25% of current size) & Tap-to-Zoom */}
+        <div className="py-2.5 flex items-center justify-center">
+          <div
+            onClick={() => {
+              if (product.imageUrl && product.imageUrl.trim()) {
+                setIsZoomOpen(true);
+              }
+            }}
+            onKeyDown={(e) => {
+              if ((e.key === 'Enter' || e.key === ' ') && product.imageUrl && product.imageUrl.trim()) {
+                e.preventDefault();
+                setIsZoomOpen(true);
+              }
+            }}
+            role={product.imageUrl && product.imageUrl.trim() ? 'button' : undefined}
+            tabIndex={product.imageUrl && product.imageUrl.trim() ? 0 : undefined}
+            aria-label={product.imageUrl && product.imageUrl.trim() ? `Zoom photo for ${product.name}` : undefined}
+            title={product.imageUrl && product.imageUrl.trim() ? 'Tap to view full-size photo' : undefined}
+            className={`relative w-1/2 aspect-square max-w-[130px] max-h-[130px] rounded-xl bg-gray-50 border border-gray-200 overflow-hidden flex items-center justify-center shadow-xs group/img ${
+              product.imageUrl && product.imageUrl.trim() ? 'cursor-pointer hover:border-[#0F2C59]/40 hover:shadow-sm' : ''
+            }`}
+          >
+            {product.imageUrl && product.imageUrl.trim() ? (
+              <>
+                <img
+                  src={product.imageUrl}
+                  alt={product.name}
+                  className="w-full h-full object-contain p-1 group-hover/img:scale-105 transition-transform duration-300"
+                  loading="lazy"
+                />
+                <div
+                  className="absolute bottom-1 right-1 bg-black/50 hover:bg-black/70 text-white p-1 rounded-md backdrop-blur-xs opacity-0 group-hover/img:opacity-100 transition-opacity duration-200 pointer-events-none shadow-xs"
+                  aria-hidden="true"
+                >
+                  <ZoomIn size={11} />
+                </div>
+              </>
+            ) : (
+              <div className="w-full h-full flex flex-col items-center justify-center text-gray-400 p-2">
+                <Package size={22} className="text-gray-300 stroke-[1.5]" />
+                <span className="text-[9px] font-bold text-gray-400 uppercase tracking-wider mt-1 text-center truncate max-w-full">
+                  {product.brand || product.name}
+                </span>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Content Details */}
@@ -220,11 +228,11 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
               <div>
                 <div className="flex items-baseline gap-1.5">
                   <span className="text-base font-black text-[#0F2C59]">
-                    ₹{currentPrice}
+                    ₹{Number.isInteger(currentPrice) ? currentPrice : currentPrice.toFixed(2)}
                   </span>
                   {currentVariant.mrp > currentPrice && (
                     <span className="text-xs text-gray-400 line-through">
-                      ₹{currentVariant.mrp}
+                      ₹{Number.isInteger(currentVariant.mrp) ? currentVariant.mrp : currentVariant.mrp.toFixed(2)}
                     </span>
                   )}
                 </div>
@@ -289,11 +297,11 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
             <div>
               <div className="flex items-baseline gap-1.5">
                 <span className="text-base font-black text-[#0F2C59]">
-                  ₹{currentPrice}
+                  ₹{Number.isInteger(currentPrice) ? currentPrice : currentPrice.toFixed(2)}
                 </span>
                 {currentVariant.mrp > currentPrice && (
                   <span className="text-xs text-gray-400 line-through">
-                    ₹{currentVariant.mrp}
+                    ₹{Number.isInteger(currentVariant.mrp) ? currentVariant.mrp : currentVariant.mrp.toFixed(2)}
                   </span>
                 )}
               </div>

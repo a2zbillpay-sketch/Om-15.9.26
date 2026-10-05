@@ -78,6 +78,9 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
       if (field === 'stockQuantity') {
         const num = Number(value);
         formattedVal = isNaN(num) || num < 0 ? 0 : num;
+      } else if (field === 'baseSellingPrice') {
+        // Keep string while typing to allow decimal typing such as 9.50, 9.5, 10.25 without swallowing "." or trailing "0"
+        formattedVal = value;
       } else if (typeof updated[index][field] === 'number') {
         const num = Number(value);
         formattedVal = isNaN(num) ? 0 : num;
@@ -137,6 +140,39 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
         ? Math.max(1, parseInt(lowStockThreshold, 10))
         : undefined;
 
+    // Process variants: allow decimal Selling Prices such as ₹9.50, ₹9.5, ₹10.25 (never restrict to whole numbers)
+    const processedVariants = variants.map((v) => {
+      const cleanPrice = String(v.baseSellingPrice || '').replace(/,/g, '.').replace(/[^0-9.]/g, '');
+      const numSellingPrice = parseFloat(cleanPrice) || 0;
+      return {
+        ...v,
+        mrp: Number(v.mrp),
+        baseSellingPrice: numSellingPrice,
+        purchasePrice:
+          v.purchasePrice !== undefined && v.purchasePrice !== null && !isNaN(Number(v.purchasePrice))
+            ? Number(v.purchasePrice)
+            : undefined,
+        discount:
+          v.discount !== undefined && v.discount !== null && !isNaN(Number(v.discount))
+            ? Number(v.discount)
+            : undefined,
+        stockQuantity: Number(v.stockQuantity),
+        maxOrderLimit: Number(v.maxOrderLimit || 12),
+      };
+    });
+
+    for (let i = 0; i < processedVariants.length; i++) {
+      const v = processedVariants[i];
+      if (isNaN(v.baseSellingPrice) || v.baseSellingPrice <= 0) {
+        setVariantError(`Variant #${i + 1}: Selling Price must be greater than 0 (e.g. ₹9.50, ₹10.25).`);
+        return;
+      }
+      if (v.baseSellingPrice > v.mrp) {
+        setVariantError(`Variant #${i + 1}: Base Selling Price (₹${v.baseSellingPrice}) cannot exceed MRP (₹${v.mrp}).`);
+        return;
+      }
+    }
+
     try {
       const res = await onSave(product.id, {
         name: name.trim(),
@@ -147,7 +183,7 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
         description: description.trim(),
         isDiscountExcluded,
         lowStockThreshold: parsedThreshold,
-        variants,
+        variants: processedVariants,
       });
 
       if (res && !res.success) {
@@ -434,7 +470,9 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
                       </label>
                       <input
                         type="number"
+                        step="any"
                         min="0"
+                        placeholder="e.g. 9.50"
                         value={variant.baseSellingPrice}
                         onChange={(e) =>
                           handleUpdateVariant(idx, 'baseSellingPrice', e.target.value)

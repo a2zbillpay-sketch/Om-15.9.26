@@ -33,6 +33,7 @@ import {
   ZoomIn,
   Tag,
   Printer,
+  FileSpreadsheet,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { Order, OrderStatus, PaymentMethod, Product, ProductVariant, TieredPrice, UnitType, Role } from '../types';
@@ -46,6 +47,7 @@ import { BarcodeScannerModal } from './BarcodeScannerModal';
 import { BarcodeLookupBanner } from './BarcodeLookupBanner';
 import { CodCollectionModal } from './CodCollectionModal';
 import { OrderBillLayout } from './OrderBillLayout';
+import { BulkProductUploadModal } from './BulkProductUploadModal';
 import { ProductImageUploader } from './ProductImageUploader';
 import { ImageLightboxModal } from './ImageLightboxModal';
 import { formatVariantPack } from '../utils/variantFormatter';
@@ -62,6 +64,8 @@ export interface VariantFormRow {
   packLabel: string;
   mrp: string;
   baseSellingPrice: string;
+  purchasePrice?: string;
+  discount?: string;
   stockQuantity: string;
   maxOrderLimit: string;
   wholesaleMinQty: string;
@@ -91,6 +95,8 @@ const createBlankVariantRow = (customSize = '', customUnit: UnitType | '' = ''):
   packLabel: customSize && customUnit ? `${customSize} ${customUnit}` : '',
   mrp: '',
   baseSellingPrice: '',
+  purchasePrice: '',
+  discount: '',
   stockQuantity: '',
   maxOrderLimit: '',
   wholesaleMinQty: '',
@@ -117,6 +123,8 @@ export const AdminDashboard: React.FC = () => {
     markNotificationAsRead,
     markAllNotificationsAsRead,
     productRequests,
+    bulkAddProducts,
+    addCategory,
   } = useApp();
 
   const [activeTab, setActiveTab] = useState<'ORDERS' | 'INVENTORY' | 'CATEGORIES' | 'SETTINGS' | 'CUSTOMERS'>('ORDERS');
@@ -126,6 +134,7 @@ export const AdminDashboard: React.FC = () => {
   const [customerSearch, setCustomerSearch] = useState<string>('');
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isLogoModalOpen, setIsLogoModalOpen] = useState(false);
+  const [isBulkUploadModalOpen, setIsBulkUploadModalOpen] = useState(false);
   const [codCollectingOrder, setCodCollectingOrder] = useState<Order | null>(null);
   const [printingOrder, setPrintingOrder] = useState<Order | null>(null);
 
@@ -539,13 +548,17 @@ export const AdminDashboard: React.FC = () => {
         return;
       }
 
-      if (!row.baseSellingPrice || isNaN(Number(row.baseSellingPrice)) || Number(row.baseSellingPrice) <= 0) {
-        setFormValidationError(`Variant #${rowNum}: Please enter selling price.`);
+      // Selling Price validation: allow decimal values such as ₹9.50, ₹9.5, ₹10.25 (never restrict to whole numbers)
+      const cleanSellingPrice = String(row.baseSellingPrice || '').replace(/,/g, '.').replace(/[^0-9.]/g, '');
+      const numSellingPrice = parseFloat(cleanSellingPrice);
+      if (!cleanSellingPrice || isNaN(numSellingPrice) || numSellingPrice <= 0) {
+        setFormValidationError(`Variant #${rowNum}: Please enter selling price (e.g. ₹9.50, ₹10.25).`);
         return;
       }
 
-      if (Number(row.baseSellingPrice) > Number(row.mrp)) {
-        setFormValidationError(`Variant #${rowNum}: Base Selling Price (₹${row.baseSellingPrice}) cannot exceed MRP (₹${row.mrp}).`);
+      const numMrp = Number(row.mrp);
+      if (numSellingPrice > numMrp) {
+        setFormValidationError(`Variant #${rowNum}: Base Selling Price (₹${numSellingPrice}) cannot exceed MRP (₹${numMrp}).`);
         return;
       }
 
@@ -600,14 +613,29 @@ export const AdminDashboard: React.FC = () => {
             ]
           : [];
 
+      const rowMrp = Number(row.mrp);
+      const rowSalePrice =
+        parseFloat(String(row.baseSellingPrice || '').replace(/,/g, '.').replace(/[^0-9.]/g, '')) || 0;
+      const rowDiscount =
+        row.discount && !isNaN(Number(row.discount))
+          ? Number(row.discount)
+          : rowMrp > rowSalePrice
+          ? Math.round(((rowMrp - rowSalePrice) / rowMrp) * 100)
+          : 0;
+
       return {
         id: variantId,
         productId: '',
         unit: u,
         packSize: pSize,
         packLabel: pLabel,
-        mrp: Number(row.mrp),
-        baseSellingPrice: Number(row.baseSellingPrice),
+        mrp: rowMrp,
+        baseSellingPrice: rowSalePrice,
+        purchasePrice:
+          row.purchasePrice && !isNaN(Number(row.purchasePrice))
+            ? Number(row.purchasePrice)
+            : undefined,
+        discount: rowDiscount > 0 ? rowDiscount : undefined,
         stockQuantity: row.stockQuantity ? Number(row.stockQuantity) : 0,
         maxOrderLimit: row.maxOrderLimit ? Number(row.maxOrderLimit) : 12,
         tieredPrices,
@@ -626,6 +654,8 @@ export const AdminDashboard: React.FC = () => {
       categoryId: newProductData.categoryId,
       imageUrl: newProductData.imageUrl.trim() || undefined,
       barcode: validatedBarcode,
+      purchasePrice: constructedVariants[0]?.purchasePrice,
+      discount: constructedVariants[0]?.discount,
       isDiscountExcluded: newProductData.isDiscountExcluded,
       lowStockThreshold: parsedThresh,
       variants: constructedVariants,
@@ -1169,7 +1199,7 @@ export const AdminDashboard: React.FC = () => {
                   type="button"
                   id="btn-inventory-manage-categories"
                   onClick={() => setActiveTab('CATEGORIES')}
-                  className="bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition border border-gray-200"
+                  className="bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition border border-gray-200 cursor-pointer"
                   title="Manage product categories"
                 >
                   <Tag size={13} className="text-[#FF6B00]" />
@@ -1177,9 +1207,20 @@ export const AdminDashboard: React.FC = () => {
                 </button>
 
                 <button
+                  type="button"
+                  id="open-bulk-upload-btn"
+                  onClick={() => setIsBulkUploadModalOpen(true)}
+                  className="bg-emerald-700 hover:bg-emerald-800 text-white px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition active:scale-95 cursor-pointer"
+                  title="Bulk import products from Excel (.xlsx, .xls) or CSV"
+                >
+                  <FileSpreadsheet size={14} className="text-emerald-200" />
+                  <span>Bulk Upload (Excel/CSV)</span>
+                </button>
+
+                <button
                   id="open-add-product-btn"
                   onClick={handleOpenAddProductModal}
-                  className="bg-[#0F2C59] hover:bg-[#153e7d] text-white px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow transition"
+                  className="bg-[#0F2C59] hover:bg-[#153e7d] text-white px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow transition cursor-pointer"
                 >
                   <Plus size={14} className="text-[#D4AF37]" />
                   <span>Add New Product & Tier Slabs</span>
@@ -1536,7 +1577,24 @@ export const AdminDashboard: React.FC = () => {
                             <div key={v.id} className="bg-gray-50 p-2.5 rounded-lg border border-gray-200 text-xs">
                               <div className="flex justify-between items-center font-bold">
                                 <span>{formatVariantPack(v)}</span>
-                                <span className="text-[#0F2C59]">₹{v.baseSellingPrice} (MRP ₹{v.mrp})</span>
+                                <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                                  {v.purchasePrice !== undefined && v.purchasePrice > 0 && (
+                                    <span className="text-[10px] font-semibold text-amber-900 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200" title="Purchase Price (Cost)">
+                                      Purchase: ₹{v.purchasePrice}
+                                    </span>
+                                  )}
+                                  <span className="text-[#0F2C59]">
+                                    ₹{Number.isInteger(v.baseSellingPrice) ? v.baseSellingPrice : v.baseSellingPrice.toFixed(2)}
+                                  </span>
+                                  {v.mrp > v.baseSellingPrice && (
+                                    <span className="text-gray-400 font-normal text-[11px]">(MRP ₹{v.mrp})</span>
+                                  )}
+                                  {((v.discount && v.discount > 0) || (p.discount && p.discount > 0)) && (
+                                    <span className="text-[10px] font-extrabold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                                      {v.discount || p.discount}% OFF
+                                    </span>
+                                  )}
+                                </div>
                               </div>
                               <div className="flex justify-between items-center text-[10px] text-gray-500 mt-2 pt-1.5 border-t border-gray-200">
                                 <InlineVariantStockEditor
@@ -1998,7 +2056,7 @@ export const AdminDashboard: React.FC = () => {
                                 type="number"
                                 step="any"
                                 min="0"
-                                placeholder="Retail ₹"
+                                placeholder="e.g. 9.50"
                                 value={row.baseSellingPrice}
                                 onChange={(e) =>
                                   handleUpdateVariantRow(idx, 'baseSellingPrice', e.target.value)
@@ -2229,6 +2287,26 @@ export const AdminDashboard: React.FC = () => {
       {/* Printable Bill: rendered into DOM for system printer dialog, hidden on screen */}
       {printingOrder && (
         <OrderBillLayout order={printingOrder} settings={settings} />
+      )}
+
+      {/* Bulk Product Upload (Excel / CSV) Modal */}
+      {isBulkUploadModalOpen && (
+        <BulkProductUploadModal
+          isOpen={isBulkUploadModalOpen}
+          onClose={() => setIsBulkUploadModalOpen(false)}
+          categories={categories || []}
+          existingProducts={products || []}
+          onProductsImported={async (newProducts) => {
+            return await bulkAddProducts(newProducts);
+          }}
+          onAddCategory={async (catName) => {
+            if (addCategory) {
+              const res = await addCategory({ name: catName });
+              return res.category || null;
+            }
+            return null;
+          }}
+        />
       )}
     </div>
   );

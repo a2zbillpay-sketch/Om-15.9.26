@@ -101,13 +101,15 @@ export const AddVariantModal: React.FC<AddVariantModalProps> = ({
       return;
     }
 
-    if (!baseSellingPrice || isNaN(Number(baseSellingPrice)) || Number(baseSellingPrice) <= 0) {
-      setValidationError('Please enter a valid Base Selling Price in ₹.');
+    const cleanSellingPrice = String(baseSellingPrice || '').replace(/,/g, '.').replace(/[^0-9.]/g, '');
+    const numSellingPrice = parseFloat(cleanSellingPrice);
+    if (!cleanSellingPrice || isNaN(numSellingPrice) || numSellingPrice <= 0) {
+      setValidationError('Please enter a valid Base Selling Price in ₹ (e.g. ₹9.50, ₹10.25).');
       return;
     }
 
-    if (Number(baseSellingPrice) > Number(mrp)) {
-      setValidationError(`Base Selling Price (₹${baseSellingPrice}) cannot exceed MRP (₹${mrp}).`);
+    if (numSellingPrice > Number(mrp)) {
+      setValidationError(`Base Selling Price (₹${numSellingPrice}) cannot exceed MRP (₹${mrp}).`);
       return;
     }
 
@@ -128,7 +130,7 @@ export const AddVariantModal: React.FC<AddVariantModalProps> = ({
 
     const finalPackSize = Number(packSize);
     const finalMrp = Number(mrp);
-    const finalSellingPrice = Number(baseSellingPrice);
+    const finalSellingPrice = numSellingPrice;
     const finalStock = stockQuantity ? Number(stockQuantity) : 0;
     const finalMaxLimit = maxOrderLimit ? Number(maxOrderLimit) : 12;
 
@@ -318,9 +320,11 @@ export const AddVariantModal: React.FC<AddVariantModalProps> = ({
               </label>
               <input
                 type="number"
+                step="any"
                 min="0"
                 required
                 id="variant-selling-price-input"
+                placeholder="e.g. 9.50"
                 value={baseSellingPrice}
                 onChange={(e) => setBaseSellingPrice(e.target.value)}
                 className="w-full p-2.5 border border-gray-300 rounded-xl font-black text-[#0F2C59] text-sm focus:border-[#0F2C59] outline-none"

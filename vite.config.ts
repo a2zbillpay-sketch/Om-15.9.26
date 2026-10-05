@@ -115,6 +115,9 @@ export default defineConfig(() => {
       VitePWA({
         registerType: 'autoUpdate',
         manifest: false, // We already have public/manifest.json matching the exact user prompt
+        workbox: {
+          maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
+        },
         devOptions: {
           enabled: true,
           type: 'module',

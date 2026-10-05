@@ -85,6 +85,8 @@ export interface ProductVariant {
   packLabel?: string;
   mrp: number;
   baseSellingPrice: number;
+  purchasePrice?: number;
+  discount?: number;
   stockQuantity: number;
   maxOrderLimit: number;
   tieredPrices: TieredPrice[];
@@ -101,6 +103,8 @@ export interface Product {
   imageUrl?: string;
   barcode?: string | null;
   isDiscountExcluded: boolean;
+  purchasePrice?: number;
+  discount?: number;
   lowStockThreshold?: number;
   variants: ProductVariant[];
   createdAt: string;

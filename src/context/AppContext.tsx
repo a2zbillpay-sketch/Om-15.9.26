@@ -151,6 +151,9 @@ interface AppContextType {
   deleteCategory: (id: string) => Promise<{ success: boolean; error?: string }>;
   products: Product[];
   addProduct: (product: Omit<Product, 'id' | 'createdAt'>) => Promise<{ success: boolean; error?: string }>;
+  bulkAddProducts: (
+    newProds: Omit<Product, 'id' | 'createdAt'>[]
+  ) => Promise<{ successCount: number; failedCount: number; errors: string[] }>;
   updateProduct: (id: string, updates: Partial<Product>) => Promise<{ success: boolean; error?: string }>;
   deleteProduct: (id: string) => void;
   cart: CartItem[];
@@ -788,6 +791,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // 3. Update React product state (which subsequently updates localStorage cache)
     setProducts((prev) => [product, ...prev]);
     return { success: true };
+  };
+
+  const bulkAddProducts = async (
+    newProds: Omit<Product, 'id' | 'createdAt'>[]
+  ): Promise<{ successCount: number; failedCount: number; errors: string[] }> => {
+    let successCount = 0;
+    let failedCount = 0;
+    const errors: string[] = [];
+
+    for (let i = 0; i < newProds.length; i++) {
+      const p = newProds[i];
+      try {
+        const result = await addProduct(p);
+        if (result.success) {
+          successCount++;
+        } else {
+          failedCount++;
+          errors.push(`Row ${i + 1} (${p.name}): ${result.error || 'Failed to save product.'}`);
+        }
+      } catch (err: any) {
+        failedCount++;
+        errors.push(`Row ${i + 1} (${p.name}): ${err?.message || 'Error saving product.'}`);
+      }
+    }
+
+    return { successCount, failedCount, errors };
   };
 
   const updateProduct = async (
@@ -2325,6 +2354,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         deleteCategory,
         products,
         addProduct,
+        bulkAddProducts,
         updateProduct,
         deleteProduct,
         cart,
