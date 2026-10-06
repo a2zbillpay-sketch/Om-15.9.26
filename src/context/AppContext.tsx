@@ -13,6 +13,7 @@ import {
   PaymentMethod,
   PaymentStatus,
   Address,
+  GoogleLocation,
   WalletTransaction,
   AdminNotification,
   ProductRequest,
@@ -180,6 +181,7 @@ interface AppContextType {
     orderNumber?: string;
     selectedPaymentApp?: string;
     isWalletPayment?: boolean;
+    googleLocation?: GoogleLocation;
   }) => Promise<Order>;
   cancelOrder: (orderId: string, isShopkeeperOverride?: boolean) => boolean;
   updateOrderStatus: (orderId: string, newStatus: OrderStatus) => void;
@@ -1383,6 +1385,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     orderNumber?: string;
     selectedPaymentApp?: string;
     isWalletPayment?: boolean;
+    googleLocation?: GoogleLocation;
   }): Promise<Order> => {
     const isAdvance = data.paymentMethod === PaymentMethod.ADVANCE_ONLINE;
     const finalAmount = isAdvance
@@ -1436,6 +1439,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         ? PaymentStatus.RECEIVED
         : PaymentStatus.PENDING;
 
+    const resolvedGoogleLocation = data.googleLocation || data.address.googleLocation;
+
     const newOrder: Order = {
       id: orderId,
       orderNumber,
@@ -1443,7 +1448,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       userName: currentUser.name,
       userPhone: currentUser.phone,
       addressId: data.address.id,
-      address: data.address,
+      address: {
+        ...data.address,
+        googleLocation: resolvedGoogleLocation || data.address.googleLocation,
+      },
+      googleLocation: resolvedGoogleLocation,
       status: OrderStatus.ORDER_PENDING,
       paymentMethod: data.paymentMethod,
       paymentStatus,

@@ -39,6 +39,14 @@ export enum PaymentStatus {
   PARTIALLY_COLLECTED = 'PARTIALLY_COLLECTED',
 }
 
+export interface GoogleLocation {
+  latitude: number;
+  longitude: number;
+  formattedAddress?: string;
+  mapsUrl: string;
+  placeId?: string;
+}
+
 export interface Address {
   id: string;
   userId: string;
@@ -46,6 +54,7 @@ export interface Address {
   landmark?: string;
   pincode: string;
   isDefault: boolean;
+  googleLocation?: GoogleLocation;
 }
 
 export interface User {
@@ -150,6 +159,7 @@ export interface Order {
   walletAmountUsed?: number;
   stockDeducted?: boolean;
   stockRestored?: boolean;
+  googleLocation?: GoogleLocation;
   razorpayOrderId?: string;
   razorpayPaymentId?: string;
   createdAt: string;

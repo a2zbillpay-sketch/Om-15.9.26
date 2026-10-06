@@ -90,6 +90,15 @@ export const OrderBillLayout: React.FC<OrderBillLayoutProps> = ({ order, setting
               {order.address?.fullAddress || 'Store Pickup / Address not specified'}
               {order.address?.pincode ? ` - ${order.address.pincode}` : ''}
             </span>
+            {(order.googleLocation || order.address?.googleLocation) && (
+              <div className="mt-0.5 text-[10px] text-gray-700">
+                <span className="font-bold text-[#0F2C59]">Google Maps Location: </span>
+                <span className="font-mono">
+                  {(order.googleLocation || order.address?.googleLocation)?.latitude.toFixed(5)},{' '}
+                  {(order.googleLocation || order.address?.googleLocation)?.longitude.toFixed(5)}
+                </span>
+              </div>
+            )}
           </div>
         </div>
       </div>

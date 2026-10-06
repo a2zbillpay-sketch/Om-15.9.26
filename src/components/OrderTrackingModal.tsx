@@ -12,6 +12,7 @@ import {
   MapPin,
   FileText,
   Edit3,
+  ExternalLink,
 } from 'lucide-react';
 import { Order, OrderStatus, PaymentMethod, PaymentStatus } from '../types';
 import { useApp } from '../context/AppContext';
@@ -280,12 +281,36 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
           {/* Delivery & Recipient Details */}
           <div className="grid grid-cols-2 gap-3 text-xs">
             <div className="bg-gray-50 p-3 rounded-xl border border-gray-200">
-              <div className="text-gray-500 font-bold flex items-center gap-1 mb-1">
-                <MapPin size={12} className="text-[#FF6B00]" />
-                <span>Delivery Address</span>
+              <div className="text-gray-500 font-bold flex items-center justify-between mb-1">
+                <div className="flex items-center gap-1">
+                  <MapPin size={12} className="text-[#FF6B00]" />
+                  <span>Delivery Address</span>
+                </div>
+                {(currentOrder.googleLocation || currentOrder.address.googleLocation) && (
+                  <a
+                    href={
+                      (currentOrder.googleLocation || currentOrder.address.googleLocation)?.mapsUrl ||
+                      `https://www.google.com/maps?q=${
+                        (currentOrder.googleLocation || currentOrder.address.googleLocation)?.latitude
+                      },${(currentOrder.googleLocation || currentOrder.address.googleLocation)?.longitude}`
+                    }
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[10px] text-blue-700 hover:text-blue-900 underline font-bold flex items-center gap-0.5"
+                    title="Open in Google Maps"
+                  >
+                    <span>Google Maps</span>
+                    <ExternalLink size={9} />
+                  </a>
+                )}
               </div>
               <p className="font-semibold text-gray-800">{currentOrder.address.fullAddress}</p>
               <p className="text-[11px] text-gray-500">Pincode: {currentOrder.address.pincode}</p>
+              {(currentOrder.googleLocation || currentOrder.address.googleLocation) && (
+                <div className="mt-1 text-[10px] text-emerald-800 font-bold flex items-center gap-1">
+                  <span>📍 GPS Pin Attached</span>
+                </div>
+              )}
             </div>
 
             <div className="bg-gray-50 p-3 rounded-xl border border-gray-200">

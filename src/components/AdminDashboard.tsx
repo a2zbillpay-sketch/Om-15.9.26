@@ -34,6 +34,8 @@ import {
   Tag,
   Printer,
   FileSpreadsheet,
+  ExternalLink,
+  MapPin,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { Order, OrderStatus, PaymentMethod, Product, ProductVariant, TieredPrice, UnitType, Role } from '../types';
@@ -943,6 +945,27 @@ export const AdminDashboard: React.FC = () => {
                         <td className="p-3">
                           <div className="font-bold text-gray-900">{order.userName}</div>
                           <div className="text-[10px] text-gray-500 font-mono">+91 {order.userPhone}</div>
+                          <div className="text-[10px] text-gray-600 line-clamp-1 max-w-[150px] mt-0.5">
+                            {order.address?.fullAddress}
+                          </div>
+                          {(order.googleLocation || order.address?.googleLocation) && (
+                            <a
+                              href={
+                                (order.googleLocation || order.address?.googleLocation)?.mapsUrl ||
+                                `https://www.google.com/maps?q=${
+                                  (order.googleLocation || order.address?.googleLocation)?.latitude
+                                },${(order.googleLocation || order.address?.googleLocation)?.longitude}`
+                              }
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="mt-1 inline-flex items-center gap-1 text-[10px] font-bold text-blue-700 hover:text-blue-900 bg-blue-50 hover:bg-blue-100 px-1.5 py-0.5 rounded border border-blue-200 transition"
+                              title="Open Delivery Pin in Google Maps"
+                            >
+                              <MapPin size={10} className="text-[#FF6B00]" />
+                              <span>Google Map Pin</span>
+                              <ExternalLink size={9} />
+                            </a>
+                          )}
                         </td>
                         <td className="p-3">
                           <div className="flex flex-col gap-1">

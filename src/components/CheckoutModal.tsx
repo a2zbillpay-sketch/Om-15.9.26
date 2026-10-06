@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   MapPin,
@@ -11,10 +11,13 @@ import {
   ArrowRight,
   Wallet,
   AlertTriangle,
+  Navigation,
+  ExternalLink,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { Address, PaymentMethod, Order } from '../types';
+import { Address, PaymentMethod, Order, GoogleLocation } from '../types';
 import { DualPaymentModal } from './DualPaymentModal';
+import { GoogleLocationPickerModal } from './GoogleLocationPickerModal';
 
 interface CheckoutModalProps {
   isOpen: boolean;
@@ -56,17 +59,31 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   const [walletErrorMessage, setWalletErrorMessage] = useState<string | null>(null);
   const [applyWalletInAdvance, setApplyWalletInAdvance] = useState(true);
 
-  if (!isOpen) return null;
+  // Google Location Picker state
+  const [isGoogleLocationPickerOpen, setIsGoogleLocationPickerOpen] = useState(false);
+  const [selectedGoogleLocation, setSelectedGoogleLocation] = useState<GoogleLocation | null>(null);
 
   const currentSelectedAddress =
     userAddresses.find((a) => a.id === selectedAddressId) || userAddresses[0];
+
+  // Sync selected google location with address on change
+  useEffect(() => {
+    if (isOpen && currentSelectedAddress?.googleLocation) {
+      setSelectedGoogleLocation(currentSelectedAddress.googleLocation);
+    }
+  }, [isOpen, currentSelectedAddress?.id, currentSelectedAddress?.googleLocation]);
+
+  if (!isOpen) return null;
 
   const handleSaveNewAddress = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newAddressForm.fullAddress.trim() || !newAddressForm.pincode.trim()) {
       return;
     }
-    addAddress(newAddressForm);
+    addAddress({
+      ...newAddressForm,
+      googleLocation: selectedGoogleLocation || undefined,
+    });
     setIsAddingNewAddress(false);
     setNewAddressForm({ fullAddress: '', landmark: '', pincode: '400705' });
   };
@@ -101,6 +118,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
           paymentMethod: PaymentMethod.COD,
           deliveryDate,
           useWallet: false,
+          googleLocation: selectedGoogleLocation || currentSelectedAddress?.googleLocation,
         });
         setIsDualPaymentOpen(false);
         onClose();
@@ -121,6 +139,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
         deliveryDate,
         useWallet: applyWalletInAdvance,
         selectedPaymentApp: selectedUpiApp,
+        googleLocation: selectedGoogleLocation || currentSelectedAddress?.googleLocation,
       });
       setIsSimulatingRazorpay(false);
       onClose();
@@ -291,6 +310,94 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                   ))}
                 </div>
               )}
+
+              {/* Google Maps Location Section in Customer Delivery Details */}
+              <div className="mt-3">
+                {selectedGoogleLocation ? (
+                  <div className="p-3.5 rounded-xl border-2 border-emerald-300 bg-emerald-50/80 flex items-center justify-between gap-3 shadow-xs">
+                    <div className="flex items-start gap-2.5 min-w-0">
+                      <div className="w-8 h-8 rounded-lg bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs mt-0.5">
+                        <CheckCircle2 size={16} />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-xs font-black text-emerald-950 flex items-center gap-1.5 flex-wrap">
+                          <span>Google Location Attached</span>
+                          <span className="text-[10px] bg-emerald-200 text-emerald-900 font-bold px-1.5 py-0.2 rounded">
+                            GPS Saved
+                          </span>
+                        </div>
+                        <p className="text-[11px] font-medium text-emerald-900 line-clamp-1 mt-0.5">
+                          {selectedGoogleLocation.formattedAddress ||
+                            `Lat: ${selectedGoogleLocation.latitude}, Lng: ${selectedGoogleLocation.longitude}`}
+                        </p>
+                        <div className="flex items-center gap-2 mt-1 flex-wrap">
+                          <a
+                            href={
+                              selectedGoogleLocation.mapsUrl ||
+                              `https://www.google.com/maps?q=${selectedGoogleLocation.latitude},${selectedGoogleLocation.longitude}`
+                            }
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-[10px] font-bold text-blue-700 hover:text-blue-900 underline flex items-center gap-1"
+                            title="Open pin in Google Maps"
+                          >
+                            <ExternalLink size={10} />
+                            <span>Verify on Google Maps</span>
+                          </a>
+                          <span className="text-[10px] text-gray-400">•</span>
+                          <span className="text-[10px] font-mono text-gray-600">
+                            {Number(selectedGoogleLocation.latitude)?.toFixed
+                              ? Number(selectedGoogleLocation.latitude).toFixed(4)
+                              : selectedGoogleLocation.latitude}
+                            ,{' '}
+                            {Number(selectedGoogleLocation.longitude)?.toFixed
+                              ? Number(selectedGoogleLocation.longitude).toFixed(4)
+                              : selectedGoogleLocation.longitude}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      id="btn-change-location"
+                      onClick={() => setIsGoogleLocationPickerOpen(true)}
+                      className="px-3 py-1.5 bg-white hover:bg-gray-100 text-[#0F2C59] border border-gray-300 text-xs font-bold rounded-lg shadow-2xs transition shrink-0 cursor-pointer active:scale-95"
+                      title="Change Google Maps delivery pin"
+                    >
+                      Change
+                    </button>
+                  </div>
+                ) : (
+                  <div className="p-3.5 rounded-xl border border-blue-200 bg-gradient-to-r from-blue-50/90 via-sky-50/60 to-amber-50/40 flex items-center justify-between gap-3 shadow-2xs">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="w-8 h-8 rounded-lg bg-[#0F2C59] text-[#D4AF37] flex items-center justify-center shrink-0 shadow-xs">
+                        <Navigation size={16} />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-xs font-black text-[#0F2C59] flex items-center gap-1.5">
+                          <span>Google Maps Location</span>
+                          <span className="text-[10px] font-semibold text-gray-500 font-normal">(Optional GPS)</span>
+                        </div>
+                        <p className="text-[11px] text-gray-600 truncate">
+                          Pinpoint exact delivery shop or home on Google Maps
+                        </p>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      id="btn-add-location"
+                      onClick={() => setIsGoogleLocationPickerOpen(true)}
+                      className="px-3.5 py-2 bg-[#0F2C59] hover:bg-[#153e7d] text-[#D4AF37] hover:text-amber-200 text-xs font-extrabold rounded-xl shadow-xs transition flex items-center gap-1.5 shrink-0 cursor-pointer active:scale-95 border border-[#D4AF37]/30"
+                      title="Open Google Maps Location Picker"
+                    >
+                      <MapPin size={13} className="text-[#FF6B00]" />
+                      <span>Add Location</span>
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* Delivery Date / Slot */}
@@ -495,6 +602,19 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
           </div>
         </div>
       )}
+
+      {/* Google Maps Location Picker Modal */}
+      <GoogleLocationPickerModal
+        isOpen={isGoogleLocationPickerOpen}
+        onClose={() => setIsGoogleLocationPickerOpen(false)}
+        onSelectLocation={(loc) => {
+          setSelectedGoogleLocation(loc);
+          if (currentSelectedAddress) {
+            currentSelectedAddress.googleLocation = loc;
+          }
+        }}
+        initialLocation={selectedGoogleLocation}
+      />
     </>
   );
 };
