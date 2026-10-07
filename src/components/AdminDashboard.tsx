@@ -36,8 +36,12 @@ import {
   FileSpreadsheet,
   ExternalLink,
   MapPin,
+  Download,
+  Loader2,
 } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import { useApp } from '../context/AppContext';
+import { INITIAL_PRODUCTS, INITIAL_CATEGORIES } from '../data/seedData';
 import { Order, OrderStatus, PaymentMethod, Product, ProductVariant, TieredPrice, UnitType, Role } from '../types';
 import { AdminSettingsControl } from './AdminSettingsControl';
 import { CategoryManagement } from './CategoryManagement';
@@ -129,7 +133,449 @@ export const AdminDashboard: React.FC = () => {
     productRequests,
     bulkAddProducts,
     addCategory,
+    activeRole,
+    currentUser,
   } = useApp();
+
+  const isShopkeeper = activeRole === Role.SHOPKEEPER || currentUser?.role === Role.SHOPKEEPER || activeRole !== Role.CUSTOMER;
+  const [isExportingExcel, setIsExportingExcel] = useState(false);
+
+  const handleExportProductsToExcel = () => {
+    try {
+      setIsExportingExcel(true);
+
+      const effectiveProducts =
+        Array.isArray(products) && products.length > 0
+          ? products
+          : (() => {
+              try {
+                const saved = localStorage.getItem('om_products');
+                if (saved) {
+                  const parsed = JSON.parse(saved);
+                  if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+                }
+              } catch (e) {
+                // ignore
+              }
+              return INITIAL_PRODUCTS;
+            })();
+
+      const effectiveCategories =
+        Array.isArray(categories) && categories.length > 0
+          ? categories
+          : (() => {
+              try {
+                const savedCat = localStorage.getItem('om_categories');
+                if (savedCat) {
+                  const parsedCat = JSON.parse(savedCat);
+                  if (Array.isArray(parsedCat) && parsedCat.length > 0) return parsedCat;
+                }
+              } catch (e) {
+                // ignore
+              }
+              return INITIAL_CATEGORIES;
+            })();
+
+      const categoryMap = new Map<string, string>();
+      effectiveCategories.forEach((c) => {
+        if (c && c.id) {
+          categoryMap.set(c.id, c.name);
+          categoryMap.set(c.id.toLowerCase(), c.name);
+        }
+      });
+
+      // Helper for robust wholesale slab summary formatting
+      const formatSlabsSummary = (tpList: any): string => {
+        if (!tpList) return '';
+        let arr = tpList;
+        if (typeof arr === 'string') {
+          try {
+            arr = JSON.parse(arr);
+          } catch {
+            return arr;
+          }
+        }
+        if (!Array.isArray(arr) || arr.length === 0) return '';
+        return arr
+          .map((t: any) => {
+            if (!t) return '';
+            const min = t.minQty ?? t.min_qty ?? '';
+            const max = t.maxQty ?? t.max_qty;
+            const price = t.unitPrice ?? t.unit_price ?? '';
+            const maxStr = max !== undefined && max !== null && Number(max) < 9999 ? `-${max}` : '+';
+            return `${min}${maxStr}: ₹${price}`;
+          })
+          .filter(Boolean)
+          .join(' | ');
+      };
+
+      const formatSlabsJson = (tpList: any): string => {
+        if (!tpList) return '';
+        if (typeof tpList === 'string') return tpList;
+        try {
+          return JSON.stringify(tpList);
+        } catch {
+          return '';
+        }
+      };
+
+      // 1. Comprehensive Sheet: All Products and Variants with actual stored fields
+      const combinedRows: any[] = [];
+      // 2. Product-Level Sheet
+      const productRows: any[] = [];
+      // 3. Variant-Level Sheet
+      const variantRowsList: any[] = [];
+      // 4. Dedicated Wholesale Slabs Sheet
+      const wholesaleSlabRows: any[] = [];
+
+      effectiveProducts.forEach((p) => {
+        if (!p) return;
+        const categoryName =
+          categoryMap.get(p.categoryId) ||
+          categoryMap.get((p.categoryId || '').toLowerCase()) ||
+          p.categoryId ||
+          'General';
+
+        const variantList = Array.isArray(p.variants) ? p.variants : [];
+
+        // Product-level row
+        productRows.push({
+          'Product ID': p.id || '',
+          'Product Name': p.name || '',
+          'Brand': p.brand || '',
+          'Category ID': p.categoryId || '',
+          'Category Name': categoryName,
+          'Description': p.description || '',
+          'Barcode': p.barcode !== undefined && p.barcode !== null ? String(p.barcode) : '',
+          'Product Image URL': p.imageUrl || '',
+          'Is Discount Excluded': p.isDiscountExcluded ? 'Yes' : 'No',
+          'Product Low Stock Threshold':
+            p.lowStockThreshold !== undefined && p.lowStockThreshold !== null
+              ? p.lowStockThreshold
+              : '',
+          'Product Purchase Price (₹)':
+            p.purchasePrice !== undefined && p.purchasePrice !== null ? p.purchasePrice : '',
+          'Product Discount %':
+            p.discount !== undefined && p.discount !== null ? p.discount : '',
+          'Variant Count': variantList.length,
+          'Created At': p.createdAt || '',
+        });
+
+        if (variantList.length === 0) {
+          // If no variants defined, include the standalone product record
+          combinedRows.push({
+            'Product ID': p.id || '',
+            'Product Name': p.name || '',
+            'Brand': p.brand || '',
+            'Category ID': p.categoryId || '',
+            'Category Name': categoryName,
+            'Description': p.description || '',
+            'Barcode': p.barcode !== undefined && p.barcode !== null ? String(p.barcode) : '',
+            'Product Image URL': p.imageUrl || '',
+            'Is Discount Excluded': p.isDiscountExcluded ? 'Yes' : 'No',
+            'Product Low Stock Threshold':
+              p.lowStockThreshold !== undefined && p.lowStockThreshold !== null
+                ? p.lowStockThreshold
+                : '',
+            'Product Purchase Price (₹)':
+              p.purchasePrice !== undefined && p.purchasePrice !== null ? p.purchasePrice : '',
+            'Product Discount %':
+              p.discount !== undefined && p.discount !== null ? p.discount : '',
+            'Product Created At': p.createdAt || '',
+            'Variant ID': '',
+            'Pack Size': '',
+            'Unit': '',
+            'Pack Label': '',
+            'MRP (₹)': '',
+            'Base Selling Price (₹)': '',
+            'Variant Purchase Price (₹)': '',
+            'Variant Discount %': '',
+            'Stock Quantity': 0,
+            'Max Order Limit': '',
+            'Variant Low Stock Threshold': '',
+            'Variant Image URL': '',
+            'Wholesale Slabs Summary': '',
+            'Wholesale Slabs (Raw JSON)': '',
+          });
+        } else {
+          variantList.forEach((v) => {
+            if (!v) return;
+            const slabsSummary = formatSlabsSummary(v.tieredPrices);
+            const slabsJson = formatSlabsJson(v.tieredPrices);
+
+            // Record into flat denormalized sheet
+            combinedRows.push({
+              'Product ID': p.id || '',
+              'Product Name': p.name || '',
+              'Brand': p.brand || '',
+              'Category ID': p.categoryId || '',
+              'Category Name': categoryName,
+              'Description': p.description || '',
+              'Barcode': p.barcode !== undefined && p.barcode !== null ? String(p.barcode) : '',
+              'Product Image URL': p.imageUrl || '',
+              'Is Discount Excluded': p.isDiscountExcluded ? 'Yes' : 'No',
+              'Product Low Stock Threshold':
+                p.lowStockThreshold !== undefined && p.lowStockThreshold !== null
+                  ? p.lowStockThreshold
+                  : '',
+              'Product Purchase Price (₹)':
+                p.purchasePrice !== undefined && p.purchasePrice !== null ? p.purchasePrice : '',
+              'Product Discount %':
+                p.discount !== undefined && p.discount !== null ? p.discount : '',
+              'Product Created At': p.createdAt || '',
+              'Variant ID': v.id || '',
+              'Pack Size': v.packSize !== undefined && v.packSize !== null ? v.packSize : '',
+              'Unit': v.unit || '',
+              'Pack Label': v.packLabel || (v.packSize && v.unit ? `${v.packSize} ${v.unit}` : ''),
+              'MRP (₹)': v.mrp !== undefined && v.mrp !== null ? v.mrp : '',
+              'Base Selling Price (₹)':
+                v.baseSellingPrice !== undefined && v.baseSellingPrice !== null ? v.baseSellingPrice : '',
+              'Variant Purchase Price (₹)':
+                v.purchasePrice !== undefined && v.purchasePrice !== null ? v.purchasePrice : '',
+              'Variant Discount %':
+                v.discount !== undefined && v.discount !== null ? v.discount : '',
+              'Stock Quantity': v.stockQuantity !== undefined && v.stockQuantity !== null ? v.stockQuantity : 0,
+              'Max Order Limit': v.maxOrderLimit !== undefined && v.maxOrderLimit !== null ? v.maxOrderLimit : '',
+              'Variant Low Stock Threshold':
+                v.lowStockThreshold !== undefined && v.lowStockThreshold !== null
+                  ? v.lowStockThreshold
+                  : '',
+              'Variant Image URL': v.imageUrl || '',
+              'Wholesale Slabs Summary': slabsSummary,
+              'Wholesale Slabs (Raw JSON)': slabsJson,
+            });
+
+            // Record into variant sheet
+            variantRowsList.push({
+              'Product ID': p.id || '',
+              'Product Name': p.name || '',
+              'Variant ID': v.id || '',
+              'Pack Size': v.packSize !== undefined && v.packSize !== null ? v.packSize : '',
+              'Unit': v.unit || '',
+              'Pack Label': v.packLabel || (v.packSize && v.unit ? `${v.packSize} ${v.unit}` : ''),
+              'MRP (₹)': v.mrp !== undefined && v.mrp !== null ? v.mrp : '',
+              'Base Selling Price (₹)':
+                v.baseSellingPrice !== undefined && v.baseSellingPrice !== null ? v.baseSellingPrice : '',
+              'Variant Purchase Price (₹)':
+                v.purchasePrice !== undefined && v.purchasePrice !== null ? v.purchasePrice : '',
+              'Variant Discount %':
+                v.discount !== undefined && v.discount !== null ? v.discount : '',
+              'Stock Quantity': v.stockQuantity !== undefined && v.stockQuantity !== null ? v.stockQuantity : 0,
+              'Max Order Limit': v.maxOrderLimit !== undefined && v.maxOrderLimit !== null ? v.maxOrderLimit : '',
+              'Low Stock Threshold':
+                v.lowStockThreshold !== undefined && v.lowStockThreshold !== null
+                  ? v.lowStockThreshold
+                  : '',
+              'Variant Image URL': v.imageUrl || '',
+              'Wholesale Slabs Summary': slabsSummary,
+              'Wholesale Slabs (Raw JSON)': slabsJson,
+            });
+
+            // Record each wholesale slab entry if present
+            let slabsArr = v.tieredPrices;
+            if (typeof slabsArr === 'string') {
+              try {
+                slabsArr = JSON.parse(slabsArr);
+              } catch {
+                slabsArr = [];
+              }
+            }
+            if (Array.isArray(slabsArr)) {
+              slabsArr.forEach((t: any, idx: number) => {
+                if (!t) return;
+                const min = t.minQty ?? t.min_qty ?? 1;
+                const max = t.maxQty ?? t.max_qty ?? '';
+                const uPrice = t.unitPrice ?? t.unit_price ?? 0;
+                const baseP = v.baseSellingPrice || 0;
+                const diff = baseP > uPrice ? baseP - uPrice : 0;
+                wholesaleSlabRows.push({
+                  'Product ID': p.id || '',
+                  'Product Name': p.name || '',
+                  'Variant ID': v.id || '',
+                  'Pack Label': v.packLabel || `${v.packSize} ${v.unit}`,
+                  'Slab #': idx + 1,
+                  'Min Qty': min,
+                  'Max Qty': max && Number(max) < 9999 ? max : 'No Limit',
+                  'Slab Unit Price (₹)': uPrice,
+                  'Base Selling Price (₹)': baseP,
+                  'Discount vs Base (₹)': diff > 0 ? diff : 0,
+                });
+              });
+            }
+          });
+        }
+      });
+
+      const wb = XLSX.utils.book_new();
+
+      // 1. Primary Sheet: Complete flat denormalized catalog with all actual stored fields
+      const wsCombined = XLSX.utils.json_to_sheet(combinedRows.length > 0 ? combinedRows : [{}]);
+      wsCombined['!cols'] = [
+        { wch: 14 }, // Product ID
+        { wch: 26 }, // Product Name
+        { wch: 14 }, // Brand
+        { wch: 14 }, // Category ID
+        { wch: 18 }, // Category Name
+        { wch: 28 }, // Description
+        { wch: 16 }, // Barcode
+        { wch: 24 }, // Product Image URL
+        { wch: 14 }, // Is Discount Excluded
+        { wch: 16 }, // Product Low Stock
+        { wch: 16 }, // Product Purchase Price
+        { wch: 14 }, // Product Discount
+        { wch: 16 }, // Created At
+        { wch: 14 }, // Variant ID
+        { wch: 10 }, // Pack Size
+        { wch: 8 },  // Unit
+        { wch: 14 }, // Pack Label
+        { wch: 10 }, // MRP
+        { wch: 14 }, // Base Selling Price
+        { wch: 16 }, // Variant Purchase Price
+        { wch: 14 }, // Variant Discount
+        { wch: 12 }, // Stock Quantity
+        { wch: 12 }, // Max Order Limit
+        { wch: 16 }, // Variant Low Stock
+        { wch: 24 }, // Variant Image URL
+        { wch: 26 }, // Wholesale Slabs Summary
+        { wch: 30 }, // Wholesale Slabs (Raw JSON)
+      ];
+      XLSX.utils.book_append_sheet(wb, wsCombined, 'Products & Variants');
+
+      // 2. Secondary Sheet: Products
+      const wsProducts = XLSX.utils.json_to_sheet(productRows.length > 0 ? productRows : [{}]);
+      wsProducts['!cols'] = [
+        { wch: 14 },
+        { wch: 26 },
+        { wch: 14 },
+        { wch: 14 },
+        { wch: 18 },
+        { wch: 28 },
+        { wch: 16 },
+        { wch: 24 },
+        { wch: 14 },
+        { wch: 16 },
+        { wch: 16 },
+        { wch: 14 },
+        { wch: 12 },
+        { wch: 16 },
+      ];
+      XLSX.utils.book_append_sheet(wb, wsProducts, 'Products');
+
+      // 3. Tertiary Sheet: Variants
+      const wsVariants = XLSX.utils.json_to_sheet(variantRowsList.length > 0 ? variantRowsList : [{}]);
+      wsVariants['!cols'] = [
+        { wch: 14 },
+        { wch: 26 },
+        { wch: 14 },
+        { wch: 10 },
+        { wch: 8 },
+        { wch: 14 },
+        { wch: 10 },
+        { wch: 14 },
+        { wch: 16 },
+        { wch: 14 },
+        { wch: 12 },
+        { wch: 12 },
+        { wch: 16 },
+        { wch: 24 },
+        { wch: 26 },
+        { wch: 30 },
+      ];
+      XLSX.utils.book_append_sheet(wb, wsVariants, 'Variants');
+
+      // 4. Quaternary Sheet: Wholesale Slabs
+      if (wholesaleSlabRows.length > 0) {
+        const wsSlabs = XLSX.utils.json_to_sheet(wholesaleSlabRows);
+        wsSlabs['!cols'] = [
+          { wch: 14 },
+          { wch: 26 },
+          { wch: 14 },
+          { wch: 14 },
+          { wch: 8 },
+          { wch: 10 },
+          { wch: 12 },
+          { wch: 14 },
+          { wch: 14 },
+          { wch: 14 },
+        ];
+        XLSX.utils.book_append_sheet(wb, wsSlabs, 'Wholesale Slabs');
+      }
+
+      const now = new Date();
+      const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      const fileName = `Om_Distributors_Products_${dateStr}.xlsx`;
+
+      // Multi-strategy download trigger to guarantee immediate download on tap
+      let downloaded = false;
+
+      // Strategy 1: Standard SheetJS XLSX.writeFile
+      try {
+        XLSX.writeFile(wb, fileName);
+        downloaded = true;
+      } catch (writeErr) {
+        console.warn('XLSX.writeFile encountered error, attempting direct Blob download:', writeErr);
+      }
+
+      // Strategy 2: Blob with application/octet-stream
+      if (!downloaded) {
+        try {
+          const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+          const blob = new Blob([wbout], {
+            type: 'application/octet-stream',
+          });
+
+          if (typeof (window.navigator as any).msSaveBlob === 'function') {
+            (window.navigator as any).msSaveBlob(blob, fileName);
+            downloaded = true;
+          } else if (typeof window.URL !== 'undefined' && window.URL.createObjectURL) {
+            const url = window.URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = fileName;
+            link.style.display = 'none';
+            document.body.appendChild(link);
+            link.click();
+            setTimeout(() => {
+              if (document.body.contains(link)) {
+                document.body.removeChild(link);
+              }
+              window.URL.revokeObjectURL(url);
+            }, 60000);
+            downloaded = true;
+          }
+        } catch (blobErr) {
+          console.warn('Blob URL download failed, attempting Base64 data URI:', blobErr);
+        }
+      }
+
+      // Strategy 3: Base64 Data URI fallback (works in sandboxed iframes without Blob permissions)
+      if (!downloaded) {
+        try {
+          const b64 = XLSX.write(wb, { bookType: 'xlsx', type: 'base64' });
+          const dataUri = `data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,${b64}`;
+          const link = document.createElement('a');
+          link.href = dataUri;
+          link.download = fileName;
+          link.target = '_blank';
+          link.style.display = 'none';
+          document.body.appendChild(link);
+          link.click();
+          setTimeout(() => {
+            if (document.body.contains(link)) {
+              document.body.removeChild(link);
+            }
+          }, 10000);
+          downloaded = true;
+        } catch (dataUriErr) {
+          console.error('All download mechanisms failed:', dataUriErr);
+        }
+      }
+    } catch (err: any) {
+      console.error('Export products to Excel encountered error:', err);
+    } finally {
+      setIsExportingExcel(false);
+    }
+  };
 
   const [activeTab, setActiveTab] = useState<'ORDERS' | 'INVENTORY' | 'CATEGORIES' | 'SETTINGS' | 'CUSTOMERS'>('ORDERS');
   const [orderFilter, setOrderFilter] = useState<string>('ALL');
@@ -1315,6 +1761,20 @@ export const AdminDashboard: React.FC = () => {
                   <Tag size={13} className="text-[#FF6B00]" />
                   <span>Categories</span>
                 </button>
+
+                {/* Shopkeeper-only Export Products to Excel */}
+                {isShopkeeper && (
+                  <button
+                    type="button"
+                    id="btn-export-products-excel"
+                    onClick={handleExportProductsToExcel}
+                    className="bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 px-3 py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shadow-2xs transition active:scale-95 cursor-pointer flex-1 sm:flex-none"
+                    title="Export all existing products and variants with their actual stored fields to Excel (.xlsx)"
+                  >
+                    <Download size={14} className="text-emerald-700" />
+                    <span>Export Products to Excel</span>
+                  </button>
+                )}
 
                 <button
                   type="button"
