@@ -31,6 +31,7 @@ export interface ProductImageUploaderProps {
   subLabel?: string;
   idPrefix?: string;
   storageFolder?: string;
+  maxDimension?: number;
 }
 
 interface PendingCropFile {
@@ -50,6 +51,7 @@ export const ProductImageUploader: React.FC<ProductImageUploaderProps> = ({
   subLabel = '(1:1 Square Format)',
   idPrefix = 'product',
   storageFolder = 'catalog',
+  maxDimension = 1000,
 }) => {
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const galleryInputRef = useRef<HTMLInputElement>(null);
@@ -162,8 +164,8 @@ export const ProductImageUploader: React.FC<ProductImageUploaderProps> = ({
     try {
       // Optimize to 1:1 square without distortion
       const optimized = await optimizeProductImage(file, {
-        maxDimension: 1000,
-        quality: 0.85,
+        maxDimension,
+        quality: maxDimension <= 300 ? 0.8 : 0.85,
         fitMode,
         backgroundColor: '#FFFFFF',
       });

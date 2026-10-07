@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { X, Save, Layers, Check, Trash2, AlertCircle, Scan, Loader2 } from 'lucide-react';
-import { Product, ProductVariant } from '../types';
+import { X, Save, Layers, Check, Trash2, AlertCircle, Scan, Loader2, Plus } from 'lucide-react';
+import { Product, ProductVariant, TieredPrice } from '../types';
 import { useApp } from '../context/AppContext';
 import { INITIAL_CATEGORIES } from '../data/seedData';
 import { formatVariantPack } from '../utils/variantFormatter';
@@ -103,6 +103,81 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
     setVariants((prev) => prev.filter((_, i) => i !== index));
   };
 
+  const handleAddSlabToVariant = (variantIdx: number) => {
+    setVariants((prev) => {
+      const updated = [...prev];
+      const targetVariant = updated[variantIdx];
+      const currentTiers: TieredPrice[] = Array.isArray(targetVariant.tieredPrices)
+        ? [...targetVariant.tieredPrices]
+        : [];
+
+      const lastTier = currentTiers[currentTiers.length - 1];
+      const defaultMin = lastTier
+        ? (lastTier.maxQty < 9999 ? lastTier.maxQty + 1 : lastTier.minQty + 5)
+        : 5;
+      const basePrice = Number(targetVariant.baseSellingPrice || targetVariant.mrp || 100);
+      const defaultPrice = Math.max(1, Math.round(basePrice * 0.95));
+
+      const newTier: TieredPrice = {
+        id: `tp-${targetVariant.id}-${Date.now()}-${currentTiers.length}`,
+        variantId: targetVariant.id,
+        minQty: defaultMin,
+        maxQty: 9999,
+        unitPrice: defaultPrice,
+      };
+
+      updated[variantIdx] = {
+        ...targetVariant,
+        tieredPrices: [...currentTiers, newTier],
+      };
+      return updated;
+    });
+  };
+
+  const handleUpdateVariantSlab = (
+    variantIdx: number,
+    slabIdx: number,
+    field: keyof TieredPrice,
+    value: number
+  ) => {
+    setVariants((prev) => {
+      const updated = [...prev];
+      const targetVariant = updated[variantIdx];
+      const currentTiers = Array.isArray(targetVariant.tieredPrices)
+        ? [...targetVariant.tieredPrices]
+        : [];
+      if (!currentTiers[slabIdx]) return prev;
+
+      currentTiers[slabIdx] = {
+        ...currentTiers[slabIdx],
+        [field]: value,
+      };
+
+      updated[variantIdx] = {
+        ...targetVariant,
+        tieredPrices: currentTiers,
+      };
+      return updated;
+    });
+  };
+
+  const handleRemoveVariantSlab = (variantIdx: number, slabIdx: number) => {
+    setVariants((prev) => {
+      const updated = [...prev];
+      const targetVariant = updated[variantIdx];
+      const currentTiers = Array.isArray(targetVariant.tieredPrices)
+        ? [...targetVariant.tieredPrices]
+        : [];
+      currentTiers.splice(slabIdx, 1);
+
+      updated[variantIdx] = {
+        ...targetVariant,
+        tieredPrices: currentTiers,
+      };
+      return updated;
+    });
+  };
+
   const barcodeConflict = barcode.trim()
     ? existingProducts.find(
         (p) =>
@@ -140,10 +215,22 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
         ? Math.max(1, parseInt(lowStockThreshold, 10))
         : undefined;
 
-    // Process variants: allow decimal Selling Prices such as ₹9.50, ₹9.5, ₹10.25 (never restrict to whole numbers)
+    // Process variants: allow decimal Selling Prices and preserve independent slabs for each variant
     const processedVariants = variants.map((v) => {
       const cleanPrice = String(v.baseSellingPrice || '').replace(/,/g, '.').replace(/[^0-9.]/g, '');
       const numSellingPrice = parseFloat(cleanPrice) || 0;
+      const validTieredPrices = Array.isArray(v.tieredPrices)
+        ? v.tieredPrices
+            .filter((tp) => Number(tp.minQty) > 0 && Number(tp.unitPrice) > 0)
+            .map((tp, tpIdx) => ({
+              id: tp.id || `tp-${v.id}-${tpIdx}-${Date.now()}`,
+              variantId: v.id,
+              minQty: Number(tp.minQty),
+              maxQty: tp.maxQty && Number(tp.maxQty) >= Number(tp.minQty) ? Number(tp.maxQty) : 9999,
+              unitPrice: Number(tp.unitPrice),
+            }))
+        : [];
+
       return {
         ...v,
         mrp: Number(v.mrp),
@@ -158,6 +245,7 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
             : undefined,
         stockQuantity: Number(v.stockQuantity),
         maxOrderLimit: Number(v.maxOrderLimit || 12),
+        tieredPrices: validTieredPrices,
       };
     });
 
@@ -520,6 +608,115 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
                         className="w-full p-1.5 border border-gray-300 rounded-lg text-xs bg-white outline-none"
                       />
                     </div>
+                  </div>
+
+                  {/* Wholesale Bulk Discount Slab (Optional) for EACH product variant */}
+                  <div className="mt-2.5 pt-2 border-t border-gray-200">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="font-bold text-gray-800 text-[11px] flex items-center gap-1.5">
+                        <Layers size={13} className="text-[#FF6B00]" />
+                        <span>Wholesale Bulk Discount Slab (Optional)</span>
+                        {variant.tieredPrices && variant.tieredPrices.length > 0 && (
+                          <span className="text-[10px] bg-amber-100 text-amber-800 font-bold px-1.5 py-0.2 rounded-full">
+                            {variant.tieredPrices.length} {variant.tieredPrices.length === 1 ? 'Slab' : 'Slabs'}
+                          </span>
+                        )}
+                      </span>
+                    </div>
+
+                    {/* Slabs for this specific variant */}
+                    {variant.tieredPrices && variant.tieredPrices.length > 0 ? (
+                      <div className="space-y-1.5 mb-2">
+                        {variant.tieredPrices.map((tier, slabIdx) => (
+                          <div
+                            key={tier.id || `slab-${slabIdx}`}
+                            className="bg-white p-2 rounded-lg border border-gray-200 shadow-2xs flex items-center gap-2 flex-wrap sm:flex-nowrap"
+                          >
+                            <span className="text-[10px] font-black text-[#0F2C59] w-12 shrink-0">
+                              #{slabIdx + 1}
+                            </span>
+                            <div className="flex-1 min-w-[70px]">
+                              <span className="text-[9px] text-gray-500 block">Min Qty *</span>
+                              <input
+                                type="number"
+                                min="2"
+                                value={tier.minQty || ''}
+                                onChange={(e) =>
+                                  handleUpdateVariantSlab(
+                                    idx,
+                                    slabIdx,
+                                    'minQty',
+                                    Number(e.target.value) || 0
+                                  )
+                                }
+                                placeholder="Min"
+                                className="w-full p-1 border border-gray-300 rounded text-xs bg-white outline-none focus:border-[#0F2C59]"
+                              />
+                            </div>
+                            <div className="flex-1 min-w-[70px]">
+                              <span className="text-[9px] text-gray-500 block">Max Qty (Opt)</span>
+                              <input
+                                type="number"
+                                min="2"
+                                value={tier.maxQty === 9999 ? '' : tier.maxQty || ''}
+                                onChange={(e) =>
+                                  handleUpdateVariantSlab(
+                                    idx,
+                                    slabIdx,
+                                    'maxQty',
+                                    Number(e.target.value) || 9999
+                                  )
+                                }
+                                placeholder="9999"
+                                className="w-full p-1 border border-gray-300 rounded text-xs bg-white outline-none focus:border-[#0F2C59]"
+                              />
+                            </div>
+                            <div className="flex-1 min-w-[80px]">
+                              <span className="text-[9px] text-gray-500 block">Slab Price (₹) *</span>
+                              <input
+                                type="number"
+                                step="any"
+                                min="0"
+                                value={tier.unitPrice || ''}
+                                onChange={(e) =>
+                                  handleUpdateVariantSlab(
+                                    idx,
+                                    slabIdx,
+                                    'unitPrice',
+                                    parseFloat(e.target.value) || 0
+                                  )
+                                }
+                                placeholder="₹ Price"
+                                className="w-full p-1 border border-emerald-300 rounded text-xs font-bold text-emerald-800 bg-white outline-none focus:border-emerald-600"
+                              />
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveVariantSlab(idx, slabIdx)}
+                              className="p-1 text-gray-400 hover:text-red-500 transition shrink-0 mt-3 sm:mt-0 cursor-pointer"
+                              title="Remove this slab"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-[10px] text-gray-500 mb-2 italic">
+                        No bulk discount slabs configured yet for this pack size.
+                      </p>
+                    )}
+
+                    {/* Visible "Add Slab" button below the slab section of EACH product variant */}
+                    <button
+                      type="button"
+                      id={`btn-add-slab-variant-${idx}`}
+                      onClick={() => handleAddSlabToVariant(idx)}
+                      className="w-full py-1.5 px-3 border border-dashed border-[#0F2C59]/40 hover:border-[#0F2C59] bg-white hover:bg-blue-50/60 text-[#0F2C59] font-bold text-xs rounded-lg flex items-center justify-center gap-1.5 transition cursor-pointer shadow-xs active:scale-98"
+                    >
+                      <Plus size={13} className="text-[#FF6B00]" />
+                      <span>+ Add Slab</span>
+                    </button>
                   </div>
                 </div>
               ))}

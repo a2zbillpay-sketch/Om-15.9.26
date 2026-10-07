@@ -17,6 +17,8 @@ import {
   WalletTransaction,
   AdminNotification,
   ProductRequest,
+  RepeatOrderNotice,
+  RepeatOrderResult,
 } from '../types';
 import {
   INITIAL_SETTINGS,
@@ -166,6 +168,10 @@ interface AppContextType {
   startEditingOrder: (order: Order) => void;
   cancelEditingOrder: () => void;
   saveEditedOrder: () => Promise<{ success: boolean; error?: string; updatedOrder?: Order }>;
+  repeatLastOrder: () => RepeatOrderResult;
+  repeatOrder: (order: Order) => RepeatOrderResult;
+  repeatOrderNotice: RepeatOrderNotice | null;
+  setRepeatOrderNotice: (notice: RepeatOrderNotice | null) => void;
   checkoutBreakdown: CheckoutBreakdown;
   useWalletBalance: boolean;
   setUseWalletBalance: (use: boolean) => void;
@@ -1259,6 +1265,156 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     products,
     isSupabaseConfigured,
   ]);
+
+  // Repeat Order notice & action state
+  const [repeatOrderNotice, setRepeatOrderNotice] = useState<RepeatOrderNotice | null>(null);
+
+  /**
+   * Repeat Order implementation:
+   * 1. Loads items and quantities from the specified past order.
+   * 2. Recalculates dynamically with current prices, bulk slabs, and discounts.
+   * 3. Skips any product/variant that is out of stock (stock <= 0) and surfaces clear notice.
+   * 4. Ensures editingOrder is strictly null, so checkout creates a new order without modifying the previous order.
+   */
+  const repeatOrder = useCallback(
+    (order: Order): RepeatOrderResult => {
+      // Never modify previous order: clear any editing state
+      setEditingOrder(null);
+      setSavedPreEditCart(null);
+
+      if (!order.items || order.items.length === 0) {
+        const res: RepeatOrderResult = {
+          success: false,
+          orderNumber: order.orderNumber,
+          loadedCount: 0,
+          skippedItems: [],
+          message: `Order #${order.orderNumber} contains no items to repeat.`,
+        };
+        setRepeatOrderNotice({
+          type: 'error',
+          message: res.message,
+          orderNumber: order.orderNumber,
+        });
+        return res;
+      }
+
+      const itemsForCart: CartItem[] = [];
+      const skippedItems: string[] = [];
+
+      for (const item of order.items) {
+        const match = findProductAndVariant(item, products);
+        if (!match) {
+          skippedItems.push(item.productName || item.variantName || 'Item no longer in catalog');
+          continue;
+        }
+
+        const { product, variant } = match;
+        const availableStock = Number(variant.stockQuantity) || 0;
+
+        // Skip product if out of stock
+        if (availableStock <= 0) {
+          const packLabel = variant.packLabel ? ` (${variant.packLabel})` : '';
+          skippedItems.push(`${product.name}${packLabel}`);
+          continue;
+        }
+
+        // Desired quantity from the past order
+        const requestedQty = Math.max(1, Number(item.quantity) || 1);
+        const maxLimit =
+          variant.maxOrderLimit && variant.maxOrderLimit > 0
+            ? variant.maxOrderLimit
+            : availableStock;
+        const finalQty = Math.min(requestedQty, availableStock, maxLimit);
+
+        itemsForCart.push({
+          productId: product.id,
+          product,
+          variantId: variant.id,
+          variant,
+          quantity: Math.max(1, finalQty),
+        });
+      }
+
+      if (itemsForCart.length === 0) {
+        const res: RepeatOrderResult = {
+          success: false,
+          orderNumber: order.orderNumber,
+          loadedCount: 0,
+          skippedItems,
+          message:
+            skippedItems.length > 0
+              ? `Could not repeat order #${order.orderNumber}: all items are currently out of stock.`
+              : `All items from order #${order.orderNumber} are no longer available.`,
+        };
+        setRepeatOrderNotice({
+          type: 'error',
+          message: res.message,
+          skippedItems,
+          orderNumber: order.orderNumber,
+        });
+        return res;
+      }
+
+      // Load products into active cart
+      setCart(itemsForCart);
+      if (currentUser?.phone) {
+        saveCustomerCart(currentUser.phone, itemsForCart);
+      }
+
+      const hasSkipped = skippedItems.length > 0;
+      const successMessage = hasSkipped
+        ? `Added ${itemsForCart.length} available ${itemsForCart.length === 1 ? 'item' : 'items'} from Order #${order.orderNumber} to cart. ${skippedItems.length} out-of-stock ${skippedItems.length === 1 ? 'item was' : 'items were'} skipped.`
+        : `Loaded all ${itemsForCart.length} ${itemsForCart.length === 1 ? 'item' : 'items'} from Order #${order.orderNumber} into cart at current prices & discounts!`;
+
+      const res: RepeatOrderResult = {
+        success: true,
+        orderNumber: order.orderNumber,
+        loadedCount: itemsForCart.length,
+        skippedItems,
+        message: successMessage,
+      };
+
+      setRepeatOrderNotice({
+        type: hasSkipped ? 'warning' : 'success',
+        message: successMessage,
+        skippedItems,
+        orderNumber: order.orderNumber,
+      });
+
+      return res;
+    },
+    [products, currentUser?.phone]
+  );
+
+  const repeatLastOrder = useCallback((): RepeatOrderResult => {
+    // Find customer's past orders
+    const customerOrders = orders.filter((o) => {
+      const matchId = currentUser.id && o.userId === currentUser.id;
+      const matchPhone = currentUser.phone && o.customerPhone === currentUser.phone;
+      return matchId || matchPhone;
+    });
+
+    if (customerOrders.length === 0) {
+      const res: RepeatOrderResult = {
+        success: false,
+        loadedCount: 0,
+        skippedItems: [],
+        message: 'No previous orders found to repeat. Explore our catalog to place your first order!',
+      };
+      setRepeatOrderNotice({
+        type: 'error',
+        message: res.message,
+      });
+      return res;
+    }
+
+    // Pick most recent order by createdAt
+    const mostRecentOrder = [...customerOrders].sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    )[0];
+
+    return repeatOrder(mostRecentOrder);
+  }, [orders, currentUser.id, currentUser.phone, repeatOrder]);
 
   // Customer outstanding balance calculation (Source of truth: persistent orders & DB)
   const customerOutstanding = useMemo(() => {
@@ -2375,6 +2531,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         startEditingOrder,
         cancelEditingOrder,
         saveEditedOrder,
+        repeatLastOrder,
+        repeatOrder,
+        repeatOrderNotice,
+        setRepeatOrderNotice,
         checkoutBreakdown,
         useWalletBalance,
         setUseWalletBalance,

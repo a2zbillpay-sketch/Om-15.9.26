@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { X, Plus, Layers, Check, AlertCircle, Info, Tag } from 'lucide-react';
+import { X, Plus, Layers, Check, AlertCircle, Info, Tag, Trash2 } from 'lucide-react';
 import { Product, ProductVariant, UnitType, TieredPrice } from '../types';
 import { formatVariantPack } from '../utils/variantFormatter';
 
@@ -8,6 +8,13 @@ interface AddVariantModalProps {
   isOpen: boolean;
   onClose: () => void;
   onAddVariant: (productId: string, newVariant: ProductVariant) => void;
+}
+
+export interface VariantSlabItem {
+  id: string;
+  minQty: string;
+  maxQty: string;
+  unitPrice: string;
 }
 
 export const AddVariantModal: React.FC<AddVariantModalProps> = ({
@@ -26,10 +33,11 @@ export const AddVariantModal: React.FC<AddVariantModalProps> = ({
   const [stockQuantity, setStockQuantity] = useState<string>('');
   const [maxOrderLimit, setMaxOrderLimit] = useState<string>('');
 
-  // Wholesale bulk slab
+  // Wholesale bulk slabs
   const [enableTierSlab, setEnableTierSlab] = useState(false);
-  const [tierMinQty, setTierMinQty] = useState<string>('');
-  const [tierUnitPrice, setTierUnitPrice] = useState<string>('');
+  const [slabs, setSlabs] = useState<VariantSlabItem[]>([
+    { id: 'slab-1', minQty: '', maxQty: '', unitPrice: '' },
+  ]);
 
   const [validationError, setValidationError] = useState<string | null>(null);
   const [savedSuccess, setSavedSuccess] = useState(false);
@@ -46,8 +54,7 @@ export const AddVariantModal: React.FC<AddVariantModalProps> = ({
       setStockQuantity('');
       setMaxOrderLimit('');
       setEnableTierSlab(false);
-      setTierMinQty('');
-      setTierUnitPrice('');
+      setSlabs([{ id: 'slab-1', minQty: '', maxQty: '', unitPrice: '' }]);
       setValidationError(null);
       setSavedSuccess(false);
     }
@@ -82,6 +89,30 @@ export const AddVariantModal: React.FC<AddVariantModalProps> = ({
     }
   };
 
+  const handleAddSlab = () => {
+    setSlabs((prev) => [
+      ...prev,
+      { id: `slab-${Date.now()}-${prev.length}`, minQty: '', maxQty: '', unitPrice: '' },
+    ]);
+  };
+
+  const handleUpdateSlab = (index: number, field: keyof VariantSlabItem, val: string) => {
+    setSlabs((prev) => {
+      const updated = [...prev];
+      updated[index] = { ...updated[index], [field]: val };
+      return updated;
+    });
+  };
+
+  const handleRemoveSlab = (index: number) => {
+    setSlabs((prev) => {
+      if (prev.length <= 1) {
+        return [{ id: `slab-${Date.now()}`, minQty: '', maxQty: '', unitPrice: '' }];
+      }
+      return prev.filter((_, i) => i !== index);
+    });
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setValidationError(null);
@@ -114,17 +145,31 @@ export const AddVariantModal: React.FC<AddVariantModalProps> = ({
     }
 
     if (enableTierSlab) {
-      if (!tierMinQty || Number(tierMinQty) <= 1) {
-        setValidationError('Please specify Wholesale Min Quantity (minimum 2 or more).');
+      const filledSlabs = slabs.filter(
+        (s) => s.minQty.trim() !== '' || s.unitPrice.trim() !== ''
+      );
+      if (filledSlabs.length === 0) {
+        setValidationError('Please enter at least one Wholesale Slab or disable the slab option.');
         return;
       }
-      if (!tierUnitPrice || Number(tierUnitPrice) <= 0) {
-        setValidationError('Please specify Wholesale Slab Unit Price in ₹.');
-        return;
-      }
-      if (Number(tierUnitPrice) > Number(baseSellingPrice)) {
-        setValidationError(`Wholesale Slab Price (₹${tierUnitPrice}) cannot exceed Base Selling Price (₹${baseSellingPrice}).`);
-        return;
+      for (let i = 0; i < filledSlabs.length; i++) {
+        const s = filledSlabs[i];
+        if (!s.minQty || Number(s.minQty) <= 1) {
+          setValidationError(`Slab #${i + 1}: Please specify Wholesale Min Quantity (minimum 2 or more).`);
+          return;
+        }
+        if (!s.unitPrice || Number(s.unitPrice) <= 0) {
+          setValidationError(`Slab #${i + 1}: Please specify Wholesale Slab Unit Price in ₹.`);
+          return;
+        }
+        if (Number(s.unitPrice) > numSellingPrice) {
+          setValidationError(`Slab #${i + 1}: Wholesale Slab Price (₹${s.unitPrice}) cannot exceed Base Selling Price (₹${numSellingPrice}).`);
+          return;
+        }
+        if (s.maxQty && Number(s.maxQty) < Number(s.minQty)) {
+          setValidationError(`Slab #${i + 1}: Max Quantity cannot be less than Min Quantity.`);
+          return;
+        }
       }
     }
 
@@ -142,18 +187,17 @@ export const AddVariantModal: React.FC<AddVariantModalProps> = ({
 
     const variantId = `var-${product.id}-${Date.now()}`;
 
-    const tieredPrices: TieredPrice[] =
-      enableTierSlab && Number(tierMinQty) > 0 && Number(tierUnitPrice) > 0
-        ? [
-            {
-              id: `tp-${Date.now()}`,
-              variantId,
-              minQty: Number(tierMinQty),
-              maxQty: 9999,
-              unitPrice: Number(tierUnitPrice),
-            },
-          ]
-        : [];
+    const tieredPrices: TieredPrice[] = enableTierSlab
+      ? slabs
+          .filter((s) => Number(s.minQty) > 0 && Number(s.unitPrice) > 0)
+          .map((s, sIdx) => ({
+            id: `tp-${Date.now()}-${sIdx}`,
+            variantId,
+            minQty: Number(s.minQty),
+            maxQty: s.maxQty && Number(s.maxQty) >= Number(s.minQty) ? Number(s.maxQty) : 9999,
+            unitPrice: Number(s.unitPrice),
+          }))
+      : [];
 
     const newVariant: ProductVariant = {
       id: variantId,
@@ -402,33 +446,83 @@ export const AddVariantModal: React.FC<AddVariantModalProps> = ({
             </div>
 
             {enableTierSlab && (
-              <div className="grid grid-cols-2 gap-2 pt-2 border-t border-gray-200">
-                <div>
-                  <label className="text-[10px] font-bold text-gray-600 block mb-1">
-                    Min Quantity for Slab
-                  </label>
-                  <input
-                    type="number"
-                    min="2"
-                    value={tierMinQty}
-                    onChange={(e) => setTierMinQty(e.target.value)}
-                    placeholder="e.g. 5"
-                    className="w-full p-2 border border-gray-300 rounded-lg text-xs bg-white outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="text-[10px] font-bold text-gray-600 block mb-1">
-                    Slab Unit Price (₹)
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    value={tierUnitPrice}
-                    onChange={(e) => setTierUnitPrice(e.target.value)}
-                    placeholder="e.g. 80"
-                    className="w-full p-2 border border-gray-300 rounded-lg text-xs font-bold text-emerald-800 bg-white outline-none"
-                  />
-                </div>
+              <div className="space-y-2.5 pt-2 border-t border-gray-200">
+                {slabs.map((slab, sIdx) => (
+                  <div
+                    key={slab.id}
+                    className="p-3 bg-white border border-gray-200 rounded-xl space-y-2 shadow-xs"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-black uppercase text-[#0F2C59] tracking-wider flex items-center gap-1">
+                        <span>Slab #{sIdx + 1}</span>
+                      </span>
+                      {slabs.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveSlab(sIdx)}
+                          className="text-gray-400 hover:text-red-600 text-xs flex items-center gap-1 p-1 rounded-md transition cursor-pointer hover:bg-red-50"
+                          title="Remove this slab"
+                        >
+                          <Trash2 size={13} />
+                          <span className="text-[10px] font-semibold">Remove</span>
+                        </button>
+                      )}
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                      <div>
+                        <label className="text-[10px] font-bold text-gray-600 block mb-1">
+                          Min Quantity *
+                        </label>
+                        <input
+                          type="number"
+                          min="2"
+                          value={slab.minQty}
+                          onChange={(e) => handleUpdateSlab(sIdx, 'minQty', e.target.value)}
+                          placeholder="e.g. 5"
+                          className="w-full p-2 border border-gray-300 rounded-lg text-xs bg-white outline-none focus:border-[#0F2C59]"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-gray-600 block mb-1">
+                          Max Quantity <span className="text-gray-400 font-normal">(Optional)</span>
+                        </label>
+                        <input
+                          type="number"
+                          min="2"
+                          value={slab.maxQty}
+                          onChange={(e) => handleUpdateSlab(sIdx, 'maxQty', e.target.value)}
+                          placeholder="e.g. 19 or leave empty"
+                          className="w-full p-2 border border-gray-300 rounded-lg text-xs bg-white outline-none focus:border-[#0F2C59]"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-gray-600 block mb-1">
+                          Slab Unit Price (₹) *
+                        </label>
+                        <input
+                          type="number"
+                          step="any"
+                          min="0"
+                          value={slab.unitPrice}
+                          onChange={(e) => handleUpdateSlab(sIdx, 'unitPrice', e.target.value)}
+                          placeholder="e.g. 80"
+                          className="w-full p-2 border border-emerald-400 rounded-lg text-xs font-bold text-emerald-800 bg-white outline-none focus:border-emerald-600"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+
+                {/* Visible "Add Slab" button below the slab section of product variant */}
+                <button
+                  type="button"
+                  id="btn-add-slab"
+                  onClick={handleAddSlab}
+                  className="w-full py-2.5 px-3 border-2 border-dashed border-[#0F2C59]/40 hover:border-[#0F2C59] bg-white hover:bg-blue-50/60 text-[#0F2C59] font-extrabold text-xs rounded-xl flex items-center justify-center gap-1.5 transition cursor-pointer shadow-xs active:scale-98"
+                >
+                  <Plus size={15} className="text-[#FF6B00]" />
+                  <span>+ Add Slab</span>
+                </button>
               </div>
             )}
           </div>

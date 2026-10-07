@@ -1,5 +1,16 @@
 import React from 'react';
-import { X, Clock, CheckCircle2, AlertTriangle, ChevronRight, Package, Truck, ArrowRight, Edit3 } from 'lucide-react';
+import {
+  X,
+  Clock,
+  CheckCircle2,
+  AlertTriangle,
+  ChevronRight,
+  Package,
+  Truck,
+  ArrowRight,
+  Edit3,
+  RotateCcw,
+} from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { Order, OrderStatus, PaymentMethod, PaymentStatus } from '../types';
 import { canCancelOrder, getRemainingCancellationMinutes } from '../lib/engine/checkout-calculator';
@@ -12,18 +23,26 @@ interface CustomerOrdersDrawerProps {
   isOpen: boolean;
   onClose: () => void;
   onSelectOrder: (order: Order) => void;
+  onOpenCart?: () => void;
 }
 
 export const CustomerOrdersDrawer: React.FC<CustomerOrdersDrawerProps> = ({
   isOpen,
   onClose,
   onSelectOrder,
+  onOpenCart,
 }) => {
-  const { orders, currentUser, startEditingOrder } = useApp();
+  const { orders, currentUser, startEditingOrder, repeatLastOrder, repeatOrder } = useApp();
 
   if (!isOpen) return null;
 
-  const customerOrders = orders.filter((o) => o.userId === currentUser.id);
+  const customerOrders = orders
+    .filter(
+      (o) =>
+        o.userId === currentUser.id ||
+        (currentUser.phone && o.customerPhone === currentUser.phone)
+    )
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
   return (
     <div className="fixed inset-0 z-50 overflow-hidden bg-black/60 backdrop-blur-sm flex justify-end animate-fadeIn">
@@ -34,7 +53,7 @@ export const CustomerOrdersDrawer: React.FC<CustomerOrdersDrawerProps> = ({
             <h2 className="font-extrabold text-base text-[#D4AF37]">
               My Orders ({customerOrders.length})
             </h2>
-            <p className="text-[11px] text-gray-300">Track fulfillment & 15-min cancellation</p>
+            <p className="text-[11px] text-gray-300">Track fulfillment & 1-tap repeat orders</p>
           </div>
           <button
             onClick={onClose}
@@ -46,6 +65,38 @@ export const CustomerOrdersDrawer: React.FC<CustomerOrdersDrawerProps> = ({
 
         {/* Orders List */}
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
+          {customerOrders.length > 0 && (
+            <button
+              type="button"
+              id="btn-repeat-last-order-drawer-top"
+              onClick={() => {
+                repeatLastOrder();
+                onClose();
+                if (onOpenCart) onOpenCart();
+              }}
+              className="w-full bg-gradient-to-r from-[#0F2C59] to-[#163a6e] hover:brightness-110 text-white p-3 rounded-xl font-extrabold text-xs flex items-center justify-between shadow-md transition cursor-pointer border border-[#D4AF37]/50 active:scale-98"
+              title="Repeat your most recent order with current prices & discounts"
+            >
+              <div className="flex items-center gap-2.5">
+                <div className="w-7 h-7 rounded-lg bg-[#D4AF37] text-[#0F2C59] flex items-center justify-center font-black">
+                  <RotateCcw size={14} />
+                </div>
+                <div className="text-left">
+                  <div className="text-[10px] text-[#D4AF37] uppercase tracking-wider font-semibold">
+                    1-Tap Reorder
+                  </div>
+                  <div className="text-xs font-black text-white">
+                    Repeat Last Order (#{customerOrders[0].orderNumber})
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-1 text-[11px] text-amber-200 font-bold">
+                <span>Load Cart</span>
+                <ArrowRight size={13} />
+              </div>
+            </button>
+          )}
+
           {customerOrders.length === 0 ? (
             <div className="text-center py-16 px-4">
               <div className="text-4xl mb-2">📦</div>
@@ -165,7 +216,22 @@ export const CustomerOrdersDrawer: React.FC<CustomerOrdersDrawerProps> = ({
                       </span>
                     </div>
 
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          repeatOrder(order);
+                          onClose();
+                          if (onOpenCart) onOpenCart();
+                        }}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-white text-[11px] font-bold rounded-lg shadow-2xs transition active:scale-95 cursor-pointer"
+                        title="Load items from this order into cart as a new order"
+                      >
+                        <RotateCcw size={11} />
+                        <span>Repeat</span>
+                      </button>
+
                       {isCancellable && (
                         <button
                           type="button"
@@ -177,7 +243,7 @@ export const CustomerOrdersDrawer: React.FC<CustomerOrdersDrawerProps> = ({
                           className="inline-flex items-center gap-1 px-2.5 py-1 bg-[#0F2C59] hover:bg-[#153e7d] text-white text-[11px] font-bold rounded-lg shadow-xs transition active:scale-95 cursor-pointer"
                         >
                           <Edit3 size={12} className="text-[#D4AF37]" />
-                          <span>Edit Order</span>
+                          <span>Edit</span>
                         </button>
                       )}
                       <span className="text-[#0F2C59] font-bold text-[11px] flex items-center gap-0.5 hover:underline">

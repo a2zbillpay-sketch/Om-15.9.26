@@ -36,7 +36,7 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
   onClose,
   onOpenCart,
 }) => {
-  const { orders, cancelOrder, startEditingOrder, currentUser } = useApp();
+  const { orders, cancelOrder, startEditingOrder, repeatOrder, currentUser } = useApp();
   const [secondsRemaining, setSecondsRemaining] = useState<number>(0);
   const [cancelMessage, setCancelMessage] = useState<string | null>(null);
 
@@ -449,10 +449,27 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="p-4 bg-gray-100 border-t border-gray-200 flex justify-end">
+        <div className="p-4 bg-gray-100 border-t border-gray-200 flex items-center justify-between gap-2">
+          {currentOrder && (
+            <button
+              type="button"
+              id="btn-repeat-order-tracking"
+              onClick={() => {
+                repeatOrder(currentOrder);
+                onClose();
+                if (onOpenCart) onOpenCart();
+              }}
+              className="px-4 py-2 bg-gradient-to-r from-amber-500 to-amber-600 hover:brightness-105 text-white text-xs font-extrabold rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer active:scale-95"
+              title="Reload items from this order into your cart at current prices"
+            >
+              <RotateCcw size={13} />
+              <span>Repeat Order</span>
+            </button>
+          )}
+
           <button
             onClick={onClose}
-            className="px-4 py-2 bg-[#0F2C59] text-white text-xs font-bold rounded-xl"
+            className="px-4 py-2 bg-[#0F2C59] hover:bg-[#163a6e] text-white text-xs font-bold rounded-xl cursor-pointer"
           >
             Close
           </button>

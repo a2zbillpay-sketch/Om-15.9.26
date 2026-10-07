@@ -342,6 +342,7 @@ const MainLayout: React.FC = () => {
         isOpen={isOrdersDrawerOpen}
         onClose={() => setIsOrdersDrawerOpen(false)}
         onSelectOrder={(order) => setSelectedTrackingOrder(order)}
+        onOpenCart={() => setIsCartOpen(true)}
       />
 
       <OrderTrackingModal

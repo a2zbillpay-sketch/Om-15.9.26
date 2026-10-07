@@ -73,6 +73,7 @@ export interface VariantFormRow {
   wholesaleMinQty: string;
   wholesaleMaxQty: string;
   wholesalePrice: string;
+  slabs?: { id: string; minQty: string; maxQty: string; unitPrice: string }[];
 }
 
 const COMMON_PACK_PRESETS: { label: string; size: string; unit: UnitType }[] = [
@@ -104,6 +105,7 @@ const createBlankVariantRow = (customSize = '', customUnit: UnitType | '' = ''):
   wholesaleMinQty: '',
   wholesaleMaxQty: '',
   wholesalePrice: '',
+  slabs: [],
 });
 
 export const AdminDashboard: React.FC = () => {
@@ -395,6 +397,76 @@ export const AdminDashboard: React.FC = () => {
     });
   };
 
+  // Add a new wholesale slab to a specific variant row
+  const handleAddSlabToVariantRow = (variantIdx: number) => {
+    setVariantRows((prev) => {
+      const updated = [...prev];
+      const row = updated[variantIdx];
+      const currentSlabs = Array.isArray(row.slabs) ? [...row.slabs] : [];
+      if (currentSlabs.length === 0 && row.wholesaleMinQty && row.wholesalePrice) {
+        currentSlabs.push({
+          id: `slab-${Date.now()}-0`,
+          minQty: row.wholesaleMinQty,
+          maxQty: row.wholesaleMaxQty || '',
+          unitPrice: row.wholesalePrice,
+        });
+      }
+      currentSlabs.push({
+        id: `slab-${Date.now()}-${currentSlabs.length}`,
+        minQty: '',
+        maxQty: '',
+        unitPrice: '',
+      });
+      updated[variantIdx] = {
+        ...row,
+        slabs: currentSlabs,
+      };
+      return updated;
+    });
+  };
+
+  const handleUpdateVariantRowSlab = (
+    variantIdx: number,
+    slabIdx: number,
+    field: 'minQty' | 'maxQty' | 'unitPrice',
+    val: string
+  ) => {
+    setVariantRows((prev) => {
+      const updated = [...prev];
+      const row = updated[variantIdx];
+      const currentSlabs = Array.isArray(row.slabs) ? [...row.slabs] : [];
+      if (!currentSlabs[slabIdx]) return prev;
+      currentSlabs[slabIdx] = {
+        ...currentSlabs[slabIdx],
+        [field]: val,
+      };
+      if (slabIdx === 0) {
+        if (field === 'minQty') row.wholesaleMinQty = val;
+        if (field === 'maxQty') row.wholesaleMaxQty = val;
+        if (field === 'unitPrice') row.wholesalePrice = val;
+      }
+      updated[variantIdx] = {
+        ...row,
+        slabs: currentSlabs,
+      };
+      return updated;
+    });
+  };
+
+  const handleRemoveVariantRowSlab = (variantIdx: number, slabIdx: number) => {
+    setVariantRows((prev) => {
+      const updated = [...prev];
+      const row = updated[variantIdx];
+      const currentSlabs = Array.isArray(row.slabs) ? [...row.slabs] : [];
+      currentSlabs.splice(slabIdx, 1);
+      updated[variantIdx] = {
+        ...row,
+        slabs: currentSlabs,
+      };
+      return updated;
+    });
+  };
+
   // KPI Calculations
   const totalRevenue = orders
     .filter((o) => o.status !== OrderStatus.CANCELLED)
@@ -602,18 +674,29 @@ export const AdminDashboard: React.FC = () => {
         unit: u,
       });
 
-      const tieredPrices: TieredPrice[] =
-        row.wholesaleMinQty && row.wholesalePrice && Number(row.wholesalePrice) > 0
-          ? [
-              {
-                id: `tp-${Date.now()}-${idx}`,
-                variantId,
-                minQty: Number(row.wholesaleMinQty),
-                maxQty: row.wholesaleMaxQty ? Number(row.wholesaleMaxQty) : 9999,
-                unitPrice: Number(row.wholesalePrice),
-              },
-            ]
-          : [];
+      const rowSlabs = Array.isArray(row.slabs) && row.slabs.length > 0
+        ? row.slabs
+            .filter((s) => Number(s.minQty) > 0 && Number(s.unitPrice) > 0)
+            .map((s, sIdx) => ({
+              id: `tp-${Date.now()}-${idx}-${sIdx}`,
+              variantId,
+              minQty: Number(s.minQty),
+              maxQty: s.maxQty && Number(s.maxQty) >= Number(s.minQty) ? Number(s.maxQty) : 9999,
+              unitPrice: Number(s.unitPrice),
+            }))
+        : row.wholesaleMinQty && row.wholesalePrice && Number(row.wholesalePrice) > 0
+        ? [
+            {
+              id: `tp-${Date.now()}-${idx}`,
+              variantId,
+              minQty: Number(row.wholesaleMinQty),
+              maxQty: row.wholesaleMaxQty ? Number(row.wholesaleMaxQty) : 9999,
+              unitPrice: Number(row.wholesalePrice),
+            },
+          ]
+        : [];
+
+      const tieredPrices: TieredPrice[] = rowSlabs;
 
       const rowMrp = Number(row.mrp);
       const rowSalePrice =
@@ -2027,7 +2110,8 @@ export const AdminDashboard: React.FC = () => {
                       </thead>
                       <tbody className="divide-y divide-gray-200">
                         {variantRows.map((row, idx) => (
-                          <tr key={row.id} className="hover:bg-blue-50/30 transition">
+                          <React.Fragment key={row.id}>
+                          <tr className="hover:bg-blue-50/30 transition">
                             {/* Row Index */}
                             <td className="p-2.5 text-center font-bold text-gray-500 font-mono text-[11px]">
                               {idx + 1}
@@ -2187,6 +2271,108 @@ export const AdminDashboard: React.FC = () => {
                               </div>
                             </td>
                           </tr>
+
+                          {/* Wholesale Bulk Discount Slab (Optional) for EACH product variant */}
+                          <tr key={`${row.id}-slabs`} className="bg-amber-50/15 border-b border-gray-200">
+                            <td colSpan={11} className="p-2.5">
+                              <div className="bg-white rounded-xl border border-amber-200/80 p-2.5 space-y-2">
+                                <div className="flex items-center justify-between">
+                                  <div className="flex items-center gap-1.5 font-bold text-gray-800 text-xs">
+                                    <Layers size={13} className="text-[#FF6B00]" />
+                                    <span>Wholesale Bulk Discount Slab (Optional)</span>
+                                    <span className="text-[10px] text-gray-500 font-normal">
+                                      for {row.packSize ? `${row.packSize} ${row.unit || ''}` : `Variant #${idx + 1}`}
+                                    </span>
+                                  </div>
+                                  {row.slabs && row.slabs.length > 0 && (
+                                    <span className="text-[10px] bg-amber-100 text-amber-800 font-bold px-1.5 py-0.2 rounded-full">
+                                      {row.slabs.length} {row.slabs.length === 1 ? 'Slab' : 'Slabs'}
+                                    </span>
+                                  )}
+                                </div>
+
+                                {/* List of independent slabs for this variant */}
+                                {row.slabs && row.slabs.length > 0 ? (
+                                  <div className="space-y-1.5">
+                                    {row.slabs.map((slab, sIdx) => (
+                                      <div
+                                        key={slab.id}
+                                        className="p-2 bg-gray-50 border border-gray-200 rounded-lg flex items-center gap-2 flex-wrap sm:flex-nowrap"
+                                      >
+                                        <span className="text-[10px] font-black text-[#0F2C59] w-12 shrink-0">
+                                          #{sIdx + 1}
+                                        </span>
+                                        <div className="flex-1 min-w-[70px]">
+                                          <span className="text-[9px] text-gray-500 block">Min Qty *</span>
+                                          <input
+                                            type="number"
+                                            min="2"
+                                            placeholder="Min Qty"
+                                            value={slab.minQty}
+                                            onChange={(e) =>
+                                              handleUpdateVariantRowSlab(idx, sIdx, 'minQty', e.target.value)
+                                            }
+                                            className="w-full p-1 border border-gray-300 rounded text-xs bg-white outline-none focus:border-[#0F2C59]"
+                                          />
+                                        </div>
+                                        <div className="flex-1 min-w-[70px]">
+                                          <span className="text-[9px] text-gray-500 block">Max Qty (Opt)</span>
+                                          <input
+                                            type="number"
+                                            min="2"
+                                            placeholder="Max Qty"
+                                            value={slab.maxQty}
+                                            onChange={(e) =>
+                                              handleUpdateVariantRowSlab(idx, sIdx, 'maxQty', e.target.value)
+                                            }
+                                            className="w-full p-1 border border-gray-300 rounded text-xs bg-white outline-none focus:border-[#0F2C59]"
+                                          />
+                                        </div>
+                                        <div className="flex-1 min-w-[80px]">
+                                          <span className="text-[9px] text-gray-500 block">Slab Price (₹) *</span>
+                                          <input
+                                            type="number"
+                                            step="any"
+                                            min="0"
+                                            placeholder="Wholesale ₹"
+                                            value={slab.unitPrice}
+                                            onChange={(e) =>
+                                              handleUpdateVariantRowSlab(idx, sIdx, 'unitPrice', e.target.value)
+                                            }
+                                            className="w-full p-1 border border-emerald-300 rounded text-xs font-bold text-emerald-800 bg-white outline-none focus:border-emerald-600"
+                                          />
+                                        </div>
+                                        <button
+                                          type="button"
+                                          onClick={() => handleRemoveVariantRowSlab(idx, sIdx)}
+                                          className="p-1 text-gray-400 hover:text-red-500 transition shrink-0 mt-3 sm:mt-0 cursor-pointer"
+                                          title="Remove this slab"
+                                        >
+                                          <Trash2 size={13} />
+                                        </button>
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <p className="text-[10px] text-gray-500 italic">
+                                    No wholesale bulk discount slabs added for this pack variant yet.
+                                  </p>
+                                )}
+
+                                {/* Visible "Add Slab" button below the slab section of EACH product variant */}
+                                <button
+                                  type="button"
+                                  id={`btn-add-slab-row-${idx}`}
+                                  onClick={() => handleAddSlabToVariantRow(idx)}
+                                  className="w-full py-1.5 px-3 border border-dashed border-[#0F2C59]/40 hover:border-[#0F2C59] bg-white hover:bg-blue-50/60 text-[#0F2C59] font-bold text-xs rounded-lg flex items-center justify-center gap-1.5 transition cursor-pointer shadow-xs active:scale-98"
+                                >
+                                  <Plus size={13} className="text-[#FF6B00]" />
+                                  <span>+ Add Slab</span>
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                          </React.Fragment>
                         ))}
                       </tbody>
                     </table>

@@ -1,5 +1,20 @@
-import React, { useState } from 'react';
-import { X, Trash2, Plus, Minus, ArrowRight, ShieldCheck, Truck, Sparkles, Package, AlertCircle, Check } from 'lucide-react';
+import React, { useState, useMemo } from 'react';
+import {
+  X,
+  Trash2,
+  Plus,
+  Minus,
+  ArrowRight,
+  ShieldCheck,
+  Truck,
+  Sparkles,
+  Package,
+  AlertCircle,
+  AlertTriangle,
+  CheckCircle2,
+  Check,
+  RotateCcw,
+} from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { PaymentMethod, Order } from '../types';
 import { getActiveUnitPrice } from '../lib/engine/checkout-calculator';
@@ -29,9 +44,30 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
     editingOrder,
     cancelEditingOrder,
     saveEditedOrder,
+    orders,
+    currentUser,
+    repeatLastOrder,
+    repeatOrderNotice,
+    setRepeatOrderNotice,
   } = useApp();
   const [zoomImage, setZoomImage] = useState<{ url: string; name: string; brand?: string } | null>(null);
   const [isSavingOrder, setIsSavingOrder] = useState<boolean>(false);
+
+  // Customer past orders
+  const customerOrders = useMemo(() => {
+    return orders.filter(
+      (o) =>
+        (currentUser.id && o.userId === currentUser.id) ||
+        (currentUser.phone && o.customerPhone === currentUser.phone)
+    );
+  }, [orders, currentUser.id, currentUser.phone]);
+
+  const lastOrder = useMemo(() => {
+    if (customerOrders.length === 0) return null;
+    return [...customerOrders].sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    )[0];
+  }, [customerOrders]);
 
   if (!isOpen) return null;
 
@@ -122,10 +158,73 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
           </div>
         </div>
 
+        {/* Repeat Order Notification Banner */}
+        {repeatOrderNotice && (
+          <div
+            id="cart-repeat-order-notice"
+            className={`m-3 p-3 rounded-xl border text-xs flex items-start justify-between gap-2 shadow-2xs ${
+              repeatOrderNotice.type === 'warning'
+                ? 'bg-amber-50 border-amber-300 text-amber-950'
+                : repeatOrderNotice.type === 'error'
+                ? 'bg-red-50 border-red-300 text-red-950'
+                : 'bg-emerald-50 border-emerald-300 text-emerald-950'
+            }`}
+          >
+            <div className="flex items-start gap-2 min-w-0">
+              <div
+                className={`w-6 h-6 rounded-lg flex items-center justify-center shrink-0 mt-0.5 text-white ${
+                  repeatOrderNotice.type === 'warning'
+                    ? 'bg-amber-500'
+                    : repeatOrderNotice.type === 'error'
+                    ? 'bg-red-500'
+                    : 'bg-emerald-600'
+                }`}
+              >
+                {repeatOrderNotice.type === 'warning' ? (
+                  <AlertTriangle size={13} />
+                ) : repeatOrderNotice.type === 'error' ? (
+                  <AlertCircle size={13} />
+                ) : (
+                  <CheckCircle2 size={13} />
+                )}
+              </div>
+              <div className="space-y-0.5 min-w-0">
+                <div className="font-extrabold text-xs">
+                  {repeatOrderNotice.type === 'warning'
+                    ? 'Out-of-Stock Items Skipped'
+                    : repeatOrderNotice.type === 'error'
+                    ? 'Notice'
+                    : 'Last Order Reloaded'}
+                </div>
+                <p className="text-[11px] leading-relaxed">{repeatOrderNotice.message}</p>
+                {repeatOrderNotice.skippedItems && repeatOrderNotice.skippedItems.length > 0 && (
+                  <div className="mt-1.5 p-2 bg-white/90 rounded-lg border border-amber-200">
+                    <span className="font-bold text-[10px] text-amber-900 block mb-0.5">
+                      Skipped (Out of Stock):
+                    </span>
+                    <ul className="list-disc list-inside space-y-0.5 text-[10px] text-amber-800">
+                      {repeatOrderNotice.skippedItems.map((item, idx) => (
+                        <li key={idx}>{item}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setRepeatOrderNotice(null)}
+              className="text-gray-400 hover:text-gray-700 p-1 shrink-0 cursor-pointer"
+            >
+              <X size={14} />
+            </button>
+          </div>
+        )}
+
         {/* Cart Items List */}
         <div className="flex-1 overflow-y-auto p-4 space-y-3 divide-y divide-gray-100">
           {cart.length === 0 ? (
-            <div className="text-center py-16 px-4">
+            <div className="text-center py-12 px-4">
               <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-3 text-gray-400">
                 🛒
               </div>
@@ -133,12 +232,25 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
               <p className="text-xs text-gray-500 mt-1">
                 Explore our wholesale groceries and necessities to add items.
               </p>
-              <button
-                onClick={onClose}
-                className="mt-4 bg-[#0F2C59] text-white text-xs font-bold px-4 py-2 rounded-xl"
-              >
-                Browse Products
-              </button>
+              <div className="mt-4 flex flex-col gap-2 items-center">
+                <button
+                  onClick={onClose}
+                  className="w-full max-w-xs bg-[#0F2C59] hover:bg-[#153e7d] text-white text-xs font-bold px-4 py-2.5 rounded-xl cursor-pointer"
+                >
+                  Browse Products
+                </button>
+                {lastOrder && (
+                  <button
+                    type="button"
+                    id="btn-repeat-last-order-cart-empty"
+                    onClick={() => repeatLastOrder()}
+                    className="w-full max-w-xs bg-gradient-to-r from-amber-500 to-amber-600 hover:brightness-105 text-white text-xs font-extrabold px-4 py-2.5 rounded-xl shadow-xs transition flex items-center justify-center gap-1.5 cursor-pointer active:scale-95"
+                  >
+                    <RotateCcw size={13} />
+                    <span>Repeat Last Order (#{lastOrder.orderNumber})</span>
+                  </button>
+                )}
+              </div>
             </div>
           ) : (
             cart.map((item) => {

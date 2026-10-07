@@ -272,3 +272,19 @@ export interface ProductRequest {
   requestDate: string;
   createdAt: string;
 }
+
+export interface RepeatOrderNotice {
+  type: 'success' | 'warning' | 'error';
+  message: string;
+  skippedItems?: string[];
+  orderNumber?: string;
+}
+
+export interface RepeatOrderResult {
+  success: boolean;
+  orderNumber?: string;
+  loadedCount: number;
+  skippedItems: string[];
+  message: string;
+}
+

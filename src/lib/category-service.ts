@@ -11,7 +11,24 @@ export async function fetchCategoriesFromDb(): Promise<Category[] | null> {
   if (!supabase) return null;
 
   try {
-    // Access categories from the existing products catalog in Supabase
+    // 1. First attempt to read directly from public.categories table
+    const { data: catData, error: catError } = await supabase
+      .from('categories')
+      .select('id, name, image_url');
+
+    if (!catError && Array.isArray(catData) && catData.length > 0) {
+      const dbCategories: Category[] = catData.map((row) => ({
+        id: row.id,
+        name: row.name,
+        imageUrl: (row.image_url && String(row.image_url).trim()) || '',
+      }));
+
+      const dbIds = new Set(dbCategories.map((c) => c.id));
+      const remainingInitials = INITIAL_CATEGORIES.filter((c) => !dbIds.has(c.id));
+      return [...dbCategories, ...remainingInitials].sort((a, b) => a.name.localeCompare(b.name));
+    }
+
+    // 2. Fallback: Access categories from the existing products catalog in Supabase
     const { data: prodData, error: prodError } = await supabase
       .from('products')
       .select('category, image_url')
