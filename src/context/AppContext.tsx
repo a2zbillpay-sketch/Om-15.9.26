@@ -2281,6 +2281,65 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setCustomerFlowStep('SHOP');
   };
 
+  // Helper: Notify Shopkeeper via browser/PWA channels and chime when a customer logs in
+  const notifyShopkeeperCustomerLogin = (customer: User) => {
+    try {
+      const cleanPhone = customer.phone ? customer.phone.replace(/\D/g, '') : '';
+      const customerDisplayName =
+        customer.name?.trim() || `Customer (+91 ${cleanPhone.slice(-10) || 'Unknown'})`;
+      const loginTimeStr = new Date().toLocaleTimeString('en-IN', {
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true,
+      });
+      const timestamp = Date.now();
+      const eventId = `cust-login-${timestamp}-${Math.random().toString(36).slice(2, 7)}`;
+
+      const payload = {
+        id: eventId,
+        customerName: customerDisplayName,
+        phone: cleanPhone,
+        loginTime: loginTimeStr,
+        timestamp,
+      };
+
+      // 1. Record into persistent AdminNotifications list for Shopkeeper
+      const newAdminNotification: AdminNotification = {
+        id: eventId,
+        type: 'CUSTOMER_LOGIN',
+        title: 'Customer Logged In',
+        message: `${customerDisplayName} logged in at ${loginTimeStr}`,
+        customerName: customerDisplayName,
+        customerPhone: cleanPhone,
+        loginTime: loginTimeStr,
+        read: false,
+        createdAt: new Date().toISOString(),
+      };
+      setAdminNotifications((prev) => [newAdminNotification, ...prev]);
+
+      // 2. Broadcast to other open tabs / windows on this device via BroadcastChannel
+      try {
+        const bc = new BroadcastChannel('om_customer_login_channel');
+        bc.postMessage(payload);
+        bc.close();
+      } catch {}
+
+      // 3. Update localStorage to trigger cross-tab storage event
+      try {
+        localStorage.setItem('om_last_customer_login', JSON.stringify(payload));
+      } catch {}
+
+      // 4. Send to backend server for cross-device notification sync
+      fetch('/api/customer-logins', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }).catch(() => {});
+    } catch (err) {
+      console.warn('Customer login notification dispatch notice:', err);
+    }
+  };
+
   // Auth operations (Standardized Customer Flow Step 1)
   const loginWithPhone = async (
     phone: string,
@@ -2440,6 +2499,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
 
       setCustomerFlowStep(finalUser.name && finalUser.addresses.length > 0 ? 'SHOP' : 'PROFILE');
+      notifyShopkeeperCustomerLogin(finalUser);
       return finalUser;
     }
 
@@ -2486,6 +2546,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
 
     setCustomerFlowStep('PROFILE');
+    notifyShopkeeperCustomerLogin(finalUser);
     return finalUser;
   };
 

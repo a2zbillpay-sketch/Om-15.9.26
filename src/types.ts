@@ -229,9 +229,12 @@ export interface WalletTransaction {
 
 export interface AdminNotification {
   id: string;
-  type: 'ORDER_CANCELLED' | 'GENERAL';
+  type: 'ORDER_CANCELLED' | 'GENERAL' | 'CUSTOMER_LOGIN';
   title: string;
   message: string;
+  customerName?: string;
+  customerPhone?: string;
+  loginTime?: string;
   orderId?: string;
   orderNumber?: string;
   amount?: number;

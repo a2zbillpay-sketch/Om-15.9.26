@@ -39,9 +39,13 @@ import {
   Download,
   Loader2,
   Eye,
+  UserCheck,
+  Volume2,
+  Bell,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { useApp } from '../context/AppContext';
+import { playNotificationSound } from '../utils/notificationSound';
 import { INITIAL_PRODUCTS, INITIAL_CATEGORIES } from '../data/seedData';
 import { Order, OrderStatus, PaymentMethod, Product, ProductVariant, TieredPrice, UnitType, Role } from '../types';
 import { AdminSettingsControl } from './AdminSettingsControl';
@@ -969,6 +973,10 @@ export const AdminDashboard: React.FC = () => {
     (n) => !n.read && n.type === 'ORDER_CANCELLED'
   );
 
+  const customerLoginNotifications = (adminNotifications || []).filter(
+    (n) => !n.read && n.type === 'CUSTOMER_LOGIN'
+  );
+
   const filteredOrders = orders.filter((o) => {
     if (orderFilter === 'ALL') return true;
     return o.status === orderFilter;
@@ -1434,6 +1442,67 @@ export const AdminDashboard: React.FC = () => {
                       <button
                         onClick={() => markNotificationAsRead(notif.id)}
                         className="text-gray-400 hover:text-gray-700 p-1 rounded"
+                        title="Dismiss"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Real-time Customer Login Notifications for Shopkeeper */}
+            {customerLoginNotifications.length > 0 && (
+              <div id="admin-customer-login-alerts" className="p-3 bg-emerald-50 border-b border-emerald-200 space-y-2 animate-fadeIn">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-emerald-950 font-extrabold text-xs">
+                    <UserCheck size={16} className="text-emerald-600 shrink-0" />
+                    <span>Customer Login Alert ({customerLoginNotifications.length})</span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={() => playNotificationSound()}
+                      className="text-[11px] text-emerald-700 hover:text-emerald-900 font-bold flex items-center gap-1 cursor-pointer"
+                      title="Test notification sound chime"
+                    >
+                      <Volume2 size={12} />
+                      <span>Test Sound</span>
+                    </button>
+                    <button
+                      onClick={() => {
+                        customerLoginNotifications.forEach((n) => markNotificationAsRead(n.id));
+                      }}
+                      className="text-[11px] text-emerald-700 hover:text-emerald-900 font-bold underline cursor-pointer"
+                    >
+                      Dismiss All
+                    </button>
+                  </div>
+                </div>
+                <div className="space-y-1.5 max-h-40 overflow-y-auto">
+                  {customerLoginNotifications.map((notif) => (
+                    <div
+                      key={notif.id}
+                      className="bg-white p-2.5 rounded-xl border border-emerald-200 text-xs flex items-center justify-between shadow-xs gap-2"
+                    >
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-emerald-100 text-emerald-800 font-bold text-[10px]">
+                          👤
+                        </span>
+                        <span className="font-bold text-emerald-950">{notif.customerName || notif.title}</span>
+                        <span className="text-gray-700">logged in at</span>
+                        <span className="font-semibold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 text-[11px]">
+                          {notif.loginTime || new Date(notif.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                        {notif.customerPhone && (
+                          <span className="text-[10px] text-gray-500 font-medium">
+                            (+91 {notif.customerPhone.replace(/\D/g, '').slice(-10)})
+                          </span>
+                        )}
+                      </div>
+                      <button
+                        onClick={() => markNotificationAsRead(notif.id)}
+                        className="text-gray-400 hover:text-gray-700 p-1 rounded cursor-pointer"
                         title="Dismiss"
                       >
                         <X size={14} />

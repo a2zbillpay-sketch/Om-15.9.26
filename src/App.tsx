@@ -23,6 +23,7 @@ import { CustomerProfilePage } from './components/CustomerProfilePage';
 import { StorePolicyModal, PolicyType } from './components/StorePolicyModal';
 import { AdminLoginModal } from './components/AdminLoginModal';
 import { OrderSuccessModal } from './components/OrderSuccessModal';
+import { ShopkeeperLoginNotifier } from './components/ShopkeeperLoginNotifier';
 import { ShieldCheck, Phone, MapPin, Mail, Award, ShoppingBag } from 'lucide-react';
 
 const MainLayout: React.FC = () => {
@@ -147,6 +148,7 @@ const MainLayout: React.FC = () => {
       )}
 
       {/* Top Navigation */}
+      <ShopkeeperLoginNotifier />
       <Navbar
         searchQuery={searchQuery}
         setSearchQuery={setSearchQuery}
