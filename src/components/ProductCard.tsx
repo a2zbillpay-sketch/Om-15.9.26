@@ -108,8 +108,9 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
           )}
         </div>
 
-        {/* Product Image Thumbnail (Reduced to 25% of current size) & Tap-to-Zoom */}
-        <div className="py-2.5 flex items-center justify-center">
+        {/* Top Header Row: Image at top-left, Product Name & Brand Name at top-right beside image */}
+        <div className="px-3 pt-2 pb-1 flex items-start gap-3">
+          {/* Top-Left: Product Image (exact same size) */}
           <div
             onClick={() => {
               if (product.imageUrl && product.imageUrl.trim()) {
@@ -126,7 +127,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
             tabIndex={product.imageUrl && product.imageUrl.trim() ? 0 : undefined}
             aria-label={product.imageUrl && product.imageUrl.trim() ? `Zoom photo for ${product.name}` : undefined}
             title={product.imageUrl && product.imageUrl.trim() ? 'Tap to view full-size photo' : undefined}
-            className={`relative w-1/2 aspect-square max-w-[130px] max-h-[130px] rounded-xl bg-gray-50 border border-gray-200 overflow-hidden flex items-center justify-center shadow-xs group/img ${
+            className={`relative w-[120px] sm:w-[130px] aspect-square max-w-[130px] max-h-[130px] shrink-0 rounded-xl bg-gray-50 border border-gray-200 overflow-hidden flex items-center justify-center shadow-xs group/img ${
               product.imageUrl && product.imageUrl.trim() ? 'cursor-pointer hover:border-[#0F2C59]/40 hover:shadow-sm' : ''
             }`}
           >
@@ -154,18 +155,22 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
               </div>
             )}
           </div>
+
+          {/* Top-Right: Product Name and Brand Name beside image */}
+          <div className="flex-1 min-w-0 pt-0.5">
+            <h3 className="font-extrabold text-sm text-gray-900 line-clamp-2 leading-snug">
+              {product.name}
+            </h3>
+            {product.brand ? (
+              <div className="text-[11px] font-bold text-[#FF6B00] uppercase tracking-wider mt-1 truncate">
+                {product.brand}
+              </div>
+            ) : null}
+          </div>
         </div>
 
         {/* Content Details */}
-        <div className="p-4">
-          {product.brand ? (
-            <div className="text-[11px] font-bold text-[#FF6B00] uppercase tracking-wider mb-0.5">
-              {product.brand}
-            </div>
-          ) : null}
-          <h3 className="font-extrabold text-sm text-gray-900 line-clamp-1 leading-snug">
-            {product.name}
-          </h3>
+        <div className="px-3 pb-3 pt-1">
           <p className="text-xs text-gray-500 line-clamp-2 mt-1 leading-relaxed">
             {product.description}
           </p>
@@ -387,6 +392,14 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
       <ProductRequestModal
         isOpen={isRequestModalOpen}
         onClose={() => setIsRequestModalOpen(false)}
+        onAccept={() => {
+          setHasRequested(true);
+          setIsRequestModalOpen(false);
+        }}
+        onDecline={() => {
+          setHasRequested(false);
+          setIsRequestModalOpen(false);
+        }}
         product={product}
         variant={currentVariant}
         quantity={requestedQty}

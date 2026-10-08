@@ -1,11 +1,13 @@
 import React, { useEffect } from 'react';
-import { X, CheckCircle2, AlertTriangle, Package, Calendar, User, Hash } from 'lucide-react';
+import { X, CheckCircle2, Package, Calendar, User, Hash } from 'lucide-react';
 import { Product, ProductVariant } from '../types';
 import { formatVariantPack } from '../utils/variantFormatter';
 
 export interface ProductRequestModalProps {
   isOpen: boolean;
   onClose: () => void;
+  onAccept?: () => void;
+  onDecline?: () => void;
   product: Product | null;
   variant: ProductVariant | null;
   quantity: number;
@@ -17,6 +19,8 @@ export interface ProductRequestModalProps {
 export const ProductRequestModal: React.FC<ProductRequestModalProps> = ({
   isOpen,
   onClose,
+  onAccept,
+  onDecline,
   product,
   variant,
   quantity,
@@ -37,6 +41,22 @@ export const ProductRequestModal: React.FC<ProductRequestModalProps> = ({
   }, [isOpen, onClose]);
 
   if (!isOpen || !product || !variant) return null;
+
+  const handleAccept = () => {
+    if (onAccept) {
+      onAccept();
+    } else {
+      onClose();
+    }
+  };
+
+  const handleDecline = () => {
+    if (onDecline) {
+      onDecline();
+    } else {
+      onClose();
+    }
+  };
 
   const formattedDate = requestDate
     ? new Date(requestDate).toLocaleString('en-IN', {
@@ -83,14 +103,13 @@ export const ProductRequestModal: React.FC<ProductRequestModalProps> = ({
 
         {/* Content Body */}
         <div className="p-5 space-y-4">
-          {/* Out of Stock & Pricing Notice - EXACT REQUIRED COPY */}
-          <div className="bg-amber-50 border border-amber-300 rounded-xl p-3.5 text-xs text-amber-950 space-y-1 shadow-2xs">
-            <div className="flex items-center gap-1.5 font-bold text-amber-900 mb-1">
-              <AlertTriangle size={15} className="text-amber-700 shrink-0" />
-              <span>Availability & Price Policy</span>
-            </div>
-            <p className="font-semibold text-amber-900 text-xs leading-relaxed">
-              This product is currently out of stock. The price may change when it becomes available. The current price is not guaranteed.
+          {/* Out of Stock Confirmation Notice - Red Box with Blue Bold Text */}
+          <div className="bg-red-50 border-2 border-red-400 rounded-xl p-4 text-xs sm:text-sm space-y-2.5 shadow-xs">
+            <p className="font-bold text-blue-700 leading-relaxed">
+              तुम्ही ऑर्डर करत असलेले हे प्रॉडक्ट सध्या उपलब्ध नाही. तुमच्या विनंतीनुसार ते उपलब्ध करून देऊ. किमतीत होणारा बदल तुम्हाला मान्य असेल तर “मान्य आहे” वर क्लिक करा.
+            </p>
+            <p className="font-bold text-blue-700 leading-relaxed">
+              ऑर्डर केलेली वस्तू कोणत्याही कारणास्तव रद्द करता येणार नाही. तसेच वस्तू खराब नसल्यास ती बदलून दिली जाणार नाही.
             </p>
           </div>
 
@@ -147,13 +166,20 @@ export const ProductRequestModal: React.FC<ProductRequestModalProps> = ({
           </div>
 
           {/* Action Buttons */}
-          <div className="pt-2 flex justify-end">
+          <div className="pt-2 flex flex-col sm:flex-row items-stretch sm:items-center justify-end gap-2.5">
             <button
               type="button"
-              onClick={onClose}
-              className="w-full sm:w-auto px-6 py-2.5 bg-[#0F2C59] hover:bg-[#0b2245] text-white text-xs font-black rounded-xl transition cursor-pointer shadow-md"
+              onClick={handleAccept}
+              className="w-full sm:w-auto px-6 py-2.5 bg-[#0F2C59] hover:bg-[#0b2245] text-white text-xs font-black rounded-xl transition cursor-pointer shadow-md text-center"
             >
-              Close
+              मान्य आहे
+            </button>
+            <button
+              type="button"
+              onClick={handleDecline}
+              className="w-full sm:w-auto px-6 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-bold rounded-xl transition cursor-pointer border border-gray-300 shadow-2xs text-center"
+            >
+              अमान्य
             </button>
           </div>
         </div>
