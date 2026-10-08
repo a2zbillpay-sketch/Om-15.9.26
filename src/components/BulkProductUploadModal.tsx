@@ -135,8 +135,8 @@ export const BulkProductUploadModal: React.FC<BulkProductUploadModalProps> = ({
         Barcode: '8906007280015',
         Unit: '1 LITER',
         'Purchase Price': 120,
+        MRP: 150,
         'Sale Price': 135,
-        Discount: 10,
         'Stock Quantity': 48,
       },
       {
@@ -145,10 +145,10 @@ export const BulkProductUploadModal: React.FC<BulkProductUploadModalProps> = ({
         Category: 'Grains & Rice',
         Description: 'Aged aromatic steam kolam rice, clean wholesale pack',
         Barcode: '8906007280022',
-        Unit: '25 KG Katta',
+        Unit: '25 KG',
         'Purchase Price': 1300,
+        MRP: 1550,
         'Sale Price': 1420,
-        Discount: 8,
         'Stock Quantity': 25,
       },
       {
@@ -159,8 +159,8 @@ export const BulkProductUploadModal: React.FC<BulkProductUploadModalProps> = ({
         Barcode: '8906007280039',
         Unit: '1 KG',
         'Purchase Price': 140,
+        MRP: 175,
         'Sale Price': 158,
-        Discount: 10,
         'Stock Quantity': 60,
       },
       {
@@ -171,8 +171,8 @@ export const BulkProductUploadModal: React.FC<BulkProductUploadModalProps> = ({
         Barcode: '8906007280046',
         Unit: '10 KG',
         'Purchase Price': 370,
+        MRP: 440,
         'Sale Price': 410,
-        Discount: 7,
         'Stock Quantity': 30,
       },
       {
@@ -183,9 +183,33 @@ export const BulkProductUploadModal: React.FC<BulkProductUploadModalProps> = ({
         Barcode: '8906007280053',
         Unit: '1 KG',
         'Purchase Price': 20,
+        MRP: 28,
         'Sale Price': 25,
-        Discount: 10,
         'Stock Quantity': 100,
+      },
+      {
+        'Product Name': 'Good Day Butter Cookies',
+        Brand: 'Britannia',
+        Category: 'Snacks & Biscuits',
+        Description: 'Rich cashew and butter biscuits pack',
+        Barcode: '8906007280060',
+        Unit: '500 G',
+        'Purchase Price': 60,
+        MRP: 80,
+        'Sale Price': 72,
+        'Stock Quantity': 50,
+      },
+      {
+        'Product Name': 'Stainless Steel Scrubber',
+        Brand: 'Scotch-Brite',
+        Category: 'Household Essentials',
+        Description: 'Heavy duty rust-proof scrubber',
+        Barcode: '8906007280077',
+        Unit: 'Nos',
+        'Purchase Price': 15,
+        MRP: 25,
+        'Sale Price': 20,
+        'Stock Quantity': 200,
       },
     ];
 
@@ -200,42 +224,103 @@ export const BulkProductUploadModal: React.FC<BulkProductUploadModalProps> = ({
     }
   };
 
-  // Helper to extract value from row object matching various possible column headers
+  // Normalization helper: trims whitespace, replaces line breaks and non-breaking spaces, lowercases for robust matching
+  const normalizeHeaderKey = (raw: string): string => {
+    return String(raw ?? '')
+      .replace(/[\u00A0\u1680\u180E\u2000-\u200B\u202F\u205F\u3000\uFEFF]/g, ' ')
+      .replace(/[\r\n\t]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
+  };
+
+  const normalizeAlphaNumericKey = (raw: string): string => {
+    return String(raw ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  };
+
+  // Helper to extract value from row object matching exact or aliased column headers
   const getCol = (row: Record<string, any>, possibleHeaders: string[]): any => {
-    const keys = Object.keys(row);
+    if (!row) return '';
+    // 1. Direct match on normalized header keys (case-insensitive, line breaks/NBSP resolved)
     for (const h of possibleHeaders) {
-      const target = h.toLowerCase().replace(/[^a-z0-9]/g, '');
-      const foundKey = keys.find(
-        (k) => k.toLowerCase().replace(/[^a-z0-9]/g, '') === target
-      );
-      if (foundKey && row[foundKey] !== undefined && row[foundKey] !== null) {
-        return row[foundKey];
+      const target = normalizeHeaderKey(h);
+      if (row[target] !== undefined && row[target] !== null && String(row[target]).trim() !== '') {
+        return row[target];
       }
+    }
+    // 2. Alphanumeric match (ignoring spaces/punctuation)
+    for (const h of possibleHeaders) {
+      const target = normalizeAlphaNumericKey(h);
+      if (row[target] !== undefined && row[target] !== null && String(row[target]).trim() !== '') {
+        return row[target];
+      }
+    }
+    // 3. Exact raw key fallback
+    for (const h of possibleHeaders) {
+      if (row[h] !== undefined && row[h] !== null && String(row[h]).trim() !== '') {
+        return row[h];
+      }
+    }
+    // 4. Dynamic scan across all keys in row matching normalized or alphanumeric header
+    const targetNorms = possibleHeaders.map((h) => normalizeHeaderKey(h));
+    const targetAlphas = possibleHeaders.map((h) => normalizeAlphaNumericKey(h));
+    for (const [k, v] of Object.entries(row)) {
+      if (k === '_raw') continue;
+      if (v !== undefined && v !== null && String(v).trim() !== '') {
+        const kNorm = normalizeHeaderKey(k);
+        const kAlpha = normalizeAlphaNumericKey(k);
+        if (targetNorms.includes(kNorm) || targetAlphas.includes(kAlpha)) {
+          return v;
+        }
+      }
+    }
+    // 5. Fallback check on original un-normalized raw row if stored
+    if (row._raw && typeof row._raw === 'object') {
+      return getCol(row._raw, possibleHeaders);
     }
     return '';
   };
 
-  // Parse raw Unit string into UnitType and packSize
-  const parseUnitString = (rawUnit: string): { unit: UnitType; packSize: number; packLabel: string } => {
+  // Parse raw Unit string into UnitType and packSize:
+  // e.g. "500 G" -> packSize: 500, unit: G; "10 KG" -> packSize: 10, unit: KG; "Nos" -> packSize: 1, unit: NOS
+  const parseUnitString = (rawUnit: any): { unit: UnitType; packSize: number; packLabel: string } => {
     const str = String(rawUnit || '').trim();
     if (!str) {
       return { unit: UnitType.NOS, packSize: 1, packLabel: '1 NOS' };
     }
 
-    // Try extracting number and unit from strings like "25 KG", "500 G", "1 LTR", "25 KG Katta"
+    // Check comma or delimiter separated format: e.g. "500, G", "500,G", "10, KG", "10,KG", "1, NOS"
+    const commaMatch = str.match(/^([\d.]+)\s*[,/|\-]\s*([a-zA-Z]+)(.*)$/);
+    if (commaMatch) {
+      const num = parseFloat(commaMatch[1]) || 1;
+      const cleanKey = commaMatch[2].toLowerCase().replace(/[^a-z]/g, '');
+      const matchedUnit = UNIT_SYNONYMS[cleanKey] || UnitType.NOS;
+      return { unit: matchedUnit, packSize: num, packLabel: `${num} ${matchedUnit}` };
+    }
+
+    // Standard pattern: digits followed optionally by spaces and letters: e.g. "500 G", "500g", "10 KG", "10kg", "1 LITER", "250 ML"
     const match = str.match(/^([\d.]+)\s*([a-zA-Z]+)(.*)$/);
     if (match) {
       const num = parseFloat(match[1]) || 1;
-      const unitKey = match[2].toLowerCase();
-      const matchedUnit = UNIT_SYNONYMS[unitKey] || UnitType.NOS;
-      const label = `${num} ${matchedUnit}`;
-      return { unit: matchedUnit, packSize: num, packLabel: label };
+      const cleanKey = match[2].toLowerCase().replace(/[^a-z]/g, '');
+      const matchedUnit = UNIT_SYNONYMS[cleanKey] || UnitType.NOS;
+      return { unit: matchedUnit, packSize: num, packLabel: `${num} ${matchedUnit}` };
     }
 
-    // If only word is provided (e.g. "KG", "LITER", "BOX")
-    const cleanUnitKey = str.toLowerCase().replace(/[^a-z]/g, '');
-    const matchedUnit = UNIT_SYNONYMS[cleanUnitKey] || UnitType.NOS;
-    return { unit: matchedUnit, packSize: 1, packLabel: `1 ${matchedUnit}` };
+    // Only word provided: e.g. "Nos", "nos", "NOS", "KG", "G", "LITER", "BOX", "CAN", "KATTA"
+    const wordKey = str.toLowerCase().replace(/[^a-z]/g, '');
+    if (wordKey && UNIT_SYNONYMS[wordKey]) {
+      const matchedUnit = UNIT_SYNONYMS[wordKey];
+      return { unit: matchedUnit, packSize: 1, packLabel: `1 ${matchedUnit}` };
+    }
+
+    // Fallback if only a number was passed: e.g. "1", "10", "500"
+    const numOnly = parseFloat(str);
+    if (!isNaN(numOnly) && numOnly > 0) {
+      return { unit: UnitType.NOS, packSize: numOnly, packLabel: `${numOnly} NOS` };
+    }
+
+    return { unit: UnitType.NOS, packSize: 1, packLabel: '1 NOS' };
   };
 
   // Process and validate uploaded file
@@ -263,51 +348,120 @@ export const BulkProductUploadModal: React.FC<BulkProductUploadModalProps> = ({
       const fileBarcodeTracker = new Set<string>();
       const parsed: ParsedProductRow[] = [];
 
-      rawRows.forEach((row, index) => {
+      // Normalize row headers before mapping: trim whitespace, strip line breaks/NBSP, lowercase
+      const normalizedRows = rawRows.map((rawRow) => {
+        const normalizedRow: Record<string, any> = { _raw: rawRow };
+        for (const [key, val] of Object.entries(rawRow)) {
+          const cleanKey = normalizeHeaderKey(key);
+          const alphaKey = normalizeAlphaNumericKey(key);
+          if (cleanKey && (normalizedRow[cleanKey] === undefined || String(normalizedRow[cleanKey]).trim() === '')) {
+            normalizedRow[cleanKey] = val;
+          }
+          if (alphaKey && (normalizedRow[alphaKey] === undefined || String(normalizedRow[alphaKey]).trim() === '')) {
+            normalizedRow[alphaKey] = val;
+          }
+          // Retain raw key as fallback
+          normalizedRow[key] = val;
+        }
+        return normalizedRow;
+      });
+
+      normalizedRows.forEach((row, index) => {
         const rowNumber = index + 2; // Row 1 is header
         const rowErrors: string[] = [];
         const rowWarnings: string[] = [];
 
-        // 1. Product Name (Required)
-        const nameRaw = getCol(row, ['Product Name', 'Name', 'Title', 'Product', 'Item Name', 'Item']);
-        const name = String(nameRaw || '').trim();
+        // 1. Product Name -> productName (Required)
+        const nameRaw = getCol(row, [
+          'Product Name',
+          'productName',
+          'Product_Name',
+          'Name',
+          'name',
+          'Product',
+          'product',
+          'Item Name',
+          'itemName',
+          'Item',
+          'item',
+          'Title',
+          'title',
+        ]);
+        const name = String(nameRaw || row.name || row.productName || '').trim();
         if (!name) {
           rowErrors.push('Product Name is required.');
         }
 
-        // 2. Brand (Optional)
-        const brandRaw = getCol(row, ['Brand', 'Company', 'Manufacturer', 'Make']);
-        const brand = String(brandRaw || '').trim();
+        // 2. Brand -> brand (Optional)
+        const brandRaw = getCol(row, ['Brand', 'brand', 'Brand Name', 'brandName', 'Manufacturer', 'Make']);
+        const brand = String(brandRaw || row.brand || '').trim();
 
-        // 3. Category (Optional / Matched)
-        const catRaw = getCol(row, ['Category', 'Category Name', 'Cat', 'Department']);
-        const categoryName = String(catRaw || '').trim();
+        // 3. Category -> categoryName (Optional / Matched)
+        const catRaw = getCol(row, ['Category', 'category', 'categoryName', 'Category Name', 'Category_Name']);
+        const categoryName = String(catRaw || row.categoryName || row.category || '').trim();
 
-        // 4. Description (Optional)
-        const descRaw = getCol(row, ['Description', 'Details', 'Desc', 'About']);
-        const description = String(descRaw || '').trim();
+        // 4. Description -> description (Optional)
+        const descRaw = getCol(row, ['Description', 'description', 'Desc', 'desc', 'Details', 'Product Description']);
+        const description = String(descRaw || row.description || '').trim();
 
-        // 5. Unit & Pack Size
-        const unitRaw = getCol(row, ['Unit', 'Unit Type', 'UOM', 'Pack Unit', 'Size']);
-        const { unit, packSize, packLabel } = parseUnitString(String(unitRaw));
+        // 5. Unit -> packSize + unit (e.g. 500 G -> 500, G; 10 KG -> 10, KG; Nos -> 1, NOS)
+        const unitRaw = getCol(row, ['Unit', 'unit', 'Unit / Pack', 'Unit/Pack', 'Pack', 'pack', 'Pack Size', 'packSize', 'Packing', 'UOM', 'uom']);
+        const { unit, packSize, packLabel } = parseUnitString(unitRaw || row.unit || row.packLabel);
 
-        // 6. Pricing: Sale Price & Purchase Price & Discount (NEVER map Purchase Price to MRP)
-        // Allow decimal values such as ₹9.50, ₹9.5, ₹10.25 (never restrict Selling Price to whole numbers)
-        const salePriceRaw = getCol(row, ['Sale Price', 'Selling Price', 'Sale Rate', 'Rate', 'Sell Price', 'Price']);
-        const purchasePriceRaw = getCol(row, ['Purchase Price', 'Purchase Rate', 'Purchase Cost', 'Cost Price', 'Buy Price', 'Cost']);
-        const discountRaw = getCol(row, ['Discount', 'Discount %', 'Discount Percent', 'Discount Amount', 'Discount Rate', 'Offer']);
-        const mrpRaw = getCol(row, ['MRP', 'M.R.P.', 'Max Retail Price', 'Printed Price', 'List Price']);
+        // 6. Pricing: Purchase Price -> purchasePrice, MRP -> mrp, Sale Price -> baseSellingPrice
+        const purchasePriceRaw = getCol(row, [
+          'Purchase Price',
+          'purchasePrice',
+          'purchase_price',
+          'Cost Price',
+          'costPrice',
+          'Buying Price',
+          'buyingPrice',
+          'Cost',
+          'Buy Price',
+        ]);
+        const mrpRaw = getCol(row, ['MRP', 'mrp', 'M.R.P.', 'Max Retail Price', 'Maximum Retail Price', 'Retail Price']);
+        const salePriceRaw = getCol(row, [
+          'Sale Price',
+          'baseSellingPrice',
+          'salePrice',
+          'sale_price',
+          'Base Selling Price',
+          'Selling Price',
+          'sellingPrice',
+          'Price',
+          'price',
+          'Rate',
+          'rate',
+          'Offer Price',
+        ]);
 
-        const cleanSalePrice = String(salePriceRaw ?? '').trim().replace(/,/g, '.');
-        const salePriceMatch = cleanSalePrice.match(/[0-9]+(?:\.[0-9]+)?/);
-        const salePrice = salePriceMatch ? parseFloat(salePriceMatch[0]) : 0;
+        let purchasePrice = 0;
+        if (typeof purchasePriceRaw === 'number' && !isNaN(purchasePriceRaw)) {
+          purchasePrice = purchasePriceRaw;
+        } else if (purchasePriceRaw !== undefined && purchasePriceRaw !== null) {
+          const cleanPurchasePrice = String(purchasePriceRaw).trim().replace(/,/g, '.');
+          const purchasePriceMatch = cleanPurchasePrice.match(/[0-9]+(?:\.[0-9]+)?/);
+          purchasePrice = purchasePriceMatch ? parseFloat(purchasePriceMatch[0]) : 0;
+        }
 
-        const cleanPurchasePrice = String(purchasePriceRaw ?? '').trim().replace(/,/g, '.');
-        const purchasePriceMatch = cleanPurchasePrice.match(/[0-9]+(?:\.[0-9]+)?/);
-        let purchasePrice = purchasePriceMatch ? parseFloat(purchasePriceMatch[0]) : 0;
+        let salePrice = 0;
+        if (typeof salePriceRaw === 'number' && !isNaN(salePriceRaw)) {
+          salePrice = salePriceRaw;
+        } else if (salePriceRaw !== undefined && salePriceRaw !== null) {
+          const cleanSalePrice = String(salePriceRaw).trim().replace(/,/g, '.');
+          const salePriceMatch = cleanSalePrice.match(/[0-9]+(?:\.[0-9]+)?/);
+          salePrice = salePriceMatch ? parseFloat(salePriceMatch[0]) : 0; // baseSellingPrice
+        }
 
-        let discount = parseFloat(String(discountRaw).replace(/[^0-9.]/g, '')) || 0;
-        let mrp = parseFloat(String(mrpRaw).replace(/[^0-9.]/g, '')) || 0;
+        let mrp = 0;
+        if (typeof mrpRaw === 'number' && !isNaN(mrpRaw)) {
+          mrp = mrpRaw;
+        } else if (mrpRaw !== undefined && mrpRaw !== null) {
+          const cleanMrp = String(mrpRaw).trim().replace(/,/g, '.');
+          const mrpMatch = cleanMrp.match(/[0-9]+(?:\.[0-9]+)?/);
+          mrp = mrpMatch ? parseFloat(mrpMatch[0]) : 0;
+        }
 
         if (salePrice <= 0) {
           rowErrors.push('Sale Price must be a valid positive number (e.g. ₹9.50, ₹10.25).');
@@ -317,39 +471,30 @@ export const BulkProductUploadModal: React.FC<BulkProductUploadModalProps> = ({
           rowErrors.push('Purchase Price cannot be negative.');
         }
 
-        // Determine MRP: NEVER map Purchase Price to MRP!
-        // If MRP is explicitly provided, use it; otherwise compute from sale price & discount, or default to sale price
+        // If MRP is empty or 0, default to Sale Price
         if (mrp <= 0) {
-          if (discount > 0) {
-            if (discount < 100) {
-              mrp = Math.round((salePrice / (100 - discount)) * 100);
-            } else {
-              mrp = salePrice + discount;
-            }
-          } else {
-            mrp = salePrice;
-          }
-        }
-
-        // Ensure MRP is not less than Sale Price
-        if (mrp < salePrice) {
           mrp = salePrice;
         }
 
-        // If MRP was explicitly provided and discount was not, calculate discount percentage off MRP
-        if (discount <= 0 && mrp > salePrice) {
-          discount = Math.round(((mrp - salePrice) / mrp) * 100);
+        // Validate MRP is not less than Sale Price
+        if (mrp < salePrice) {
+          rowErrors.push(`MRP (₹${mrp}) cannot be less than Sale Price (₹${salePrice}).`);
         }
 
-        // 7. Stock Quantity
-        const stockRaw = getCol(row, ['Stock Quantity', 'Stock', 'Quantity', 'Qty', 'Inventory', 'Initial Stock']);
-        let stockQuantity = parseInt(String(stockRaw).replace(/[^0-9]/g, ''), 10);
+        // Calculate discount percentage off MRP
+        const discount = mrp > salePrice ? Math.round(((mrp - salePrice) / mrp) * 100) : 0;
+
+        // 7. Stock Quantity -> stockQuantity
+        const stockRaw = getCol(row, ['Stock Quantity', 'stockQuantity', 'stock_quantity', 'Stock', 'stock', 'Quantity', 'quantity', 'Qty', 'qty']);
+        let stockQuantity = typeof stockRaw === 'number' && !isNaN(stockRaw)
+          ? Math.max(0, Math.floor(stockRaw))
+          : parseInt(String(stockRaw ?? '').replace(/[^0-9]/g, ''), 10);
         if (isNaN(stockQuantity) || stockQuantity < 0) {
           stockQuantity = 0;
         }
 
-        // 8. Barcode Validation & Deduplication
-        const barcodeRaw = getCol(row, ['Barcode', 'Bar Code', 'UPC', 'EAN', 'Code']);
+        // 8. Barcode -> barcode (Validation & Deduplication)
+        const barcodeRaw = getCol(row, ['Barcode', 'barcode', 'Bar Code', 'bar_code', 'EAN', 'UPC', 'Code']);
         const { valid: isBarcodeValid, barcode, error: barcodeFormatError } = normalizeAndValidateBarcode(barcodeRaw);
 
         if (!isBarcodeValid) {
@@ -650,7 +795,7 @@ export const BulkProductUploadModal: React.FC<BulkProductUploadModalProps> = ({
                     <h4 className="font-extrabold text-[#0F2C59] text-xs">Need the spreadsheet template?</h4>
                     <p className="text-[11px] text-gray-600 mt-0.5">
                       Download our pre-formatted sample with columns: Product Name, Brand, Category, Description,
-                      Barcode, Unit, Purchase Price, Sale Price, Discount, and Stock Quantity.
+                      Barcode, Unit, Purchase Price, MRP, Sale Price, and Stock Quantity.
                     </p>
                   </div>
                 </div>
@@ -793,6 +938,7 @@ export const BulkProductUploadModal: React.FC<BulkProductUploadModalProps> = ({
                           <th className="p-2.5">Category</th>
                           <th className="p-2.5">Unit / Pack</th>
                           <th className="p-2.5 text-right">Purchase Price</th>
+                          <th className="p-2.5 text-right">MRP</th>
                           <th className="p-2.5 text-right">Sale Price</th>
                           <th className="p-2.5 text-center">Discount</th>
                           <th className="p-2.5 text-center">Stock</th>
@@ -802,7 +948,7 @@ export const BulkProductUploadModal: React.FC<BulkProductUploadModalProps> = ({
                       <tbody className="divide-y divide-gray-200">
                         {displayedRows.length === 0 ? (
                           <tr>
-                            <td colSpan={10} className="p-8 text-center text-gray-400 text-xs">
+                            <td colSpan={11} className="p-8 text-center text-gray-400 text-xs">
                               No rows match the selected filter.
                             </td>
                           </tr>
@@ -847,7 +993,10 @@ export const BulkProductUploadModal: React.FC<BulkProductUploadModalProps> = ({
                               </td>
                               <td className="p-2.5 text-gray-700 font-mono font-medium">{r.packLabel}</td>
                               <td className="p-2.5 text-right font-mono text-gray-700 font-semibold">
-                                ₹{Number.isInteger(r.purchasePrice) ? r.purchasePrice : r.purchasePrice.toFixed(2)}
+                                {r.purchasePrice ? `₹${Number.isInteger(r.purchasePrice) ? r.purchasePrice : r.purchasePrice.toFixed(2)}` : '—'}
+                              </td>
+                              <td className="p-2.5 text-right font-mono text-gray-700 font-semibold">
+                                ₹{Number.isInteger(r.mrp) ? r.mrp : r.mrp.toFixed(2)}
                               </td>
                               <td className="p-2.5 text-right font-mono font-bold text-emerald-700">
                                 ₹{Number.isInteger(r.salePrice) ? r.salePrice : r.salePrice.toFixed(2)}

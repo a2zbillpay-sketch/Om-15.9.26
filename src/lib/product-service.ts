@@ -22,9 +22,11 @@ export interface TieredPriceValidationResult {
 
 export interface BulkUploadRow {
   productName?: string;
+  name?: string;
   brand?: string;
   categoryId?: string;
   categoryName?: string;
+  category?: string;
   barcode?: string;
   description?: string;
   imageUrl?: string;
@@ -32,7 +34,9 @@ export interface BulkUploadRow {
   packSize?: number | string;
   unit?: string;
   packLabel?: string;
+  purchasePrice?: number | string;
   mrp?: number | string;
+  salePrice?: number | string;
   baseSellingPrice?: number | string;
   stockQuantity?: number | string;
   maxOrderLimit?: number | string;
@@ -603,19 +607,35 @@ export function processBulkProductRows(rows: BulkUploadRow[]): BulkUploadResult 
     const productId = `prod-bulk-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
 
     // Build variants
-    const rawVariants = productRows.map((r, idx) => ({
-      id: `var-${productId}-${idx + 1}`,
-      packSize: r.packSize,
-      unit: r.unit,
-      packLabel: r.packLabel,
-      mrp: r.mrp,
-      baseSellingPrice: r.baseSellingPrice,
-      stockQuantity: r.stockQuantity,
-      maxOrderLimit: r.maxOrderLimit,
-      wholesaleMinQty: r.wholesaleMinQty,
-      wholesaleMaxQty: r.wholesaleMaxQty,
-      wholesalePrice: r.wholesalePrice,
-    }));
+    const rawVariants = productRows.map((r, idx) => {
+      let packSize = r.packSize;
+      let unit = r.unit;
+      if (typeof r.unit === 'string' && (!r.packSize || Number(r.packSize) <= 1)) {
+        const str = r.unit.trim();
+        const commaMatch = str.match(/^([\d.]+)\s*[,/|\-]?\s*([a-zA-Z]+)(.*)$/);
+        if (commaMatch) {
+          packSize = parseFloat(commaMatch[1]) || 1;
+          unit = commaMatch[2].toUpperCase();
+        } else if (/^nos?$/i.test(str)) {
+          packSize = 1;
+          unit = UnitType.NOS;
+        }
+      }
+      return {
+        id: `var-${productId}-${idx + 1}`,
+        packSize,
+        unit,
+        packLabel: r.packLabel,
+        mrp: r.mrp,
+        baseSellingPrice: r.baseSellingPrice ?? r.salePrice,
+        purchasePrice: r.purchasePrice,
+        stockQuantity: r.stockQuantity,
+        maxOrderLimit: r.maxOrderLimit,
+        wholesaleMinQty: r.wholesaleMinQty,
+        wholesaleMaxQty: r.wholesaleMaxQty,
+        wholesalePrice: r.wholesalePrice,
+      };
+    });
 
     const rawProduct = {
       id: productId,

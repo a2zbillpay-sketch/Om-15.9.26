@@ -47,7 +47,9 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
     if (!currentOrder) return;
 
     const calculateTimeLeft = () => {
+      if (!currentOrder?.createdAt) return;
       const orderTime = new Date(currentOrder.createdAt).getTime();
+      if (isNaN(orderTime)) return;
       const windowMs = 15 * 60 * 1000;
       const elapsed = Date.now() - orderTime;
       const remaining = Math.max(0, Math.floor((windowMs - elapsed) / 1000));
@@ -286,13 +288,13 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
                   <MapPin size={12} className="text-[#FF6B00]" />
                   <span>Delivery Address</span>
                 </div>
-                {(currentOrder.googleLocation || currentOrder.address.googleLocation) && (
+                {(currentOrder.googleLocation || currentOrder.address?.googleLocation) && (
                   <a
                     href={
-                      (currentOrder.googleLocation || currentOrder.address.googleLocation)?.mapsUrl ||
+                      (currentOrder.googleLocation || currentOrder.address?.googleLocation)?.mapsUrl ||
                       `https://www.google.com/maps?q=${
-                        (currentOrder.googleLocation || currentOrder.address.googleLocation)?.latitude
-                      },${(currentOrder.googleLocation || currentOrder.address.googleLocation)?.longitude}`
+                        (currentOrder.googleLocation || currentOrder.address?.googleLocation)?.latitude
+                      },${(currentOrder.googleLocation || currentOrder.address?.googleLocation)?.longitude}`
                     }
                     target="_blank"
                     rel="noopener noreferrer"
@@ -304,9 +306,21 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
                   </a>
                 )}
               </div>
-              <p className="font-semibold text-gray-800">{currentOrder.address.fullAddress}</p>
-              <p className="text-[11px] text-gray-500">Pincode: {currentOrder.address.pincode}</p>
-              {(currentOrder.googleLocation || currentOrder.address.googleLocation) && (
+              {currentOrder.userName && (
+                <div className="font-bold text-gray-900 text-xs mb-0.5">{currentOrder.userName}</div>
+              )}
+              {currentOrder.userPhone && (
+                <div className="text-[10px] text-gray-500 font-mono mb-1">+91 {currentOrder.userPhone}</div>
+              )}
+              <p className="font-semibold text-gray-800">
+                {typeof currentOrder.address === 'string'
+                  ? currentOrder.address
+                  : currentOrder.address?.fullAddress || 'Address not specified'}
+              </p>
+              {typeof currentOrder.address === 'object' && currentOrder.address?.pincode && (
+                <p className="text-[11px] text-gray-500">Pincode: {currentOrder.address.pincode}</p>
+              )}
+              {(currentOrder.googleLocation || currentOrder.address?.googleLocation) && (
                 <div className="mt-1 text-[10px] text-emerald-800 font-bold flex items-center gap-1">
                   <span>📍 GPS Pin Attached</span>
                 </div>
@@ -330,11 +344,11 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
           {/* Ordered Grocery Items */}
           <div>
             <div className="text-xs font-bold text-gray-700 mb-2 flex items-center justify-between">
-              <span>Items in Order ({currentOrder.items.length})</span>
+              <span>Items in Order ({(currentOrder.items || []).length})</span>
               <span className="text-[11px] text-gray-500 font-normal">Pack sizes & quantities</span>
             </div>
             <div className="border border-gray-200 rounded-xl divide-y divide-gray-100 overflow-hidden text-xs">
-              {currentOrder.items.map((item) => (
+              {(currentOrder.items || []).map((item) => (
                 <div key={item.id} className="p-3 flex justify-between items-center hover:bg-gray-50">
                   <div>
                     <div className="flex items-center gap-1.5 font-bold text-gray-900">

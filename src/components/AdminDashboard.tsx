@@ -38,6 +38,7 @@ import {
   MapPin,
   Download,
   Loader2,
+  Eye,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { useApp } from '../context/AppContext';
@@ -56,6 +57,7 @@ import { OrderBillLayout } from './OrderBillLayout';
 import { BulkProductUploadModal } from './BulkProductUploadModal';
 import { ProductImageUploader } from './ProductImageUploader';
 import { ImageLightboxModal } from './ImageLightboxModal';
+import { OrderTrackingModal } from './OrderTrackingModal';
 import { formatVariantPack } from '../utils/variantFormatter';
 import {
   normalizeAndValidateBarcode,
@@ -587,6 +589,7 @@ export const AdminDashboard: React.FC = () => {
   const [isBulkUploadModalOpen, setIsBulkUploadModalOpen] = useState(false);
   const [codCollectingOrder, setCodCollectingOrder] = useState<Order | null>(null);
   const [printingOrder, setPrintingOrder] = useState<Order | null>(null);
+  const [selectedOrderForDetails, setSelectedOrderForDetails] = useState<Order | null>(null);
 
   const handlePrintBill = (order: Order) => {
     setPrintingOrder(order);
@@ -1464,7 +1467,13 @@ export const AdminDashboard: React.FC = () => {
                     </tr>
                   ) : (
                     filteredOrders.map((order) => (
-                      <tr key={order.id} className="hover:bg-gray-50">
+                      <tr
+                        key={order.id}
+                        id={`shopkeeper-order-row-${order.id}`}
+                        onClick={() => setSelectedOrderForDetails(order)}
+                        className="hover:bg-blue-50/70 cursor-pointer transition select-none active:bg-blue-100/70"
+                        title="Click to view Order Details"
+                      >
                         <td className="p-3 font-mono font-bold text-[#0F2C59]">
                           #{order.orderNumber}
                           <div className="text-[10px] text-gray-400 font-normal">
@@ -1487,6 +1496,7 @@ export const AdminDashboard: React.FC = () => {
                               }
                               target="_blank"
                               rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
                               className="mt-1 inline-flex items-center gap-1 text-[10px] font-bold text-blue-700 hover:text-blue-900 bg-blue-50 hover:bg-blue-100 px-1.5 py-0.5 rounded border border-blue-200 transition"
                               title="Open Delivery Pin in Google Maps"
                             >
@@ -1529,7 +1539,10 @@ export const AdminDashboard: React.FC = () => {
                                 )}
                                 <button
                                   type="button"
-                                  onClick={() => setCodCollectingOrder(order)}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setCodCollectingOrder(order);
+                                  }}
                                   className="inline-flex items-center gap-1 text-[10px] font-bold text-[#0F2C59] hover:text-[#FF6B00] transition cursor-pointer"
                                   title="Record or Adjust COD Collection"
                                 >
@@ -1607,11 +1620,29 @@ export const AdminDashboard: React.FC = () => {
                         </td>
                         <td className="p-3 text-right">
                           <div className="flex items-center justify-end gap-1.5 flex-wrap">
+                            {/* View Order Details Button */}
+                            <button
+                              type="button"
+                              id={`btn-view-details-${order.id}`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedOrderForDetails(order);
+                              }}
+                              className="px-2.5 py-1.5 bg-blue-50 hover:bg-blue-100 text-[#0F2C59] border border-blue-200 text-[11px] font-bold rounded-lg shadow-2xs transition flex items-center gap-1 shrink-0 cursor-pointer active:scale-95 touch-manipulation"
+                              title={`View Order Details for Order #${order.orderNumber}`}
+                            >
+                              <Eye size={12} className="text-[#0F2C59]" />
+                              <span>Details</span>
+                            </button>
+
                             {/* Single Bill Print Button */}
                             <button
                               type="button"
                               id={`btn-print-bill-${order.id}`}
-                              onClick={() => handlePrintBill(order)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handlePrintBill(order);
+                              }}
                               className="px-2.5 py-1.5 bg-white hover:bg-gray-100 text-[#0F2C59] border border-[#0F2C59]/30 hover:border-[#0F2C59] text-[11px] font-bold rounded-lg shadow-2xs transition flex items-center gap-1 shrink-0 cursor-pointer active:scale-95 touch-manipulation"
                               title={`Print Bill for Order #${order.orderNumber}`}
                             >
@@ -1624,7 +1655,10 @@ export const AdminDashboard: React.FC = () => {
                                 {order.status === OrderStatus.ORDER_PENDING && (
                                   <button
                                     id={`accept-order-btn-${order.id}`}
-                                    onClick={() => updateOrderStatus(order.id, OrderStatus.ORDER_ACCEPTED)}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      updateOrderStatus(order.id, OrderStatus.ORDER_ACCEPTED);
+                                    }}
                                     className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-extrabold rounded-lg shadow-sm transition flex items-center gap-1 shrink-0 cursor-pointer"
                                     title="Accept Order"
                                   >
@@ -1634,7 +1668,9 @@ export const AdminDashboard: React.FC = () => {
                                 )}
                                 <select
                                   value={order.status}
+                                  onClick={(e) => e.stopPropagation()}
                                   onChange={(e) => {
+                                    e.stopPropagation();
                                     const newStatus = e.target.value as OrderStatus;
                                     if (
                                       newStatus === OrderStatus.DELIVERED &&
@@ -2981,6 +3017,17 @@ export const AdminDashboard: React.FC = () => {
           }}
         />
       )}
+
+      {/* Shopkeeper Order Details Modal */}
+      <OrderTrackingModal
+        isOpen={Boolean(selectedOrderForDetails)}
+        order={
+          selectedOrderForDetails
+            ? orders.find((o) => o.id === selectedOrderForDetails.id) || selectedOrderForDetails
+            : null
+        }
+        onClose={() => setSelectedOrderForDetails(null)}
+      />
     </div>
   );
 };
