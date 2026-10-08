@@ -13,6 +13,7 @@ import {
   FileText,
   Edit3,
   ExternalLink,
+  CreditCard,
 } from 'lucide-react';
 import { Order, OrderStatus, PaymentMethod, PaymentStatus } from '../types';
 import { useApp } from '../context/AppContext';
@@ -28,6 +29,7 @@ interface OrderTrackingModalProps {
   isOpen: boolean;
   onClose: () => void;
   onOpenCart?: () => void;
+  onPayPendingBalance?: (order: Order) => void;
 }
 
 export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
@@ -35,6 +37,7 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
   isOpen,
   onClose,
   onOpenCart,
+  onPayPendingBalance,
 }) => {
   const { orders, cancelOrder, startEditingOrder, repeatOrder, currentUser } = useApp();
   const [secondsRemaining, setSecondsRemaining] = useState<number>(0);
@@ -100,11 +103,10 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
     currentOrder.paymentStatus !== PaymentStatus.REFUNDED &&
     (currentOrder.paymentStatus === PaymentStatus.RECEIVED ||
       (currentOrder.paymentStatus as any) === 'PAID' ||
-      (currentOrder as any).is_paid === true ||
-      currentOrder.paymentMethod === PaymentMethod.ADVANCE_ONLINE);
+      (currentOrder as any).is_paid === true);
 
   let amountCollected = 0;
-  if (currentOrder.paymentMethod === PaymentMethod.ADVANCE_ONLINE) {
+  if (isPaid && currentOrder.paymentMethod === PaymentMethod.ADVANCE_ONLINE) {
     amountCollected = walletUsed + actualOnlinePayment;
   } else if (currentOrder.codCollectedAmount !== undefined && currentOrder.codCollectedAmount > 0) {
     amountCollected = currentOrder.codCollectedAmount;
@@ -454,9 +456,29 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
                       ? 'REFUNDED'
                       : currentOrder.status === OrderStatus.CANCELLED
                       ? 'CANCELLED'
-                      : 'PENDING'}
+                      : 'PENDING / UNPAID'}
                   </span>
                 </div>
+
+                {!isPaid &&
+                  currentOrder.status !== OrderStatus.CANCELLED &&
+                  currentOrder.paymentMethod === PaymentMethod.ADVANCE_ONLINE &&
+                  onPayPendingBalance && (
+                    <button
+                      type="button"
+                      id="pay-pending-balance-btn"
+                      onClick={() => {
+                        onClose();
+                        onPayPendingBalance(currentOrder);
+                      }}
+                      className="w-full mt-2.5 py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs rounded-xl shadow-xs transition flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      <CreditCard size={15} />
+                      <span>
+                        Pay Balance ₹{currentOrder.totalPayable ?? currentOrder.finalAmount} Online Now
+                      </span>
+                    </button>
+                  )}
               </>
             )}
           </div>

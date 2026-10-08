@@ -205,10 +205,13 @@ export const CustomerOrdersDrawer: React.FC<CustomerOrdersDrawerProps> = ({
                       )}
                       {order.status !== OrderStatus.CANCELLED &&
                       (order.paymentStatus === PaymentStatus.RECEIVED ||
-                        (order.paymentStatus as any) === 'PAID' ||
-                        order.paymentMethod === PaymentMethod.ADVANCE_ONLINE) ? (
+                        (order.paymentStatus as any) === 'PAID') ? (
                         <span className="ml-1 text-[10px] font-black text-emerald-800 bg-emerald-100/70 px-1.5 py-0.5 rounded">
                           PAID
+                        </span>
+                      ) : order.status !== OrderStatus.CANCELLED ? (
+                        <span className="ml-1 text-[10px] font-black text-amber-800 bg-amber-100/70 px-1.5 py-0.5 rounded">
+                          PENDING
                         </span>
                       ) : null}
                       <span className="text-[10px] text-gray-400 ml-1.5">

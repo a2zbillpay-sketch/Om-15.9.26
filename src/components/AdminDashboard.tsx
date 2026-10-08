@@ -47,7 +47,7 @@ import * as XLSX from 'xlsx';
 import { useApp } from '../context/AppContext';
 import { playNotificationSound } from '../utils/notificationSound';
 import { INITIAL_PRODUCTS, INITIAL_CATEGORIES } from '../data/seedData';
-import { Order, OrderStatus, PaymentMethod, Product, ProductVariant, TieredPrice, UnitType, Role } from '../types';
+import { Order, OrderStatus, PaymentMethod, PaymentStatus, Product, ProductVariant, TieredPrice, UnitType, Role } from '../types';
 import { AdminSettingsControl } from './AdminSettingsControl';
 import { CategoryManagement } from './CategoryManagement';
 import { LogoUploadModal } from './LogoUploadModal';
@@ -1580,11 +1580,17 @@ export const AdminDashboard: React.FC = () => {
                             <span
                               className={`inline-flex items-center gap-1 w-fit px-2 py-0.5 rounded text-[10px] font-bold ${
                                 order.paymentMethod === PaymentMethod.ADVANCE_ONLINE
-                                  ? 'bg-emerald-100 text-emerald-800'
+                                  ? order.paymentStatus === PaymentStatus.PENDING
+                                    ? 'bg-amber-100 text-amber-900 border border-amber-300'
+                                    : 'bg-emerald-100 text-emerald-800'
                                   : 'bg-amber-100 text-amber-800'
                               }`}
                             >
-                              {order.paymentMethod === PaymentMethod.ADVANCE_ONLINE ? 'UPI Advance' : 'COD'}
+                              {order.paymentMethod === PaymentMethod.ADVANCE_ONLINE
+                                ? order.paymentStatus === PaymentStatus.PENDING
+                                  ? 'UPI (Pending)'
+                                  : 'UPI Advance'
+                                : 'COD'}
                             </span>
                             {order.paymentMethod === PaymentMethod.COD && (
                               <div className="text-[10px] space-y-0.5">

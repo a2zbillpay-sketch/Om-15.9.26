@@ -16,7 +16,7 @@ import {
   RotateCcw,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { PaymentMethod, Order } from '../types';
+import { PaymentMethod, PaymentStatus, Order } from '../types';
 import { getActiveUnitPrice } from '../lib/engine/checkout-calculator';
 import { formatVariantPack } from '../utils/variantFormatter';
 import { ImageLightboxModal } from './ImageLightboxModal';
@@ -26,6 +26,12 @@ interface CartDrawerProps {
   onClose: () => void;
   onProceedToCheckout: () => void;
   onOrderUpdated?: (order: Order) => void;
+  onRedirectToPayment?: (details: {
+    order: Order;
+    remainingAmount: number;
+    previousPaid: number;
+    walletAmountUsed: number;
+  }) => void;
 }
 
 export const CartDrawer: React.FC<CartDrawerProps> = ({
@@ -33,6 +39,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
   onClose,
   onProceedToCheckout,
   onOrderUpdated,
+  onRedirectToPayment,
 }) => {
   const {
     cart,
@@ -68,6 +75,49 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
       (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
     )[0];
   }, [customerOrders]);
+
+  // Dedicated calculations for editing an existing order:
+  // Recalculates edited order total, does not apply new order/first-order discount again,
+  // subtracts only the wallet amount actually selected/used, and calculates remaining amount to pay.
+  const editSubtotal = useMemo(() => {
+    return cart.reduce((acc, item) => {
+      const unitPrice = getActiveUnitPrice(
+        item.variant.baseSellingPrice,
+        item.quantity,
+        item.variant.tieredPrices || []
+      );
+      return acc + unitPrice * item.quantity;
+    }, 0);
+  }, [cart]);
+
+  const editDeliveryFee = editSubtotal >= settings.freeShippingMinAmount ? 0 : settings.baseDeliveryFee;
+  const isEditingCod = editingOrder?.paymentMethod === PaymentMethod.COD;
+  const editCodCharge = isEditingCod
+    ? (editingOrder?.codCharge !== undefined && editingOrder.codCharge > 0
+        ? editingOrder.codCharge
+        : (currentUser.codOrderCount < 3 ? 0 : settings.codBaseCharge))
+    : 0;
+
+  const editOrderTotal = Math.max(0, editSubtotal + editDeliveryFee + editCodCharge);
+  const editWalletUsed = Math.min(editOrderTotal, Math.max(0, editingOrder?.walletAmountUsed || 0));
+  const editTotalAfterWallet = Math.max(0, editOrderTotal - editWalletUsed);
+
+  const editWasPreviouslyPaid =
+    editingOrder?.paymentStatus === PaymentStatus.RECEIVED ||
+    (editingOrder?.paymentStatus as any) === 'PAID' ||
+    (editingOrder as any)?.is_paid === true;
+
+  const editPreviousOnlinePaid = editWasPreviouslyPaid
+    ? Math.max(
+        0,
+        (editingOrder?.totalPayable !== undefined ? editingOrder.totalPayable : editingOrder?.finalAmount || 0) -
+          (editingOrder?.walletAmountUsed || 0)
+      )
+    : 0;
+
+  const editRemainingPayable = isEditingCod
+    ? 0
+    : Math.max(0, editTotalAfterWallet - editPreviousOnlinePaid);
 
   if (!isOpen) return null;
 
@@ -373,47 +423,57 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
 
             {/* Breakdown Summary */}
             {editingOrder ? (
-              <div className="space-y-1 text-xs text-gray-600 border-t border-gray-200 pt-2 bg-gray-50/70 p-3 rounded-xl">
+              <div className="space-y-1.5 text-xs text-gray-600 border-t border-gray-200 pt-2 bg-gray-50/70 p-3 rounded-xl">
                 <div className="flex justify-between">
                   <span>Items Subtotal ({cart.length} items):</span>
-                  <span className="font-bold text-gray-900">₹{checkoutBreakdown.subtotal}</span>
+                  <span className="font-bold text-gray-900">₹{editSubtotal}</span>
                 </div>
-                {checkoutBreakdown.excludedSubtotal > 0 && checkoutBreakdown.eligibleSubtotal > 0 && (
-                  <div className="flex justify-between text-[11px] text-amber-800 pl-2 font-medium">
-                    <span>• Price Regulated Items:</span>
-                    <span>₹{checkoutBreakdown.excludedSubtotal}</span>
-                  </div>
-                )}
-                {editingOrder.paymentMethod === PaymentMethod.ADVANCE_ONLINE && checkoutBreakdown.advanceDiscountAmount > 0 && (
-                  <div className="flex justify-between text-emerald-700 font-bold">
-                    <span>Advance UPI Discount ({settings.advancePaymentDiscountPct}%):</span>
-                    <span>-₹{checkoutBreakdown.advanceDiscountAmount}</span>
-                  </div>
-                )}
                 <div className="flex justify-between">
                   <span>Delivery Fee:</span>
                   <span>
-                    {checkoutBreakdown.deliveryFee === 0 ? (
+                    {editDeliveryFee === 0 ? (
                       <span className="text-emerald-600 font-bold">FREE</span>
                     ) : (
-                      `₹${checkoutBreakdown.deliveryFee}`
+                      `₹${editDeliveryFee}`
                     )}
                   </span>
                 </div>
-                {editingOrder.walletAmountUsed !== undefined && editingOrder.walletAmountUsed > 0 && (
-                  <div className="flex justify-between text-emerald-700 font-bold">
-                    <span>Wallet Applied (Advance):</span>
-                    <span>-₹{editingOrder.walletAmountUsed}</span>
+                {isEditingCod && editCodCharge > 0 && (
+                  <div className="flex justify-between">
+                    <span>COD Fee:</span>
+                    <span>₹{editCodCharge}</span>
                   </div>
                 )}
-                <div className="flex justify-between text-emerald-700 font-bold pt-1.5 border-t border-gray-200">
+                <div className="flex justify-between font-bold text-gray-900 pt-1 border-t border-gray-200">
+                  <span>Recalculated Order Total:</span>
+                  <span>₹{editOrderTotal}</span>
+                </div>
+                {editWalletUsed > 0 && (
+                  <div className="flex justify-between text-emerald-700 font-bold">
+                    <span>Wallet Applied:</span>
+                    <span>-₹{editWalletUsed}</span>
+                  </div>
+                )}
+                {editPreviousOnlinePaid > 0 && (
+                  <div className="flex justify-between text-blue-700 font-bold">
+                    <span>Already Paid Online:</span>
+                    <span>-₹{editPreviousOnlinePaid}</span>
+                  </div>
+                )}
+                <div className="flex justify-between text-emerald-800 font-black pt-1.5 border-t border-emerald-300">
                   <span>
-                    Updated Total Payable ({editingOrder.paymentMethod === PaymentMethod.ADVANCE_ONLINE ? 'Advance UPI' : 'COD'}):
+                    {isEditingCod
+                      ? 'Total Payable on Delivery (COD):'
+                      : editRemainingPayable > 0
+                      ? 'Remaining Balance to Pay Online:'
+                      : 'Remaining Online Balance:'}
                   </span>
                   <span className="text-sm font-black text-emerald-800">
-                    ₹{editingOrder.paymentMethod === PaymentMethod.ADVANCE_ONLINE
-                      ? Math.max(0, checkoutBreakdown.advanceFinalTotal - (editingOrder.walletAmountUsed || 0))
-                      : checkoutBreakdown.codFinalTotal}
+                    {isEditingCod
+                      ? `₹${editTotalAfterWallet}`
+                      : editRemainingPayable > 0
+                      ? `₹${editRemainingPayable}`
+                      : '₹0 (Paid)'}
                   </span>
                 </div>
               </div>
@@ -487,7 +547,16 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                   setIsSavingOrder(false);
                   if (result.success && result.updatedOrder) {
                     onClose();
-                    if (onOrderUpdated) {
+                    if (result.requiresPayment && (result.remainingAmountToPay || 0) > 0) {
+                      if (onRedirectToPayment) {
+                        onRedirectToPayment({
+                          order: result.updatedOrder,
+                          remainingAmount: result.remainingAmountToPay || 0,
+                          previousPaid: result.previousOnlinePaid || 0,
+                          walletAmountUsed: result.walletAmountUsed || 0,
+                        });
+                      }
+                    } else if (onOrderUpdated) {
                       onOrderUpdated(result.updatedOrder);
                     }
                   }
@@ -496,10 +565,16 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
               >
                 <div>
                   <div className="text-[10px] text-[#D4AF37] font-medium leading-none">
-                    SAVE CHANGES TO ORDER
+                    {editRemainingPayable > 0 && !isEditingCod
+                      ? 'SAVE & PAY BALANCE'
+                      : 'SAVE CHANGES TO ORDER'}
                   </div>
                   <div className="text-base font-black leading-tight text-white">
-                    {isSavingOrder ? 'Updating Order...' : `Update Order #${editingOrder.orderNumber}`}
+                    {isSavingOrder
+                      ? 'Updating Order...'
+                      : editRemainingPayable > 0 && !isEditingCod
+                      ? `Pay Balance ₹${editRemainingPayable} • Order #${editingOrder.orderNumber}`
+                      : `Update Order #${editingOrder.orderNumber}`}
                   </div>
                 </div>
                 <div className="bg-[#D4AF37] text-[#0F2C59] p-1.5 rounded-lg">

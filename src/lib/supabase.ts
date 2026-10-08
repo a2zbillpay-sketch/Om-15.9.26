@@ -952,6 +952,8 @@ export async function saveEditedOrderToSupabase(order: Order): Promise<boolean> 
       discount_amount: order.discountAmount,
       final_total: order.finalAmount,
       notes: orderNotes,
+      is_paid: order.paymentStatus === PaymentStatus.RECEIVED,
+      payment_status: order.paymentStatus,
       updated_at: new Date().toISOString(),
     };
 

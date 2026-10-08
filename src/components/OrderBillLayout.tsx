@@ -7,9 +7,10 @@ export interface OrderBillLayoutProps {
 }
 
 export const OrderBillLayout: React.FC<OrderBillLayoutProps> = ({ order, settings }) => {
-  const isAdvance =
-    order.paymentMethod === PaymentMethod.ADVANCE_ONLINE ||
-    order.paymentStatus === PaymentStatus.RECEIVED;
+  const isAdvancePaid =
+    order.paymentStatus === PaymentStatus.RECEIVED ||
+    (order.paymentStatus as any) === 'PAID' ||
+    (order as any).is_paid === true;
 
   const totalItemCount = order.items.reduce((sum, item) => sum + (Number(item.quantity) || 1), 0);
   const formattedOrderDate = new Date(order.createdAt).toLocaleString('en-IN', {
@@ -113,8 +114,14 @@ export const OrderBillLayout: React.FC<OrderBillLayoutProps> = ({ order, setting
         </div>
         <div>
           <span className="text-gray-600">Payment Status: </span>
-          <span className="font-bold text-emerald-800">
-            {isAdvance ? 'PAID ONLINE (ADVANCE)' : (order.codCollectedAmount && order.codCollectedAmount > 0) ? 'COD COLLECTED' : 'PAYABLE ON DELIVERY'}
+          <span className={`font-bold ${isAdvancePaid ? 'text-emerald-800' : 'text-amber-800'}`}>
+            {isAdvancePaid
+              ? 'PAID ONLINE (ADVANCE)'
+              : order.paymentMethod === PaymentMethod.ADVANCE_ONLINE
+              ? 'PENDING (UNPAID ONLINE BALANCE)'
+              : (order.codCollectedAmount && order.codCollectedAmount > 0)
+              ? 'COD COLLECTED'
+              : 'PAYABLE ON DELIVERY'}
           </span>
         </div>
       </div>

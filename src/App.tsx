@@ -24,6 +24,7 @@ import { StorePolicyModal, PolicyType } from './components/StorePolicyModal';
 import { AdminLoginModal } from './components/AdminLoginModal';
 import { OrderSuccessModal } from './components/OrderSuccessModal';
 import { ShopkeeperLoginNotifier } from './components/ShopkeeperLoginNotifier';
+import { EditOrderPaymentModal } from './components/EditOrderPaymentModal';
 import { ShieldCheck, Phone, MapPin, Mail, Award, ShoppingBag } from 'lucide-react';
 
 const MainLayout: React.FC = () => {
@@ -53,6 +54,12 @@ const MainLayout: React.FC = () => {
   const [isAddressModalOpen, setIsAddressModalOpen] = useState(false);
   const [selectedTrackingOrder, setSelectedTrackingOrder] = useState<Order | null>(null);
   const [placedSuccessOrder, setPlacedSuccessOrder] = useState<Order | null>(null);
+  const [balancePaymentDetails, setBalancePaymentDetails] = useState<{
+    order: Order;
+    remainingAmount: number;
+    previousPaid: number;
+    walletAmountUsed: number;
+  } | null>(null);
   const [activePolicy, setActivePolicy] = useState<PolicyType | null>(null);
   const [isGmpQuotaExceeded, setIsGmpQuotaExceeded] = useState(false);
 
@@ -325,6 +332,9 @@ const MainLayout: React.FC = () => {
         onOrderUpdated={(updated) => {
           setSelectedTrackingOrder(updated);
         }}
+        onRedirectToPayment={(details) => {
+          setBalancePaymentDetails(details);
+        }}
       />
 
       <CheckoutModal
@@ -338,6 +348,26 @@ const MainLayout: React.FC = () => {
         isOpen={Boolean(placedSuccessOrder)}
         order={placedSuccessOrder}
         onClose={handleCloseOrderSuccessModal}
+      />
+
+      {/* Edit Order Balance Payment Modal */}
+      <EditOrderPaymentModal
+        isOpen={Boolean(balancePaymentDetails)}
+        onClose={() => {
+          const order = balancePaymentDetails?.order;
+          setBalancePaymentDetails(null);
+          if (order) {
+            setSelectedTrackingOrder(order);
+          }
+        }}
+        order={balancePaymentDetails?.order || null}
+        remainingAmountToPay={balancePaymentDetails?.remainingAmount || 0}
+        previousOnlinePaid={balancePaymentDetails?.previousPaid || 0}
+        walletAmountUsed={balancePaymentDetails?.walletAmountUsed || 0}
+        onPaymentSuccess={(updated) => {
+          setBalancePaymentDetails(null);
+          setPlacedSuccessOrder(updated);
+        }}
       />
 
       <CustomerOrdersDrawer
@@ -356,6 +386,20 @@ const MainLayout: React.FC = () => {
         }
         onClose={() => setSelectedTrackingOrder(null)}
         onOpenCart={() => setIsCartOpen(true)}
+        onPayPendingBalance={(orderToPay) => {
+          const wUsed = Math.max(0, orderToPay.walletAmountUsed || 0);
+          const rem = Math.max(
+            0,
+            orderToPay.totalPayable !== undefined ? orderToPay.totalPayable : orderToPay.finalAmount
+          );
+          const prev = Math.max(0, orderToPay.finalAmount - wUsed - rem);
+          setBalancePaymentDetails({
+            order: orderToPay,
+            remainingAmount: rem,
+            previousPaid: prev,
+            walletAmountUsed: wUsed,
+          });
+        }}
       />
 
       <ReferralWalletModal

@@ -167,7 +167,20 @@ interface AppContextType {
   editingOrder: Order | null;
   startEditingOrder: (order: Order) => void;
   cancelEditingOrder: () => void;
-  saveEditedOrder: () => Promise<{ success: boolean; error?: string; updatedOrder?: Order }>;
+  saveEditedOrder: () => Promise<{
+    success: boolean;
+    error?: string;
+    updatedOrder?: Order;
+    remainingAmountToPay?: number;
+    previousOnlinePaid?: number;
+    walletAmountUsed?: number;
+    requiresPayment?: boolean;
+  }>;
+  confirmEditedOrderPayment: (orderId: string, paymentMethodApp?: string) => Promise<{
+    success: boolean;
+    updatedOrder?: Order;
+    error?: string;
+  }>;
   repeatLastOrder: () => RepeatOrderResult;
   repeatOrder: (order: Order) => RepeatOrderResult;
   repeatOrderNotice: RepeatOrderNotice | null;
@@ -1131,6 +1144,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     success: boolean;
     error?: string;
     updatedOrder?: Order;
+    remainingAmountToPay?: number;
+    previousOnlinePaid?: number;
+    walletAmountUsed?: number;
+    requiresPayment?: boolean;
   }> => {
     if (!editingOrder) {
       return { success: false, error: 'No order is currently being edited.' };
@@ -1167,41 +1184,60 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
     });
 
-    // 2. Calculate updated checkout totals using checkout calculation engine
-    const variantItems = cart.map((item) => ({
-      variantId: item.variantId,
-      quantity: item.quantity,
-      baseSellingPrice: item.variant.baseSellingPrice,
-      isDiscountExcluded:
-        item.product.isDiscountExcluded === true ||
-        (item.product.isDiscountExcluded as any) === 'true',
-      tieredPrices: item.variant.tieredPrices || [],
-    }));
+    // 2. Recalculate edited order total:
+    // Items subtotal
+    const subtotal = updatedOrderItems.reduce((acc, it) => acc + it.price, 0);
 
-    const breakdown = calculateCheckoutTotals(
-      variantItems,
-      { codOrderCount: currentUser.codOrderCount },
-      {
-        advancePaymentDiscountPct: settings.advancePaymentDiscountPct,
-        codBaseCharge: settings.codBaseCharge,
-        freeShippingMinAmount: settings.freeShippingMinAmount,
-        baseDeliveryFee: settings.baseDeliveryFee,
-      }
-    );
+    // Delivery fee
+    const deliveryFee = subtotal >= settings.freeShippingMinAmount ? 0 : settings.baseDeliveryFee;
 
-    const isAdvance = currentOrder.paymentMethod === PaymentMethod.ADVANCE_ONLINE;
-    const finalAmount = isAdvance ? breakdown.advanceFinalTotal : breakdown.codFinalTotal;
-    const discountAmount = isAdvance ? breakdown.advanceDiscountAmount : 0;
-    const codCharge = isAdvance ? 0 : breakdown.codCharge;
+    // COD charge if order was COD
+    const isCod = currentOrder.paymentMethod === PaymentMethod.COD;
+    const codCharge = isCod
+      ? (currentOrder.codCharge !== undefined && currentOrder.codCharge > 0
+          ? currentOrder.codCharge
+          : (currentUser.codOrderCount < 3 ? 0 : settings.codBaseCharge))
+      : 0;
 
-    // Preserve and recalculate wallet usage & payable
-    let walletUsed = 0;
-    if (isAdvance && (currentOrder.walletAmountUsed || 0) > 0) {
-      walletUsed = Math.min(finalAmount, currentOrder.walletAmountUsed || 0);
-    }
-    const totalPayable = isAdvance
-      ? Math.max(0, finalAmount - walletUsed)
-      : finalAmount;
+    // Do not apply the New Order/first-order discount again
+    const discountAmount = 0;
+
+    // Recalculated edited order total
+    const finalAmount = Math.max(0, subtotal + deliveryFee + codCharge);
+
+    // Subtract only the wallet amount actually selected/used
+    const originalWalletUsed = Math.max(0, currentOrder.walletAmountUsed || 0);
+    const walletUsed = Math.min(finalAmount, originalWalletUsed);
+    const totalAfterWallet = Math.max(0, finalAmount - walletUsed);
+
+    // And calculate the remaining amount to pay
+    const wasPreviouslyPaid =
+      currentOrder.paymentStatus === PaymentStatus.RECEIVED ||
+      (currentOrder.paymentStatus as any) === 'PAID' ||
+      (currentOrder as any).is_paid === true;
+
+    // If previously paid online, compute actual online payment paid earlier
+    const previousOnlinePaid = wasPreviouslyPaid
+      ? Math.max(
+          0,
+          (currentOrder.totalPayable !== undefined ? currentOrder.totalPayable : currentOrder.finalAmount) -
+            originalWalletUsed
+        )
+      : 0;
+
+    // Remaining amount to pay
+    const remainingAmountToPay = isCod
+      ? 0
+      : Math.max(0, totalAfterWallet - previousOnlinePaid);
+
+    // If remaining amount > ₹0, keep payment status UNPAID/PENDING and redirect customer to payment page
+    // NEVER mark it PAID unless the newly required online balance is actually paid successfully!
+    const requiresPayment = !isCod && remainingAmountToPay > 0;
+    const paymentStatus = requiresPayment
+      ? PaymentStatus.PENDING
+      : wasPreviouslyPaid
+      ? PaymentStatus.RECEIVED
+      : currentOrder.paymentStatus || PaymentStatus.PENDING;
 
     // 3. Adjust stock ONLY by the difference between old and new quantities
     const stockResult = adjustStockForEditedOrder(currentOrder, updatedOrderItems, products);
@@ -1225,13 +1261,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updatedOrder: Order = {
       ...currentOrder,
       items: updatedOrderItems,
-      subtotal: breakdown.subtotal,
+      subtotal,
       discountAmount,
-      deliveryFee: breakdown.deliveryFee,
+      deliveryFee,
       codCharge,
       finalAmount,
-      totalPayable,
+      totalPayable: requiresPayment ? remainingAmountToPay : totalAfterWallet,
       walletAmountUsed: walletUsed,
+      paymentStatus,
     };
 
     // 5. Update React state and localStorage
@@ -1255,7 +1292,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setSavedPreEditCart(null);
     setEditingOrder(null);
 
-    return { success: true, updatedOrder };
+    return {
+      success: true,
+      updatedOrder,
+      remainingAmountToPay,
+      previousOnlinePaid,
+      walletAmountUsed: walletUsed,
+      requiresPayment,
+    };
   }, [
     editingOrder,
     cart,
@@ -1265,6 +1309,56 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     products,
     isSupabaseConfigured,
   ]);
+
+  const confirmEditedOrderPayment = useCallback(
+    async (
+      orderId: string,
+      paymentMethodApp?: string
+    ): Promise<{
+      success: boolean;
+      updatedOrder?: Order;
+      error?: string;
+    }> => {
+      const target = orders.find((o) => o.id === orderId);
+      if (!target) {
+        return { success: false, error: 'Order not found.' };
+      }
+
+      const updatedOrder: Order = {
+        ...target,
+        paymentStatus: PaymentStatus.RECEIVED,
+        razorpayPaymentId: `pay_${Date.now()}_${paymentMethodApp || 'upi'}`,
+      };
+
+      setOrders((prev) => {
+        const next = prev.map((o) => (o.id === orderId ? updatedOrder : o));
+        try {
+          localStorage.setItem('om_orders', JSON.stringify(next));
+        } catch {}
+        return next;
+      });
+
+      if (isSupabaseConfigured) {
+        updateOrderStatusInSupabase(
+          orderId,
+          target.status,
+          true,
+          {
+            orderNumber: target.orderNumber,
+            totalPayable: target.totalPayable,
+            walletAmountUsed: target.walletAmountUsed,
+            items: target.items,
+          }
+        ).catch((err) => {
+          console.warn('Background Supabase payment update error:', err);
+        });
+        saveEditedOrderToSupabase(updatedOrder).catch(() => {});
+      }
+
+      return { success: true, updatedOrder };
+    },
+    [orders, isSupabaseConfigured]
+  );
 
   // Repeat Order notice & action state
   const [repeatOrderNotice, setRepeatOrderNotice] = useState<RepeatOrderNotice | null>(null);
@@ -2592,6 +2686,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         startEditingOrder,
         cancelEditingOrder,
         saveEditedOrder,
+        confirmEditedOrderPayment,
         repeatLastOrder,
         repeatOrder,
         repeatOrderNotice,
