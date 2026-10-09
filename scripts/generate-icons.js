@@ -113,6 +113,10 @@ if (fs.existsSync(logoPath)) {
     execSync(`convert "${logoPath}" -quality 100 -resize 192x192 "${path.join(dir, 'icon-192x192.png')}"`);
     execSync(`convert "${logoPath}" -quality 100 -resize 512x512 "${path.join(dir, 'icon-512x512.png')}"`);
     execSync(`convert "${logoPath}" -quality 100 -resize 180x180 "${path.join(process.cwd(), 'public', 'apple-touch-icon.png')}"`);
+    execSync(`convert "${logoPath}" -resize 512x512 -blur 0x16 /tmp/maskable-bg.png`);
+    execSync(`convert "${logoPath}" -quality 100 -resize 400x400 /tmp/logo-400.png`);
+    execSync(`composite -gravity center /tmp/logo-400.png /tmp/maskable-bg.png "${path.join(dir, 'icon-maskable-512x512.png')}"`);
+    execSync(`convert "${path.join(dir, 'icon-maskable-512x512.png')}" -resize 192x192 "${path.join(dir, 'icon-maskable-192x192.png')}"`);
     console.log('Icons generated successfully from official logo.jpg');
   } catch (e) {
     console.error('Error generating icons via convert:', e);

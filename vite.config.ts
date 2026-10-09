@@ -74,6 +74,15 @@ function apiServerPlugin(): Plugin {
     configureServer(server) {
       server.middlewares.use(async (req, res, next) => {
         const url = req.url || '';
+        if (url.startsWith('/manifest.json')) {
+          const manifestPath = path.resolve(__dirname, 'public', 'manifest.json');
+          if (fs.existsSync(manifestPath)) {
+            res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
+            res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+            fs.createReadStream(manifestPath).pipe(res);
+            return;
+          }
+        }
         if (url.startsWith('/api/')) {
           const pathname = url.split('?')[0].split('#')[0];
           const relativePath = pathname.replace(/^\/api\//, '');
@@ -115,7 +124,15 @@ export default defineConfig(() => {
       VitePWA({
         registerType: 'autoUpdate',
         manifest: false, // We already have public/manifest.json matching the exact user prompt
-        includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'logo.jpg', 'icons/icon-192x192.png', 'icons/icon-512x512.png'],
+        includeAssets: [
+          'favicon.ico',
+          'apple-touch-icon.png',
+          'logo.jpg',
+          'icons/icon-192x192.png',
+          'icons/icon-512x512.png',
+          'icons/icon-maskable-192x192.png',
+          'icons/icon-maskable-512x512.png'
+        ],
         workbox: {
           globPatterns: ['**/*.{js,css,html,ico,png,svg,jpg,jpeg,json}'],
           maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
