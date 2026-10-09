@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import zlib from 'zlib';
+import { execSync } from 'child_process';
 
 function createPNG(width, height, bgColor, text) {
   // Simple uncompressed or deflate PNG generator
@@ -106,6 +107,18 @@ for (let n = 0; n < 256; n++) {
 const dir = path.join(process.cwd(), 'public', 'icons');
 if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
-fs.writeFileSync(path.join(dir, 'icon-192x192.png'), createPNG(192, 192, '#0F2C59', 'OM'));
-fs.writeFileSync(path.join(dir, 'icon-512x512.png'), createPNG(512, 512, '#0F2C59', 'OM'));
-console.log('Icons created successfully');
+const logoPath = path.join(process.cwd(), 'public', 'logo.jpg');
+if (fs.existsSync(logoPath)) {
+  try {
+    execSync(`convert "${logoPath}" -quality 100 -resize 192x192 "${path.join(dir, 'icon-192x192.png')}"`);
+    execSync(`convert "${logoPath}" -quality 100 -resize 512x512 "${path.join(dir, 'icon-512x512.png')}"`);
+    execSync(`convert "${logoPath}" -quality 100 -resize 180x180 "${path.join(process.cwd(), 'public', 'apple-touch-icon.png')}"`);
+    console.log('Icons generated successfully from official logo.jpg');
+  } catch (e) {
+    console.error('Error generating icons via convert:', e);
+  }
+} else {
+  fs.writeFileSync(path.join(dir, 'icon-192x192.png'), createPNG(192, 192, '#0F2C59', 'OM'));
+  fs.writeFileSync(path.join(dir, 'icon-512x512.png'), createPNG(512, 512, '#0F2C59', 'OM'));
+  console.log('Fallback icons created successfully');
+}

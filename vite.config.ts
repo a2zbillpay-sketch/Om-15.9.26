@@ -115,7 +115,9 @@ export default defineConfig(() => {
       VitePWA({
         registerType: 'autoUpdate',
         manifest: false, // We already have public/manifest.json matching the exact user prompt
+        includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'logo.jpg', 'icons/icon-192x192.png', 'icons/icon-512x512.png'],
         workbox: {
+          globPatterns: ['**/*.{js,css,html,ico,png,svg,jpg,jpeg,json}'],
           maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
         },
         devOptions: {
