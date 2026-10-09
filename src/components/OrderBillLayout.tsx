@@ -221,9 +221,14 @@ export const OrderBillLayout: React.FC<OrderBillLayoutProps> = ({ order, setting
 
           {/* Grand Order Bill Total */}
           <div className="flex justify-between text-sm font-black text-[#0F2C59] border-t-2 border-[#0F2C59] pt-2 mt-1">
-            <span>Total Order Bill:</span>
-            <span className="font-mono">₹{order.finalAmount}</span>
+            <span>{order.status === 'CANCELLED' ? 'Total Payable:' : 'Total Order Bill:'}</span>
+            <span className="font-mono">₹{order.status === 'CANCELLED' ? 0 : order.finalAmount}</span>
           </div>
+          {order.status === 'CANCELLED' && (
+            <div className="text-[10px] text-red-600 font-bold text-right pt-0.5">
+              (Cancelled • Original Bill: ₹{order.finalAmount})
+            </div>
+          )}
 
           {/* COD Ledger Details if present */}
           {order.paymentMethod === PaymentMethod.COD && order.previousOutstanding !== undefined && order.previousOutstanding > 0 && (
@@ -234,7 +239,7 @@ export const OrderBillLayout: React.FC<OrderBillLayoutProps> = ({ order, setting
               </div>
               <div className="flex justify-between text-[#0F2C59] font-black text-xs">
                 <span>Total Payable on Delivery:</span>
-                <span className="font-mono">₹{order.totalPayable || order.finalAmount}</span>
+                <span className="font-mono">₹{order.status === 'CANCELLED' ? 0 : (order.totalPayable || order.finalAmount)}</span>
               </div>
             </>
           )}

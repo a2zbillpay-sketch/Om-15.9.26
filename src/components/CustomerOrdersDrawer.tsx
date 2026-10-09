@@ -123,7 +123,7 @@ export const CustomerOrdersDrawer: React.FC<CustomerOrdersDrawerProps> = ({
                     onSelectOrder(order);
                     onClose();
                   }}
-                  className="bg-gray-50 hover:bg-gray-100 border border-gray-200 rounded-xl p-3.5 cursor-pointer transition flex flex-col justify-between space-y-2 hover:shadow-sm"
+                  className="bg-gray-50 hover:bg-gray-100 border-[1.5px] border-blue-500 rounded-xl p-3.5 cursor-pointer transition flex flex-col justify-between space-y-2 hover:shadow-sm"
                 >
                   <div className="flex justify-between items-start">
                     <div>
@@ -196,8 +196,18 @@ export const CustomerOrdersDrawer: React.FC<CustomerOrdersDrawerProps> = ({
 
                   <div className="flex justify-between items-center pt-2 border-t border-gray-200 text-xs">
                     <div>
-                      <span className="text-gray-500 text-[10px]">Order: </span>
-                      <span className="font-bold text-gray-800">₹{order.finalAmount}</span>
+                      {order.status === OrderStatus.CANCELLED ? (
+                        <>
+                          <span className="text-gray-500 text-[10px]">Total Payable: </span>
+                          <span className="font-bold text-gray-800">₹0</span>
+                          <span className="text-[10px] text-gray-400 ml-1">(Cancelled)</span>
+                        </>
+                      ) : (
+                        <>
+                          <span className="text-gray-500 text-[10px]">Total Payable: </span>
+                          <span className="font-bold text-gray-800">₹{order.totalPayable ?? order.finalAmount}</span>
+                        </>
+                      )}
                       {order.walletAmountUsed !== undefined && order.walletAmountUsed > 0 && (
                         <span className="ml-1 text-[10px] font-black text-emerald-800 bg-emerald-100/70 px-1.5 py-0.5 rounded">
                           Wallet: -₹{order.walletAmountUsed}

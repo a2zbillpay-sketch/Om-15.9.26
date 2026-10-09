@@ -123,6 +123,12 @@ export const EditOrderPaymentModal: React.FC<EditOrderPaymentModalProps> = ({
                   {order.deliveryFee === 0 ? 'FREE' : `₹${order.deliveryFee}`}
                 </span>
               </div>
+              {order.discountAmount > 0 && (
+                <div className="flex justify-between text-emerald-700 font-bold">
+                  <span>Advance Online Discount:</span>
+                  <span>-₹{order.discountAmount}</span>
+                </div>
+              )}
               <div className="flex justify-between text-gray-900 font-extrabold pt-1 border-t border-gray-200">
                 <span>Recalculated Order Total:</span>
                 <span>₹{order.finalAmount}</span>

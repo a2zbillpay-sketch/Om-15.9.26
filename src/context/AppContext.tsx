@@ -1188,6 +1188,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // Items subtotal
     const subtotal = updatedOrderItems.reduce((acc, it) => acc + it.price, 0);
 
+    // Eligible subtotal for advance discount (excluding price-regulated items)
+    const eligibleSubtotal = updatedOrderItems.reduce(
+      (acc, it) => (it.isDiscountExcluded ? acc : acc + it.price),
+      0
+    );
+
     // Delivery fee
     const deliveryFee = subtotal >= settings.freeShippingMinAmount ? 0 : settings.baseDeliveryFee;
 
@@ -1199,11 +1205,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           : (currentUser.codOrderCount < 3 ? 0 : settings.codBaseCharge))
       : 0;
 
-    // Do not apply the New Order/first-order discount again
-    const discountAmount = 0;
+    // Apply eligible Advance Online Discount BEFORE subtracting the amount already paid
+    // Example: ₹505 subtotal − ₹15 advance online discount = ₹490
+    const isAdvance = currentOrder.paymentMethod === PaymentMethod.ADVANCE_ONLINE;
+    const discountAmount = isAdvance
+      ? Math.round((eligibleSubtotal * Math.max(0, Number(settings.advancePaymentDiscountPct) || 0)) / 100)
+      : 0;
 
-    // Recalculated edited order total
-    const finalAmount = Math.max(0, subtotal + deliveryFee + codCharge);
+    // Recalculated new order total (BEFORE subtracting amount already paid)
+    const finalAmount = Math.max(0, subtotal + deliveryFee + codCharge - discountAmount);
 
     // Subtract only the wallet amount actually selected/used
     const originalWalletUsed = Math.max(0, currentOrder.walletAmountUsed || 0);
@@ -1216,7 +1226,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       (currentOrder.paymentStatus as any) === 'PAID' ||
       (currentOrder as any).is_paid === true;
 
-    // If previously paid online, compute actual online payment paid earlier
+    // If previously paid online, compute actual online payment paid earlier (e.g. ₹204)
     const previousOnlinePaid = wasPreviouslyPaid
       ? Math.max(
           0,
@@ -1225,7 +1235,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         )
       : 0;
 
-    // Remaining amount to pay
+    // Balance to Pay Now:
+    // Example: ₹490 − ₹204 already paid = ₹286 Balance to Pay Now
     const remainingAmountToPay = isCod
       ? 0
       : Math.max(0, totalAfterWallet - previousOnlinePaid);

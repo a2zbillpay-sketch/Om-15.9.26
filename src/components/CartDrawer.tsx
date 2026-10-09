@@ -77,8 +77,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
   }, [customerOrders]);
 
   // Dedicated calculations for editing an existing order:
-  // Recalculates edited order total, does not apply new order/first-order discount again,
-  // subtracts only the wallet amount actually selected/used, and calculates remaining amount to pay.
+  // Recalculates new order total and applies eligible Advance Online Discount BEFORE subtracting amount already paid.
   const editSubtotal = useMemo(() => {
     return cart.reduce((acc, item) => {
       const unitPrice = getActiveUnitPrice(
@@ -90,6 +89,25 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
     }, 0);
   }, [cart]);
 
+  const editEligibleSubtotal = useMemo(() => {
+    return cart.reduce((acc, item) => {
+      if (item.product.isDiscountExcluded === true || (item.product.isDiscountExcluded as any) === 'true') {
+        return acc;
+      }
+      const unitPrice = getActiveUnitPrice(
+        item.variant.baseSellingPrice,
+        item.quantity,
+        item.variant.tieredPrices || []
+      );
+      return acc + unitPrice * item.quantity;
+    }, 0);
+  }, [cart]);
+
+  const isEditingAdvance = editingOrder?.paymentMethod === PaymentMethod.ADVANCE_ONLINE;
+  const editDiscountAmount = isEditingAdvance
+    ? Math.round((editEligibleSubtotal * Math.max(0, Number(settings.advancePaymentDiscountPct) || 0)) / 100)
+    : 0;
+
   const editDeliveryFee = editSubtotal >= settings.freeShippingMinAmount ? 0 : settings.baseDeliveryFee;
   const isEditingCod = editingOrder?.paymentMethod === PaymentMethod.COD;
   const editCodCharge = isEditingCod
@@ -98,7 +116,8 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
         : (currentUser.codOrderCount < 3 ? 0 : settings.codBaseCharge))
     : 0;
 
-  const editOrderTotal = Math.max(0, editSubtotal + editDeliveryFee + editCodCharge);
+  // Example: ₹505 subtotal − ₹15 advance online discount = ₹490
+  const editOrderTotal = Math.max(0, editSubtotal + editDeliveryFee + editCodCharge - editDiscountAmount);
   const editWalletUsed = Math.min(editOrderTotal, Math.max(0, editingOrder?.walletAmountUsed || 0));
   const editTotalAfterWallet = Math.max(0, editOrderTotal - editWalletUsed);
 
@@ -115,6 +134,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
       )
     : 0;
 
+  // Example: ₹490 − ₹204 already paid = ₹286 Balance to Pay Now
   const editRemainingPayable = isEditingCod
     ? 0
     : Math.max(0, editTotalAfterWallet - editPreviousOnlinePaid);
@@ -442,6 +462,12 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                   <div className="flex justify-between">
                     <span>COD Fee:</span>
                     <span>₹{editCodCharge}</span>
+                  </div>
+                )}
+                {editDiscountAmount > 0 && (
+                  <div className="flex justify-between text-emerald-700 font-bold">
+                    <span>Advance Online Discount ({settings.advancePaymentDiscountPct}%):</span>
+                    <span>-₹{editDiscountAmount}</span>
                   </div>
                 )}
                 <div className="flex justify-between font-bold text-gray-900 pt-1 border-t border-gray-200">

@@ -439,7 +439,7 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
 
                 <div className="flex justify-between text-sm font-black text-[#0F2C59] border-t border-gray-200 pt-1.5">
                   <span>Total Payable:</span>
-                  <span>₹{currentOrder.totalPayable ?? currentOrder.finalAmount}</span>
+                  <span>₹{currentOrder.status === OrderStatus.CANCELLED ? 0 : (currentOrder.totalPayable ?? currentOrder.finalAmount)}</span>
                 </div>
 
                 {currentOrder.codCollectedAmount !== undefined && currentOrder.codCollectedAmount > 0 && (
