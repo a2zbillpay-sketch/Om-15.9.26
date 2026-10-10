@@ -89,23 +89,22 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
     }, 0);
   }, [cart]);
 
-  const editEligibleSubtotal = useMemo(() => {
-    return cart.reduce((acc, item) => {
-      if (item.product.isDiscountExcluded === true || (item.product.isDiscountExcluded as any) === 'true') {
-        return acc;
-      }
-      const unitPrice = getActiveUnitPrice(
-        item.variant.baseSellingPrice,
-        item.quantity,
-        item.variant.tieredPrices || []
-      );
-      return acc + unitPrice * item.quantity;
-    }, 0);
-  }, [cart]);
+  const isEditingAdvance =
+    editingOrder?.paymentMethod === PaymentMethod.ADVANCE_ONLINE ||
+    (editingOrder?.discountAmount !== undefined && editingOrder.discountAmount > 0);
 
-  const isEditingAdvance = editingOrder?.paymentMethod === PaymentMethod.ADVANCE_ONLINE;
+  const configuredPct = Number(settings.advancePaymentDiscountPct);
+  const editDiscountPct =
+    !isNaN(configuredPct) && configuredPct > 0
+      ? configuredPct
+      : editingOrder?.discountAmount && editingOrder?.subtotal
+      ? (editingOrder.discountAmount / editingOrder.subtotal) * 100
+      : 0;
+
+  // Recalculate discount on the combined subtotal of all items in the new bill, including newly added items.
+  // Do not carry forward the old bill's discount.
   const editDiscountAmount = isEditingAdvance
-    ? Math.round((editEligibleSubtotal * Math.max(0, Number(settings.advancePaymentDiscountPct) || 0)) / 100)
+    ? Math.round((editSubtotal * Math.max(0, editDiscountPct)) / 100)
     : 0;
 
   const editDeliveryFee = editSubtotal >= settings.freeShippingMinAmount ? 0 : settings.baseDeliveryFee;
@@ -470,7 +469,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                 )}
                 {editDiscountAmount > 0 && (
                   <div className="flex justify-between text-emerald-700 font-bold">
-                    <span>Advance Online Discount ({settings.advancePaymentDiscountPct}%):</span>
+                    <span>Advance Online Discount ({editDiscountPct > 0 ? editDiscountPct : settings.advancePaymentDiscountPct}%):</span>
                     <span>-₹{editDiscountAmount}</span>
                   </div>
                 )}

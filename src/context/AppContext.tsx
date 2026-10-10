@@ -1185,14 +1185,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     // 2. Recalculate edited order total:
-    // Items subtotal
+    // Items subtotal (combined subtotal of all items in the new bill, including newly added items)
     const subtotal = updatedOrderItems.reduce((acc, it) => acc + it.price, 0);
-
-    // Eligible subtotal for advance discount (excluding price-regulated items)
-    const eligibleSubtotal = updatedOrderItems.reduce(
-      (acc, it) => (it.isDiscountExcluded ? acc : acc + it.price),
-      0
-    );
 
     // Delivery fee
     const deliveryFee = subtotal >= settings.freeShippingMinAmount ? 0 : settings.baseDeliveryFee;
@@ -1205,11 +1199,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           : (currentUser.codOrderCount < 3 ? 0 : settings.codBaseCharge))
       : 0;
 
-    // Apply eligible Advance Online Discount BEFORE subtracting the amount already paid
-    // Example: ₹505 subtotal − ₹15 advance online discount = ₹490
-    const isAdvance = currentOrder.paymentMethod === PaymentMethod.ADVANCE_ONLINE;
+    // Recalculate discount on the combined subtotal of all items in the new bill, including newly added items.
+    // Do not carry forward the old bill's discount.
+    const isAdvance =
+      currentOrder.paymentMethod === PaymentMethod.ADVANCE_ONLINE ||
+      (currentOrder.discountAmount !== undefined && currentOrder.discountAmount > 0);
+
+    const configuredPct = Number(settings.advancePaymentDiscountPct);
+    const discountPct =
+      !isNaN(configuredPct) && configuredPct > 0
+        ? configuredPct
+        : currentOrder.discountAmount && currentOrder.subtotal
+        ? (currentOrder.discountAmount / currentOrder.subtotal) * 100
+        : 0;
+
     const discountAmount = isAdvance
-      ? Math.round((eligibleSubtotal * Math.max(0, Number(settings.advancePaymentDiscountPct) || 0)) / 100)
+      ? Math.round((subtotal * Math.max(0, discountPct)) / 100)
       : 0;
 
     // Recalculated new order total (BEFORE subtracting amount already paid)
