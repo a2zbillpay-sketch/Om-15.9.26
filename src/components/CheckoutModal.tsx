@@ -498,15 +498,21 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                   )}
 
                   <div className="bg-emerald-50 p-3 rounded-xl mb-4 text-center border border-emerald-200">
-                    <div className="text-[11px] text-emerald-800 font-semibold">Remaining Online Payment</div>
+                    <div className="text-[11px] text-emerald-800 font-semibold">UPI Payment</div>
                     <div className="text-2xl font-black text-emerald-800">
                       ₹{remainingOnlinePayment}
                     </div>
                     <div className="bg-white/80 border border-emerald-200 rounded-lg p-2 mt-2 space-y-1 text-xs text-left">
                       <div className="flex justify-between text-gray-600">
-                        <span>Order Amount:</span>
-                        <span className="font-semibold text-gray-800">₹{checkoutBreakdown.advanceFinalTotal}</span>
+                        <span>Items Subtotal:</span>
+                        <span className="font-semibold text-gray-800">₹{checkoutBreakdown.subtotal}</span>
                       </div>
+                      {checkoutBreakdown.advanceDiscountAmount > 0 && (
+                        <div className="flex justify-between text-emerald-700 font-bold">
+                          <span>Advance Discount:</span>
+                          <span>-₹{checkoutBreakdown.advanceDiscountAmount}</span>
+                        </div>
+                      )}
                       {advanceWalletCredit > 0 ? (
                         <div className="flex justify-between text-emerald-700 font-bold">
                           <span>Wallet Applied (Advance):</span>
@@ -514,7 +520,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                         </div>
                       ) : null}
                       <div className="border-t border-emerald-200 pt-1 flex justify-between font-bold text-emerald-900">
-                        <span>Remaining Online Payment:</span>
+                        <span>Final Bill:</span>
                         <span className="font-black text-emerald-800">
                           ₹{remainingOnlinePayment}
                         </span>

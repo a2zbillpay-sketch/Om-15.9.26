@@ -130,7 +130,7 @@ export const EditOrderPaymentModal: React.FC<EditOrderPaymentModalProps> = ({
                 </div>
               )}
               <div className="flex justify-between text-gray-900 font-extrabold pt-1 border-t border-gray-200">
-                <span>Recalculated Order Total:</span>
+                <span>Total Bill Amount:</span>
                 <span>₹{order.finalAmount}</span>
               </div>
 

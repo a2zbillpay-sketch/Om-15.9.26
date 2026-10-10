@@ -88,7 +88,7 @@ export const OrderSuccessModal: React.FC<OrderSuccessModalProps> = ({
             </div>
 
             <div className="flex justify-between items-center pt-2 border-t border-gray-200 font-black text-sm">
-              <span className="text-gray-800">Total Bill Amount:</span>
+              <span className="text-gray-800">Final Bill:</span>
               <span className="text-emerald-700 font-mono">₹{order.finalAmount}</span>
             </div>
           </div>

@@ -219,9 +219,16 @@ export const OrderBillLayout: React.FC<OrderBillLayoutProps> = ({ order, setting
             </div>
           )}
 
+          {order.walletAmountUsed !== undefined && order.walletAmountUsed > 0 && (
+            <div className="flex justify-between text-emerald-700 font-bold">
+              <span>Wallet Applied:</span>
+              <span className="font-mono">-₹{order.walletAmountUsed}</span>
+            </div>
+          )}
+
           {/* Grand Order Bill Total */}
           <div className="flex justify-between text-sm font-black text-[#0F2C59] border-t-2 border-[#0F2C59] pt-2 mt-1">
-            <span>{order.status === 'CANCELLED' ? 'Total Payable:' : 'Total Order Bill:'}</span>
+            <span>{order.status === 'CANCELLED' ? 'Total Payable:' : 'Final Bill:'}</span>
             <span className="font-mono">₹{order.status === 'CANCELLED' ? 0 : order.finalAmount}</span>
           </div>
           {order.status === 'CANCELLED' && (
@@ -248,13 +255,6 @@ export const OrderBillLayout: React.FC<OrderBillLayoutProps> = ({ order, setting
             <div className="flex justify-between text-emerald-700 font-bold pt-1 border-t border-gray-200">
               <span>Amount Collected:</span>
               <span className="font-mono">₹{order.codCollectedAmount}</span>
-            </div>
-          )}
-
-          {order.walletAmountUsed !== undefined && order.walletAmountUsed > 0 && (
-            <div className="flex justify-between text-emerald-700 font-bold pt-1">
-              <span>Wallet Applied:</span>
-              <span className="font-mono">-₹{order.walletAmountUsed}</span>
             </div>
           )}
 

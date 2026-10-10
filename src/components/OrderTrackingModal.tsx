@@ -80,13 +80,19 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
 
   const walletUsed = Math.max(0, currentOrder.walletAmountUsed || 0);
 
+  const isFinalAmountNetOfWallet =
+    isAdvance &&
+    walletUsed > 0 &&
+    currentOrder.subtotal !== undefined &&
+    Math.abs(currentOrder.finalAmount - (currentOrder.subtotal - (currentOrder.discountAmount || 0) + (currentOrder.deliveryFee || 0) - walletUsed)) < 2;
+
   const previousOnlineAdvancePaid =
     currentOrder.previousOnlinePaid !== undefined && currentOrder.previousOnlinePaid > 0
       ? currentOrder.previousOnlinePaid
       : isAdvance && currentOrder.totalPayable !== undefined && currentOrder.totalPayable < currentOrder.finalAmount
-      ? Math.max(0, currentOrder.finalAmount - walletUsed - currentOrder.totalPayable)
+      ? Math.max(0, currentOrder.finalAmount - (isFinalAmountNetOfWallet ? 0 : walletUsed) - currentOrder.totalPayable)
       : isAdvance && (currentOrder.paymentStatus === PaymentStatus.RECEIVED || (currentOrder.paymentStatus as any) === 'PAID')
-      ? Math.max(0, currentOrder.finalAmount - walletUsed)
+      ? (isFinalAmountNetOfWallet ? currentOrder.finalAmount : Math.max(0, currentOrder.finalAmount - walletUsed))
       : 0;
 
   const isPaid =
@@ -98,7 +104,9 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
 
   const actualOnlinePayment = isAdvance
     ? isPaid
-      ? Math.max(0, currentOrder.finalAmount - walletUsed)
+      ? isFinalAmountNetOfWallet
+        ? currentOrder.finalAmount
+        : Math.max(0, currentOrder.finalAmount - walletUsed)
       : previousOnlineAdvancePaid
     : 0;
 
@@ -115,8 +123,20 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
     const refundAmount = walletUsed + actualOnlinePayment;
     const success = cancelOrder(currentOrder.id);
     if (success) {
+      let isRefunded = false;
+      try {
+        const savedOrders = localStorage.getItem('om_orders');
+        if (savedOrders) {
+          const parsed = JSON.parse(savedOrders);
+          const found = parsed.find((o: any) => o.id === currentOrder.id || o.orderNumber === currentOrder.orderNumber);
+          if (found && found.paymentStatus === PaymentStatus.REFUNDED) {
+            isRefunded = true;
+          }
+        }
+      } catch {}
+
       setCancelMessage(
-        refundAmount > 0
+        refundAmount > 0 && isRefunded
           ? walletUsed > 0 && actualOnlinePayment > 0
             ? `Order cancelled! Full refund of ₹${refundAmount} (₹${walletUsed} wallet used + ₹${actualOnlinePayment} online advance) has been refunded directly to your Store Wallet.`
             : walletUsed > 0
@@ -250,13 +270,20 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
                   currentOrder.paymentMethod === PaymentMethod.ADVANCE_ONLINE ||
                   currentOrder.paymentStatus === PaymentStatus.RECEIVED ||
                   currentOrder.paymentStatus === PaymentStatus.REFUNDED;
+                const isFinalNet =
+                  wUsed > 0 &&
+                  currentOrder.subtotal !== undefined &&
+                  Math.abs(currentOrder.finalAmount - (currentOrder.subtotal - (currentOrder.discountAmount || 0) + (currentOrder.deliveryFee || 0) - wUsed)) < 2;
                 const oPaid = isAdv
                   ? currentOrder.previousOnlinePaid !== undefined && currentOrder.previousOnlinePaid > 0
                     ? currentOrder.previousOnlinePaid
+                    : isFinalNet
+                    ? currentOrder.finalAmount
                     : Math.max(0, currentOrder.finalAmount - wUsed)
                   : 0;
                 const rTot = wUsed + oPaid;
-                if (rTot > 0) {
+                const isRefunded = currentOrder.paymentStatus === PaymentStatus.REFUNDED;
+                if (rTot > 0 && isRefunded) {
                   return wUsed > 0 && oPaid > 0
                     ? `Order Cancelled. Full refund of ₹${rTot} (₹${wUsed} wallet used + ₹${oPaid} online advance) has been refunded to your Store Wallet.`
                     : wUsed > 0
@@ -386,7 +413,7 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
             )}
 
             <div className="flex justify-between text-xs text-gray-700 font-semibold border-t border-gray-200 pt-1.5">
-              <span>{previousOnlineAdvancePaid > 0 ? 'Recalculated Order Total:' : 'Order Amount:'}</span>
+              <span>{previousOnlineAdvancePaid > 0 ? 'Total Bill Amount:' : (currentOrder.paymentMethod === PaymentMethod.ADVANCE_ONLINE ? 'Final Bill:' : 'Order Amount:')}</span>
               <span>₹{currentOrder.finalAmount}</span>
             </div>
 

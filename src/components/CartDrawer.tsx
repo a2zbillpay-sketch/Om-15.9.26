@@ -474,7 +474,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                   </div>
                 )}
                 <div className="flex justify-between font-bold text-gray-900 pt-1 border-t border-gray-200">
-                  <span>Recalculated Order Total:</span>
+                  <span>Total Bill Amount:</span>
                   <span>₹{editOrderTotal}</span>
                 </div>
                 {editWalletUsed > 0 && (

@@ -1638,9 +1638,18 @@ export const AdminDashboard: React.FC = () => {
                         </td>
                         <td className="p-3">
                           <div className="font-black text-gray-900">₹{order.finalAmount}</div>
-                          {order.paymentMethod === PaymentMethod.ADVANCE_ONLINE && order.discountAmount > 0 && (
-                            <div className="text-[10px] text-emerald-700 font-semibold mt-0.5">
-                              UPI Disc: -₹{order.discountAmount}
+                          {order.paymentMethod === PaymentMethod.ADVANCE_ONLINE && (
+                            <div className="text-[10px] space-y-0.5 mt-0.5">
+                              {order.discountAmount > 0 && (
+                                <div className="text-emerald-700 font-semibold">
+                                  UPI Disc: -₹{order.discountAmount}
+                                </div>
+                              )}
+                              {order.walletAmountUsed !== undefined && order.walletAmountUsed > 0 && (
+                                <div className="text-emerald-800 font-semibold">
+                                  Wallet: -₹{order.walletAmountUsed}
+                                </div>
+                              )}
                             </div>
                           )}
                           {order.paymentMethod === PaymentMethod.COD && (

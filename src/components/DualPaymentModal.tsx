@@ -141,23 +141,23 @@ export const DualPaymentModal: React.FC<DualPaymentModalProps> = ({
                   <span>Delivery Fee:</span>
                   <span>{breakdown.deliveryFee === 0 ? <span className="text-emerald-600 font-bold">FREE</span> : `₹${breakdown.deliveryFee}`}</span>
                 </div>
-                <div className="flex justify-between font-bold text-gray-800 pt-1 border-t border-emerald-200/60">
-                  <span>New Order Amount:</span>
-                  <span>₹{breakdown.advanceFinalTotal}</span>
-                </div>
                 {advanceWalletCredit > 0 && (
                   <div className="flex justify-between text-emerald-700 font-bold">
                     <span>Wallet Applied (Advance):</span>
                     <span>-₹{advanceWalletCredit}</span>
                   </div>
                 )}
+                <div className="flex justify-between font-bold text-gray-800 pt-1 border-t border-emerald-200/60">
+                  <span>{advanceWalletCredit > 0 ? 'Final Bill:' : 'New Order Amount:'}</span>
+                  <span>₹{advanceWalletCredit > 0 ? remainingOnlinePayable : breakdown.advanceFinalTotal}</span>
+                </div>
               </div>
             </div>
 
             <div className="mt-4 pt-3 border-t border-emerald-200">
               <div className="flex justify-between items-center">
                 <div>
-                  <span className="text-[11px] font-bold text-gray-500 block">Remaining Online Payment:</span>
+                  <span className="text-[11px] font-bold text-gray-500 block">UPI Payment:</span>
                   <span className="text-lg font-black text-emerald-700">
                     ₹{remainingOnlinePayable}
                   </span>
