@@ -126,13 +126,17 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
     (editingOrder?.paymentStatus as any) === 'PAID' ||
     (editingOrder as any)?.is_paid === true;
 
-  const editPreviousOnlinePaid = editWasPreviouslyPaid
-    ? Math.max(
-        0,
-        (editingOrder?.totalPayable !== undefined ? editingOrder.totalPayable : editingOrder?.finalAmount || 0) -
-          (editingOrder?.walletAmountUsed || 0)
-      )
-    : 0;
+  const editPreviousOnlinePaid =
+    editingOrder?.previousOnlinePaid !== undefined && editingOrder.previousOnlinePaid > 0
+      ? editingOrder.previousOnlinePaid
+      : editWasPreviouslyPaid || editingOrder?.paymentMethod === PaymentMethod.ADVANCE_ONLINE
+      ? Math.max(
+          0,
+          (editingOrder?.finalAmount || 0) -
+            (editingOrder?.walletAmountUsed || 0) -
+            (editWasPreviouslyPaid ? 0 : (editingOrder?.totalPayable || 0))
+        )
+      : 0;
 
   // Example: ₹490 − ₹204 already paid = ₹286 Balance to Pay Now
   const editRemainingPayable = isEditingCod
@@ -482,7 +486,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                 )}
                 {editPreviousOnlinePaid > 0 && (
                   <div className="flex justify-between text-blue-700 font-bold">
-                    <span>Already Paid Online:</span>
+                    <span>Previous Online Advance Paid:</span>
                     <span>-₹{editPreviousOnlinePaid}</span>
                   </div>
                 )}

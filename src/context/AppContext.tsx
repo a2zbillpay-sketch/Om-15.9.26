@@ -1227,16 +1227,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       (currentOrder as any).is_paid === true;
 
     // If previously paid online, compute actual online payment paid earlier (e.g. ₹204)
-    const previousOnlinePaid = wasPreviouslyPaid
-      ? Math.max(
-          0,
-          (currentOrder.totalPayable !== undefined ? currentOrder.totalPayable : currentOrder.finalAmount) -
-            originalWalletUsed
-        )
-      : 0;
+    // Previously paid UPI/online advance must never appear as "Wallet Applied (Advance)".
+    // Show it as "Previous Online Advance Paid". Wallet Applied must reflect only actual wallet usage.
+    const previousOnlinePaid =
+      currentOrder.previousOnlinePaid !== undefined && currentOrder.previousOnlinePaid > 0
+        ? currentOrder.previousOnlinePaid
+        : (wasPreviouslyPaid || currentOrder.paymentMethod === PaymentMethod.ADVANCE_ONLINE)
+        ? Math.max(
+            0,
+            currentOrder.finalAmount -
+              originalWalletUsed -
+              (wasPreviouslyPaid ? 0 : (currentOrder.totalPayable || 0))
+          )
+        : 0;
 
     // Balance to Pay Now:
-    // Example: ₹490 − ₹204 already paid = ₹286 Balance to Pay Now
+    // Calculate remaining payment correctly (Recalculated Order Total − Previous Online Advance Paid)
+    // (Taking into account actual wallet applied if any):
     const remainingAmountToPay = isCod
       ? 0
       : Math.max(0, totalAfterWallet - previousOnlinePaid);
@@ -1277,8 +1284,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       deliveryFee,
       codCharge,
       finalAmount,
-      totalPayable: requiresPayment ? remainingAmountToPay : totalAfterWallet,
+      totalPayable: requiresPayment ? remainingAmountToPay : (isCod ? (finalAmount - walletUsed) : 0),
       walletAmountUsed: walletUsed,
+      previousOnlinePaid,
       paymentStatus,
     };
 
@@ -1335,9 +1343,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return { success: false, error: 'Order not found.' };
       }
 
+      const totalOnlinePaid = Math.max(0, target.finalAmount - (target.walletAmountUsed || 0));
       const updatedOrder: Order = {
         ...target,
         paymentStatus: PaymentStatus.RECEIVED,
+        totalPayable: 0,
+        previousOnlinePaid: totalOnlinePaid,
         razorpayPaymentId: `pay_${Date.now()}_${paymentMethodApp || 'upi'}`,
       };
 
@@ -1910,7 +1921,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       target.paymentStatus === PaymentStatus.RECEIVED;
 
     // Track both components of advance payment to refund the full order amount:
-    // 1. wallet amount used in the cancelled order
+    // 1. wallet amount used in the cancelled order (strictly actual wallet usage only)
     let walletAmountUsed = Math.max(0, target.walletAmountUsed || 0);
     if (walletAmountUsed === 0) {
       // Check walletTransactions for a DEBIT tx for this order
@@ -1921,25 +1932,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       );
       if (debitTx && debitTx.amount > 0) {
         walletAmountUsed = debitTx.amount;
-      } else if (
-        isAdvancePaid &&
-        target.totalPayable !== undefined &&
-        target.finalAmount > target.totalPayable
-      ) {
-        walletAmountUsed = Math.max(0, target.finalAmount - target.totalPayable);
       }
     }
 
     // 2. online advance payment amount paid by customer (strictly actual online payment only, never adding wallet amount)
-    const onlineAdvancePayment = isAdvancePaid
-      ? Math.max(
-          0,
-          Math.min(
-            target.totalPayable !== undefined ? target.totalPayable : target.finalAmount,
-            target.finalAmount - walletAmountUsed
+    const onlineAdvancePayment =
+      target.previousOnlinePaid !== undefined && target.previousOnlinePaid > 0
+        ? (isAdvancePaid ? Math.max(0, target.finalAmount - walletAmountUsed) : target.previousOnlinePaid)
+        : isAdvancePaid
+        ? Math.max(
+            0,
+            target.paymentStatus === PaymentStatus.RECEIVED
+              ? target.finalAmount - walletAmountUsed
+              : target.totalPayable !== undefined && target.totalPayable < target.finalAmount
+              ? Math.max(0, target.finalAmount - walletAmountUsed - target.totalPayable)
+              : target.finalAmount - walletAmountUsed
           )
-        )
-      : 0;
+        : 0;
 
     // Total refund is based on actual payment sources: wallet amount used + actual online advance payment
     const advancePaidAmount = walletAmountUsed + (isAdvancePaid ? onlineAdvancePayment : 0);

@@ -143,7 +143,7 @@ export const EditOrderPaymentModal: React.FC<EditOrderPaymentModalProps> = ({
 
               {previousOnlinePaid > 0 && (
                 <div className="flex justify-between text-blue-700 font-bold">
-                  <span>Already Paid Online:</span>
+                  <span>Previous Online Advance Paid:</span>
                   <span>-₹{previousOnlinePaid}</span>
                 </div>
               )}

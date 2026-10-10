@@ -155,6 +155,7 @@ export interface Order {
   finalAmount: number;
   previousOutstanding?: number;
   totalPayable?: number;
+  previousOnlinePaid?: number;
   codCollectedAmount?: number;
   walletAmountUsed?: number;
   stockDeducted?: boolean;

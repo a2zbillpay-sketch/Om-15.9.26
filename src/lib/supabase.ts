@@ -758,6 +758,7 @@ export async function fetchCustomerOrdersFromSupabase(
       let codCollectedAmount = 0;
       let previousOutstanding = 0;
       let totalPayable = finalAmount;
+      let previousOnlinePaid = 0;
       let walletAmountUsed = 0;
       let stockDeducted = false;
       let stockRestored = false;
@@ -772,6 +773,7 @@ export async function fetchCustomerOrdersFromSupabase(
           previousOutstanding = Number(meta.prevOutstanding) || 0;
           totalPayable = meta.totalPayable !== undefined ? Number(meta.totalPayable) : finalAmount;
           walletAmountUsed = Number(meta.walletAmountUsed) || 0;
+          previousOnlinePaid = Number(meta.previousOnlinePaid) || 0;
           stockDeducted = Boolean(meta.stockDeducted);
           stockRestored = Boolean(meta.stockRestored);
           if (Array.isArray(meta.items) && meta.items.length > 0) {
@@ -798,9 +800,7 @@ export async function fetchCustomerOrdersFromSupabase(
         paymentStatus = PaymentStatus.PARTIALLY_COLLECTED;
       }
 
-      const resolvedWalletAmountUsed =
-        walletAmountUsed ||
-        (o.is_paid && finalAmount > totalPayable ? Math.max(0, finalAmount - totalPayable) : 0);
+      const resolvedWalletAmountUsed = walletAmountUsed;
 
       return {
         id: o.id,
@@ -828,6 +828,7 @@ export async function fetchCustomerOrdersFromSupabase(
         finalAmount,
         previousOutstanding,
         totalPayable,
+        previousOnlinePaid,
         walletAmountUsed: resolvedWalletAmountUsed,
         codCollectedAmount,
         stockDeducted,
@@ -855,6 +856,7 @@ export async function saveOrderToSupabase(order: Order): Promise<boolean> {
       prevOutstanding: order.previousOutstanding || 0,
       totalPayable: order.totalPayable !== undefined ? order.totalPayable : order.finalAmount,
       walletAmountUsed: order.walletAmountUsed || 0,
+      previousOnlinePaid: order.previousOnlinePaid || 0,
       stockDeducted: order.stockDeducted ?? false,
       stockRestored: order.stockRestored ?? false,
       items: order.items?.map((it) => ({
@@ -926,6 +928,7 @@ export async function saveEditedOrderToSupabase(order: Order): Promise<boolean> 
       prevOutstanding: order.previousOutstanding || 0,
       totalPayable: order.totalPayable !== undefined ? order.totalPayable : order.finalAmount,
       walletAmountUsed: order.walletAmountUsed || 0,
+      previousOnlinePaid: order.previousOnlinePaid || 0,
       stockDeducted: order.stockDeducted ?? false,
       stockRestored: order.stockRestored ?? false,
       items: order.items?.map((it) => ({
@@ -1009,6 +1012,7 @@ export async function fetchAllOrdersForAdmin(): Promise<Order[] | null> {
       let previousOutstanding = 0;
       let totalPayable = finalAmount;
       let walletAmountUsed = 0;
+      let previousOnlinePaid = 0;
       let stockDeducted = false;
       let stockRestored = false;
 
@@ -1022,6 +1026,7 @@ export async function fetchAllOrdersForAdmin(): Promise<Order[] | null> {
           previousOutstanding = Number(meta.prevOutstanding) || 0;
           totalPayable = meta.totalPayable !== undefined ? Number(meta.totalPayable) : finalAmount;
           walletAmountUsed = Number(meta.walletAmountUsed) || 0;
+          previousOnlinePaid = Number(meta.previousOnlinePaid) || 0;
           stockDeducted = Boolean(meta.stockDeducted);
           stockRestored = Boolean(meta.stockRestored);
           if (Array.isArray(meta.items) && meta.items.length > 0) {
@@ -1048,9 +1053,7 @@ export async function fetchAllOrdersForAdmin(): Promise<Order[] | null> {
         paymentStatus = PaymentStatus.PARTIALLY_COLLECTED;
       }
 
-      const resolvedWalletAmountUsed =
-        walletAmountUsed ||
-        (o.is_paid && finalAmount > totalPayable ? Math.max(0, finalAmount - totalPayable) : 0);
+      const resolvedWalletAmountUsed = walletAmountUsed;
 
       return {
         id: o.id,
@@ -1078,6 +1081,7 @@ export async function fetchAllOrdersForAdmin(): Promise<Order[] | null> {
         finalAmount,
         previousOutstanding,
         totalPayable,
+        previousOnlinePaid,
         walletAmountUsed: resolvedWalletAmountUsed,
         codCollectedAmount,
         stockDeducted,

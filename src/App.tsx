@@ -392,7 +392,10 @@ const MainLayout: React.FC = () => {
             0,
             orderToPay.totalPayable !== undefined ? orderToPay.totalPayable : orderToPay.finalAmount
           );
-          const prev = Math.max(0, orderToPay.finalAmount - wUsed - rem);
+          const prev =
+            orderToPay.previousOnlinePaid !== undefined && orderToPay.previousOnlinePaid > 0
+              ? orderToPay.previousOnlinePaid
+              : Math.max(0, orderToPay.finalAmount - wUsed - rem);
           setBalancePaymentDetails({
             order: orderToPay,
             remainingAmount: rem,

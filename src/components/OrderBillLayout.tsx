@@ -257,6 +257,13 @@ export const OrderBillLayout: React.FC<OrderBillLayoutProps> = ({ order, setting
               <span className="font-mono">-₹{order.walletAmountUsed}</span>
             </div>
           )}
+
+          {order.paymentMethod === PaymentMethod.ADVANCE_ONLINE && order.previousOnlinePaid !== undefined && order.previousOnlinePaid > 0 && (
+            <div className="flex justify-between text-blue-700 font-bold pt-1">
+              <span>Previous Online Advance Paid:</span>
+              <span className="font-mono">-₹{order.previousOnlinePaid}</span>
+            </div>
+          )}
         </div>
       </div>
 
