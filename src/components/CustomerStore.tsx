@@ -371,8 +371,8 @@ export const CustomerStore: React.FC<CustomerStoreProps> = ({
               </div>
             </div>
 
-            <div className="flex items-center gap-1 text-xs font-black text-white bg-white/10 px-3 py-1.5 rounded-xl">
-              <span>{editingOrder ? 'Review & Save' : 'View Cart & Checkout'}</span>
+            <div className="flex items-center gap-1 text-xs font-black text-white">
+              <span>{editingOrder ? 'Review & Save' : 'View Cart'}</span>
               <ChevronRight size={16} />
             </div>
           </button>
