@@ -1,6 +1,6 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { User, Order, OrderItem, Address, Role, OrderStatus, PaymentMethod, PaymentStatus, UnitType, Product, ProductVariant, TieredPrice } from '../types';
-import { INITIAL_CATEGORIES } from '../data/seedData';
+import { User, Order, OrderItem, Address, Role, OrderStatus, PaymentMethod, PaymentStatus, UnitType, Product, ProductVariant, TieredPrice, SystemSetting } from '../types';
+import { INITIAL_CATEGORIES, INITIAL_SETTINGS } from '../data/seedData';
 import {
   saveProductWithCascadeSync,
   deleteProductWithCascade,
@@ -1626,4 +1626,196 @@ export async function deleteProductFromSupabase(productId: string): Promise<bool
   const res = await deleteProductWithCascade(supabase, productId);
   return res.success;
 }
+
+/**
+ * Normalizes a Supabase store_settings database row into a frontend SystemSetting object.
+ * Maps actual database columns (app_name, advance_discount_percentage, etc.)
+ * and preserves requested default values: COD ₹50, Free Delivery above ₹249, Delivery Fee ₹11, Referral Credit ₹0.
+ */
+export function mapSupabaseRowToSettings(
+  row: any,
+  fallbackSettings?: SystemSetting
+): SystemSetting {
+  const base = fallbackSettings || INITIAL_SETTINGS;
+  if (!row || typeof row !== 'object') return base;
+
+  return {
+    ...base,
+    id: row.id || base.id || 'global_settings',
+    appName:
+      row.app_name !== undefined && row.app_name !== null && String(row.app_name).trim()
+        ? String(row.app_name)
+        : (row['app name'] || base.appName),
+    logoUrl:
+      row.logo_url !== undefined && row.logo_url !== null && String(row.logo_url).trim()
+        ? String(row.logo_url)
+        : (row['logo url'] || row.logoUrl || base.logoUrl || '/logo.jpg'),
+    advancePaymentDiscountPct:
+      row.advance_discount_percentage !== undefined && !isNaN(Number(row.advance_discount_percentage))
+        ? Number(row.advance_discount_percentage)
+        : (row.advance_payment_discount_pct !== undefined && !isNaN(Number(row.advance_payment_discount_pct))
+          ? Number(row.advance_payment_discount_pct)
+          : (base.advancePaymentDiscountPct ?? 3.0)),
+    codBaseCharge:
+      row.cod_base_charge !== undefined && !isNaN(Number(row.cod_base_charge))
+        ? Number(row.cod_base_charge)
+        : (base.codBaseCharge ?? 50.0),
+    freeShippingMinAmount:
+      row.free_shipping_min_amount !== undefined && !isNaN(Number(row.free_shipping_min_amount))
+        ? Number(row.free_shipping_min_amount)
+        : (base.freeShippingMinAmount ?? 249.0),
+    baseDeliveryFee:
+      row.base_delivery_fee !== undefined && !isNaN(Number(row.base_delivery_fee))
+        ? Number(row.base_delivery_fee)
+        : (base.baseDeliveryFee ?? 11.0),
+    referralRewardAmount:
+      row.referral_reward_amount !== undefined && !isNaN(Number(row.referral_reward_amount))
+        ? Number(row.referral_reward_amount)
+        : (base.referralRewardAmount ?? 0.0),
+    lowStockThreshold:
+      row.low_stock_threshold !== undefined && !isNaN(Number(row.low_stock_threshold))
+        ? Math.max(1, Number(row.low_stock_threshold))
+        : (base.lowStockThreshold ?? 10),
+    updatedAt: row.updated_at || row['updated at'] || base.updatedAt || new Date().toISOString(),
+  };
+}
+
+/**
+ * Loads the active store settings from the central Supabase store_settings table.
+ * Returns null if Supabase is unavailable or table read fails.
+ */
+export async function fetchSettingsFromSupabase(
+  fallbackSettings?: SystemSetting
+): Promise<SystemSetting | null> {
+  if (!supabase) return null;
+
+  try {
+    const { data, error } = await supabase
+      .from('store_settings')
+      .select('*')
+      .eq('id', 'global_settings')
+      .maybeSingle();
+
+    if (error) {
+      console.warn('Notice reading store_settings from Supabase:', error.message);
+      return null;
+    }
+
+    if (!data) {
+      return null;
+    }
+
+    return mapSupabaseRowToSettings(data, fallbackSettings);
+  } catch (err) {
+    console.warn('Exception reading store_settings from Supabase:', err);
+    return null;
+  }
+}
+
+/**
+ * Safely persists store settings to the shared Supabase store_settings table.
+ * Attempts full column upsert first, and gracefully falls back to existing base columns
+ * if pending column migration is not yet executed in Supabase.
+ */
+export async function saveSettingsToSupabase(
+  settings: SystemSetting
+): Promise<{ success: boolean; error?: string; columnMigrationPending?: boolean }> {
+  if (!supabase) {
+    return { success: false, error: 'Supabase client not configured.' };
+  }
+
+  const timestamp = settings.updatedAt || new Date().toISOString();
+
+  // 1. Try full upsert with all extended columns
+  try {
+    const fullPayload: Record<string, any> = {
+      id: settings.id || 'global_settings',
+      app_name: settings.appName,
+      advance_discount_percentage: settings.advancePaymentDiscountPct,
+      logo_url: settings.logoUrl,
+      cod_base_charge: settings.codBaseCharge,
+      free_shipping_min_amount: settings.freeShippingMinAmount,
+      base_delivery_fee: settings.baseDeliveryFee,
+      referral_reward_amount: settings.referralRewardAmount,
+      updated_at: timestamp,
+    };
+
+    const { error: fullError } = await supabase
+      .from('store_settings')
+      .upsert(fullPayload, { onConflict: 'id' });
+
+    if (!fullError) {
+      return { success: true };
+    }
+
+    // Check if error is due to missing column (PostgreSQL 42703 or PostgREST PGRST204)
+    if (
+      fullError.code === '42703' ||
+      fullError.code === 'PGRST204' ||
+      String(fullError.message).includes('schema cache') ||
+      String(fullError.message).includes('does not exist') ||
+      String(fullError.message).includes('column')
+    ) {
+      console.warn('Pending SQL column migration on store_settings: falling back to base columns');
+
+      // Fallback: update only base columns that currently exist
+      const basePayload: Record<string, any> = {
+        id: settings.id || 'global_settings',
+        app_name: settings.appName,
+        advance_discount_percentage: settings.advancePaymentDiscountPct,
+        updated_at: timestamp,
+      };
+
+      const { error: baseError } = await supabase
+        .from('store_settings')
+        .upsert(basePayload, { onConflict: 'id' });
+
+      if (baseError) {
+        return { success: false, error: baseError.message };
+      }
+
+      return { success: true, columnMigrationPending: true };
+    }
+
+    return { success: false, error: fullError.message };
+  } catch (err: any) {
+    console.error('Exception writing store_settings to Supabase:', err);
+    return { success: false, error: err?.message || 'Unexpected database error' };
+  }
+}
+
+/**
+ * Subscribes to Supabase postgres_changes on store_settings for real-time synchronization
+ * across open browsers, installed PWAs, and AI Studio previews.
+ */
+export function subscribeToSupabaseSettings(
+  onUpdate: (settings: SystemSetting) => void,
+  fallbackSettings?: SystemSetting
+): (() => void) | null {
+  if (!supabase) return null;
+
+  try {
+    const channel = supabase
+      .channel('realtime:store_settings')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'store_settings' },
+        (payload) => {
+          if (payload.new && typeof payload.new === 'object') {
+            const mapped = mapSupabaseRowToSettings(payload.new, fallbackSettings);
+            onUpdate(mapped);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase?.removeChannel(channel);
+    };
+  } catch (err) {
+    console.warn('Failed to subscribe to Supabase store_settings realtime channel:', err);
+    return null;
+  }
+}
+
 

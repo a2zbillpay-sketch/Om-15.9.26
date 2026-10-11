@@ -6,10 +6,10 @@
   "secondaryColorHex": "#D4AF37",
   "accentColorHex": "#FF6B00",
   "advancePaymentDiscountPct": 3,
-  "codBaseCharge": 30,
-  "freeShippingMinAmount": 500,
-  "baseDeliveryFee": 40,
-  "referralRewardAmount": 50,
+  "codBaseCharge": 50,
+  "freeShippingMinAmount": 249,
+  "baseDeliveryFee": 11,
+  "referralRewardAmount": 0,
   "lowStockThreshold": 10,
-  "updatedAt": "2026-10-11T02:45:45.016Z"
+  "updatedAt": "2026-10-11T04:34:00.000Z"
 }

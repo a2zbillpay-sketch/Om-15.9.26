@@ -102,7 +102,7 @@ async function syncWithSupabaseIfConfigured(
   try {
     if (mode === 'READ') {
       const { data, error } = await supabase
-        .from('system_settings')
+        .from('store_settings')
         .select('*')
         .eq('id', 'global_settings')
         .maybeSingle();
@@ -110,28 +110,34 @@ async function syncWithSupabaseIfConfigured(
       if (!error && data) {
         const remoteSettings: SystemSetting = {
           ...settings,
-          appName: data.app_name || settings.appName,
-          logoUrl: data.logo_url || settings.logoUrl,
+          appName: data.app_name || data['app name'] || settings.appName,
+          logoUrl: data.logo_url || data['logo url'] || settings.logoUrl || '/logo.jpg',
           advancePaymentDiscountPct:
-            data.advance_payment_discount_pct !== undefined
-              ? Number(data.advance_payment_discount_pct)
-              : settings.advancePaymentDiscountPct,
+            data.advance_discount_percentage !== undefined
+              ? Number(data.advance_discount_percentage)
+              : (data.advance_payment_discount_pct !== undefined
+                ? Number(data.advance_payment_discount_pct)
+                : settings.advancePaymentDiscountPct),
           codBaseCharge:
             data.cod_base_charge !== undefined
               ? Number(data.cod_base_charge)
-              : settings.codBaseCharge,
+              : (settings.codBaseCharge ?? 50.0),
           freeShippingMinAmount:
             data.free_shipping_min_amount !== undefined
               ? Number(data.free_shipping_min_amount)
-              : settings.freeShippingMinAmount,
+              : (settings.freeShippingMinAmount ?? 249.0),
           baseDeliveryFee:
             data.base_delivery_fee !== undefined
               ? Number(data.base_delivery_fee)
-              : settings.baseDeliveryFee,
+              : (settings.baseDeliveryFee ?? 11.0),
           referralRewardAmount:
             data.referral_reward_amount !== undefined
               ? Number(data.referral_reward_amount)
-              : settings.referralRewardAmount,
+              : (settings.referralRewardAmount ?? 0.0),
+          lowStockThreshold:
+            data.low_stock_threshold !== undefined && !isNaN(Number(data.low_stock_threshold))
+              ? Number(data.low_stock_threshold)
+              : settings.lowStockThreshold ?? 10,
           updatedAt: data.updated_at || settings.updatedAt,
         };
         // Persist local copy
@@ -139,18 +145,40 @@ async function syncWithSupabaseIfConfigured(
         return remoteSettings;
       }
     } else if (mode === 'WRITE') {
-      // Upsert to Supabase system_settings table
-      await supabase.from('system_settings').upsert({
+      const timestamp = settings.updatedAt || new Date().toISOString();
+      // Try full upsert with extended columns
+      const fullPayload = {
         id: 'global_settings',
         app_name: settings.appName,
+        advance_discount_percentage: settings.advancePaymentDiscountPct,
         logo_url: settings.logoUrl,
-        advance_payment_discount_pct: settings.advancePaymentDiscountPct,
         cod_base_charge: settings.codBaseCharge,
         free_shipping_min_amount: settings.freeShippingMinAmount,
         base_delivery_fee: settings.baseDeliveryFee,
         referral_reward_amount: settings.referralRewardAmount,
-        updated_at: settings.updatedAt,
-      });
+        updated_at: timestamp,
+      };
+
+      const { error: fullError } = await supabase
+        .from('store_settings')
+        .upsert(fullPayload, { onConflict: 'id' });
+
+      // If missing column error (42703 or PGRST204), fallback to base columns
+      if (
+        fullError &&
+        (fullError.code === '42703' ||
+          fullError.code === 'PGRST204' ||
+          String(fullError.message).includes('schema cache') ||
+          String(fullError.message).includes('does not exist') ||
+          String(fullError.message).includes('column'))
+      ) {
+        await supabase.from('store_settings').upsert({
+          id: 'global_settings',
+          app_name: settings.appName,
+          advance_discount_percentage: settings.advancePaymentDiscountPct,
+          updated_at: timestamp,
+        }, { onConflict: 'id' });
+      }
     }
   } catch (err) {
     console.warn('Supabase settings sync error (non-fatal):', err);

@@ -152,7 +152,17 @@ CREATE POLICY "Public Read Categories" ON public.categories FOR SELECT USING (tr
 CREATE POLICY "Public Read Products" ON public.products FOR SELECT USING (true);
 CREATE POLICY "Public Read Variants" ON public.product_variants FOR SELECT USING (true);
 CREATE POLICY "Public Read Tiered Prices" ON public.tiered_prices FOR SELECT USING (true);
-CREATE POLICY "Public Read Settings" ON public.system_settings FOR SELECT USING (true);
+
+-- System Settings: Public Read/Write/Update for cross-platform PWA synchronization
+DROP POLICY IF EXISTS "Public Read Settings" ON public.system_settings;
+DROP POLICY IF EXISTS "Settings Select Policy" ON public.system_settings;
+CREATE POLICY "Settings Select Policy" ON public.system_settings FOR SELECT USING (true);
+
+DROP POLICY IF EXISTS "Settings Insert Policy" ON public.system_settings;
+CREATE POLICY "Settings Insert Policy" ON public.system_settings FOR INSERT WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Settings Update Policy" ON public.system_settings;
+CREATE POLICY "Settings Update Policy" ON public.system_settings FOR UPDATE USING (true) WITH CHECK (true);
 
 -- Users: Read/Write by Phone / Public Key for PWA client (System & Admin credential rows protected)
 DROP POLICY IF EXISTS "Users Select Policy" ON public.users;

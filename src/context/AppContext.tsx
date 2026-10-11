@@ -74,8 +74,8 @@ import {
   markStockRestoredForOrder,
 } from '../lib/stock-service';
 import {
-  fetchRemoteSettings,
-  saveRemoteSettings,
+  fetchUnifiedSettings,
+  saveUnifiedSettings,
   broadcastSettingsChange,
   subscribeToSettingsSync,
 } from '../lib/settings-service';
@@ -540,27 +540,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [settings]);
 
-  // Synchronize settings with centralized server and cross-context channels
+  // Synchronize settings with Supabase system_settings table, server, and cross-context channels
   useEffect(() => {
-    // 1. Initial fetch from server
-    fetchRemoteSettings().then((remote) => {
-      if (remote) {
+    // 1. Initial fetch from Supabase (preserving existing local customizations)
+    fetchUnifiedSettings(settings).then((unified) => {
+      if (unified) {
         setSettings((prev) => {
-          // If remote is newer or has distinct values, sync it
-          if (!prev.updatedAt || !remote.updatedAt || remote.updatedAt >= prev.updatedAt) {
+          if (!prev.updatedAt || !unified.updatedAt || unified.updatedAt >= prev.updatedAt) {
             try {
-              localStorage.setItem('om_settings', JSON.stringify(remote));
+              localStorage.setItem('om_settings', JSON.stringify(unified));
             } catch {
               // ignore
             }
-            return remote;
+            return unified;
           }
           return prev;
         });
       }
     });
 
-    // 2. Real-time subscription across installed PWA, Samsung Browser, and AI Studio
+    // 2. Real-time subscription across Supabase postgres_changes, BroadcastChannel, and window triggers
     const unsubscribe = subscribeToSettingsSync((synced) => {
       setSettings(synced);
       try {
@@ -568,7 +567,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } catch {
         // ignore
       }
-    });
+    }, settings);
 
     return () => {
       unsubscribe();
@@ -829,17 +828,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // 3. Broadcast across tabs and windows
     broadcastSettingsChange(updated);
 
-    // 4. Persist to centralized server store (which syncs all platforms and Supabase)
-    saveRemoteSettings(updated).then((saved) => {
-      if (saved) {
-        setSettings(saved);
-        try {
-          localStorage.setItem('om_settings', JSON.stringify(saved));
-        } catch {
-          // ignore
-        }
-        broadcastSettingsChange(saved);
-      }
+    // 4. Persist to Supabase system_settings table and server persistence
+    saveUnifiedSettings(updated).catch((err) => {
+      console.warn('Background settings save error:', err);
     });
   };
 
