@@ -73,6 +73,12 @@ import {
   isStockRestoredForOrder,
   markStockRestoredForOrder,
 } from '../lib/stock-service';
+import {
+  fetchRemoteSettings,
+  saveRemoteSettings,
+  broadcastSettingsChange,
+  subscribeToSettingsSync,
+} from '../lib/settings-service';
 
 export type CustomerFlowStep = 'AUTH' | 'PROFILE' | 'SHOP';
 
@@ -525,10 +531,65 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setAdminNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
   };
 
-  // Sync to localStorage
+  // Sync settings across platforms and persist locally
   useEffect(() => {
-    localStorage.setItem('om_settings', JSON.stringify(settings));
+    try {
+      localStorage.setItem('om_settings', JSON.stringify(settings));
+    } catch {
+      // ignore
+    }
   }, [settings]);
+
+  // Synchronize settings with centralized server and cross-context channels
+  useEffect(() => {
+    // 1. Initial fetch from server
+    fetchRemoteSettings().then((remote) => {
+      if (remote) {
+        setSettings((prev) => {
+          // If remote is newer or has distinct values, sync it
+          if (!prev.updatedAt || !remote.updatedAt || remote.updatedAt >= prev.updatedAt) {
+            try {
+              localStorage.setItem('om_settings', JSON.stringify(remote));
+            } catch {
+              // ignore
+            }
+            return remote;
+          }
+          return prev;
+        });
+      }
+    });
+
+    // 2. Real-time subscription across installed PWA, Samsung Browser, and AI Studio
+    const unsubscribe = subscribeToSettingsSync((synced) => {
+      setSettings(synced);
+      try {
+        localStorage.setItem('om_settings', JSON.stringify(synced));
+      } catch {
+        // ignore
+      }
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, []);
+
+  // Sync favicon/apple-touch-icon dynamically when logo changes
+  useEffect(() => {
+    if (typeof document !== 'undefined' && settings.logoUrl) {
+      try {
+        const iconLinks = document.querySelectorAll<HTMLLinkElement>(
+          "link[rel='icon'], link[rel='shortcut icon']"
+        );
+        iconLinks.forEach((link) => {
+          link.href = settings.logoUrl;
+        });
+      } catch {
+        // ignore
+      }
+    }
+  }, [settings.logoUrl]);
 
   useEffect(() => {
     localStorage.setItem('om_products', JSON.stringify(products));
@@ -748,11 +809,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const updateSettings = (newSettings: Partial<SystemSetting>) => {
-    setSettings((prev) => ({
-      ...prev,
+    const nowIso = new Date().toISOString();
+    const updated: SystemSetting = {
+      ...settings,
       ...newSettings,
-      updatedAt: new Date().toISOString(),
-    }));
+      updatedAt: nowIso,
+    };
+
+    // 1. Optimistic immediate state update
+    setSettings(updated);
+
+    // 2. Persist to localStorage for offline PWA fallback
+    try {
+      localStorage.setItem('om_settings', JSON.stringify(updated));
+    } catch {
+      // ignore
+    }
+
+    // 3. Broadcast across tabs and windows
+    broadcastSettingsChange(updated);
+
+    // 4. Persist to centralized server store (which syncs all platforms and Supabase)
+    saveRemoteSettings(updated).then((saved) => {
+      if (saved) {
+        setSettings(saved);
+        try {
+          localStorage.setItem('om_settings', JSON.stringify(saved));
+        } catch {
+          // ignore
+        }
+        broadcastSettingsChange(saved);
+      }
+    });
   };
 
   const addProduct = async (

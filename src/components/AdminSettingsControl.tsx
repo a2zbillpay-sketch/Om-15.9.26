@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Save, Check, RotateCcw, Upload, Image as ImageIcon, Edit3, Lock } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { INITIAL_SETTINGS } from '../data/seedData';
@@ -25,6 +25,24 @@ export const AdminSettingsControl: React.FC = () => {
   const [isEditingPricing, setIsEditingPricing] = useState(false);
   const [pricingSavedSuccess, setPricingSavedSuccess] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Keep form data synchronized with live settings updates from server / other devices
+  useEffect(() => {
+    if (!isEditingPricing) {
+      setFormData({
+        appName: settings.appName,
+        primaryColorHex: settings.primaryColorHex,
+        secondaryColorHex: settings.secondaryColorHex,
+        accentColorHex: settings.accentColorHex,
+        advancePaymentDiscountPct: settings.advancePaymentDiscountPct,
+        codBaseCharge: settings.codBaseCharge,
+        freeShippingMinAmount: settings.freeShippingMinAmount,
+        referralRewardAmount: settings.referralRewardAmount,
+        baseDeliveryFee: settings.baseDeliveryFee,
+        lowStockThreshold: settings.lowStockThreshold ?? 10,
+      });
+    }
+  }, [settings, isEditingPricing]);
 
   const handleSavePricingEngine = () => {
     updateSettings({

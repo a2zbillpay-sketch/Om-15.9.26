@@ -1,7 +1,23 @@
 import {StrictMode} from 'react';
 import {createRoot} from 'react-dom/client';
+import {registerSW} from 'virtual:pwa-register';
 import App from './App.tsx';
 import './index.css';
+
+// Automatically register and update PWA Service Worker across installed PWA and mobile browsers
+if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
+  registerSW({
+    immediate: true,
+    onRegistered(r) {
+      if (r) {
+        // Check for updates periodically every 30 minutes
+        setInterval(() => {
+          r.update().catch(() => {});
+        }, 30 * 60 * 1000);
+      }
+    },
+  });
+}
 
 // Google Maps Platform Quota Defense listener
 if (typeof window !== 'undefined') {

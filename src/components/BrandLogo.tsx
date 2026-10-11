@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 
 interface BrandLogoProps {
@@ -37,6 +37,22 @@ export const BrandLogo: React.FC<BrandLogoProps> = ({
       ? settings.logoUrl
       : '/logo.jpg';
 
+  // Reset error state when logo URL updates
+  useEffect(() => {
+    setImageError(false);
+  }, [activeLogoUrl]);
+
+  // Compute cache-busted URL for static assets to ensure cache updates propagate
+  const displayLogoUrl = useMemo(() => {
+    if (!activeLogoUrl) return '/logo.jpg';
+    if (activeLogoUrl.startsWith('data:') || activeLogoUrl.startsWith('blob:')) {
+      return activeLogoUrl;
+    }
+    const version = settings.updatedAt ? new Date(settings.updatedAt).getTime() : '';
+    if (!version) return activeLogoUrl;
+    return `${activeLogoUrl}${activeLogoUrl.includes('?') ? '&' : '?'}v=${version}`;
+  }, [activeLogoUrl, settings.updatedAt]);
+
   const showImage = !imageError;
 
   return (
@@ -50,7 +66,7 @@ export const BrandLogo: React.FC<BrandLogoProps> = ({
       >
         {showImage ? (
           <img
-            src={activeLogoUrl}
+            src={displayLogoUrl}
             alt={alt}
             onError={() => setImageError(true)}
             className="w-full h-full object-cover"

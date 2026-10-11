@@ -127,7 +127,8 @@ async function startAppServer() {
     });
     app.use(vite.middlewares);
   } else {
-    // Serve static frontend assets from dist
+    // Serve static frontend assets from public and dist
+    app.use(express.static(publicDir));
     app.use(express.static(distDir));
 
     // Fallback to index.html for client-side SPA routing

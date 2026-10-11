@@ -1,0 +1,15 @@
+{
+  "id": "global_settings",
+  "appName": "Om Distributors",
+  "logoUrl": "/logo.jpg",
+  "primaryColorHex": "#0F2C59",
+  "secondaryColorHex": "#D4AF37",
+  "accentColorHex": "#FF6B00",
+  "advancePaymentDiscountPct": 3,
+  "codBaseCharge": 30,
+  "freeShippingMinAmount": 500,
+  "baseDeliveryFee": 40,
+  "referralRewardAmount": 50,
+  "lowStockThreshold": 10,
+  "updatedAt": "2026-10-11T02:45:45.016Z"
+}

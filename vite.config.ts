@@ -134,8 +134,37 @@ export default defineConfig(() => {
           'icons/icon-maskable-512x512.png'
         ],
         workbox: {
+          navigateFallbackDenylist: [/^\/api\//],
           globPatterns: ['**/*.{js,css,html,ico,png,svg,jpg,jpeg,json}'],
           maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
+          runtimeCaching: [
+            {
+              urlPattern: /^\/api\/.*/i,
+              handler: 'NetworkOnly',
+            },
+            {
+              urlPattern: /^\/manifest\.json$/i,
+              handler: 'NetworkFirst',
+              options: {
+                cacheName: 'om-manifest-cache',
+                expiration: {
+                  maxEntries: 1,
+                  maxAgeSeconds: 60 * 60 * 24, // 24 hours
+                },
+              },
+            },
+            {
+              urlPattern: /\.(?:png|jpg|jpeg|svg|gif|ico|webp)$/i,
+              handler: 'StaleWhileRevalidate',
+              options: {
+                cacheName: 'om-images-icons-cache',
+                expiration: {
+                  maxEntries: 100,
+                  maxAgeSeconds: 60 * 60 * 24 * 30, // 30 days
+                },
+              },
+            },
+          ],
         },
         devOptions: {
           enabled: true,
