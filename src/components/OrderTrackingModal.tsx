@@ -461,8 +461,15 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
 
                 <div className="flex justify-between text-sm font-black text-[#0F2C59] border-t border-gray-200 pt-1.5">
                   <span>{previousOnlineAdvancePaid > 0 ? 'Balance to Pay Now:' : 'Total Payable:'}</span>
-                  <span>₹{currentOrder.status === OrderStatus.CANCELLED ? 0 : (currentOrder.totalPayable ?? currentOrder.finalAmount)}</span>
+                  <span>₹{currentOrder.status === OrderStatus.CANCELLED ? 0 : (currentOrder.paymentMethod === PaymentMethod.COD ? currentOrder.finalAmount : (currentOrder.totalPayable ?? currentOrder.finalAmount))}</span>
                 </div>
+
+                {currentOrder.previousOutstanding !== undefined && currentOrder.previousOutstanding > 0 && currentOrder.paymentMethod === PaymentMethod.COD && (
+                  <div className="flex justify-between text-xs text-rose-700 font-bold pt-1">
+                    <span>Previous COD Outstanding:</span>
+                    <span>₹{currentOrder.previousOutstanding}</span>
+                  </div>
+                )}
 
                 {currentOrder.codCollectedAmount !== undefined && currentOrder.codCollectedAmount > 0 && (
                   <div className="flex justify-between text-xs text-emerald-700 font-bold pt-0.5">

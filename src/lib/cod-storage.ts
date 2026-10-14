@@ -63,22 +63,10 @@ export function calculateCustomerOutstanding(
 
   if (customerOrders.length === 0) return 0;
 
-  const latestOrder = customerOrders[customerOrders.length - 1];
   let totalDebt = 0;
 
   for (const order of customerOrders) {
     if (order.paymentStatus === PaymentStatus.RECEIVED) {
-      continue;
-    }
-
-    // A newly placed order that is not yet delivered and has no recorded collection
-    // is currently in progress, not a "previous COD outstanding" debt.
-    const isUndeliveredInProgress =
-      order.status !== OrderStatus.DELIVERED &&
-      order.paymentStatus !== PaymentStatus.PARTIALLY_COLLECTED &&
-      (!order.codCollectedAmount || order.codCollectedAmount <= 0);
-
-    if (order.id === latestOrder.id && isUndeliveredInProgress) {
       continue;
     }
 
@@ -154,13 +142,15 @@ export function allocateCodCollection(
   }
 
   const bill = Number(currentOrder.finalAmount) || 0;
+  const currentAlreadyCollected = Number(currentOrder.codCollectedAmount) || 0;
+  const currentRemainingUnpaid = Math.max(0, Math.round((bill - currentAlreadyCollected) * 100) / 100);
   const customerPriorDebt = calculateCustomerOutstanding(orders, targetPhoneOrId, currentOrderId);
   const prevDebt = Math.max(0, Number(currentOrder.previousOutstanding) || customerPriorDebt);
 
-  // Current order bill is covered first
-  const allocToCurrent = Math.min(cleanCollected, bill);
-  // Cash beyond current bill is allocated to settle older debt up to prevDebt
-  let cashForOlder = Math.min(Math.max(0, cleanCollected - bill), prevDebt);
+  // Current order remaining unpaid balance is covered first
+  const allocToCurrent = Math.min(cleanCollected, currentRemainingUnpaid);
+  // Cash beyond current order remaining balance is allocated to settle older debt up to prevDebt
+  let cashForOlder = Math.min(Math.max(0, cleanCollected - currentRemainingUnpaid), prevDebt);
 
   for (const olderOrder of olderOrders) {
     const oBill = Number(olderOrder.finalAmount) || 0;
@@ -199,27 +189,28 @@ export function allocateCodCollection(
   }
 
   // Current order payment status
+  const updatedCurrentCollected = Math.round((currentAlreadyCollected + allocToCurrent) * 100) / 100;
   let nextPaymentStatus: PaymentStatus;
-  if (allocToCurrent >= bill) {
+  if (updatedCurrentCollected >= bill) {
     nextPaymentStatus = PaymentStatus.RECEIVED;
-  } else if (allocToCurrent > 0) {
+  } else if (updatedCurrentCollected > 0) {
     nextPaymentStatus = PaymentStatus.PARTIALLY_COLLECTED;
   } else {
     nextPaymentStatus = PaymentStatus.PENDING;
   }
 
-  const currentRemainingUnpaid = Math.max(0, Math.round((bill - allocToCurrent) * 100) / 100);
+  const finalCurrentRemainingUnpaid = Math.max(0, Math.round((bill - updatedCurrentCollected) * 100) / 100);
 
   allocations.push({
     orderId: currentOrder.id,
     orderNumber: currentOrder.orderNumber,
     amountAllocated: allocToCurrent,
-    orderRemainingUnpaid: currentRemainingUnpaid,
+    orderRemainingUnpaid: finalCurrentRemainingUnpaid,
   });
 
   modifiedOrdersMap.set(currentOrder.id, {
     ...currentOrder,
-    codCollectedAmount: allocToCurrent,
+    codCollectedAmount: updatedCurrentCollected,
     paymentStatus: nextPaymentStatus,
     status: markAsDelivered ? OrderStatus.DELIVERED : currentOrder.status,
   });

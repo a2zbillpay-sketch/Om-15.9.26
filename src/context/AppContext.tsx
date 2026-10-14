@@ -25,7 +25,6 @@ import {
   INITIAL_CATEGORIES,
   INITIAL_PRODUCTS,
   INITIAL_USERS,
-  INITIAL_ORDERS,
 } from '../data/seedData';
 import { formatVariantPack } from '../utils/variantFormatter';
 import {
@@ -43,6 +42,8 @@ import {
   updateOrderStatusInSupabase,
   creditCustomerWalletInSupabase,
   debitCustomerWalletInSupabase,
+  getCustomerWalletBalanceFromLedger,
+  fetchWalletTransactionsFromSupabase,
   saveCustomerProfileToSupabase,
   fetchCustomerProfileFromSupabase,
   saveProductToSupabase,
@@ -196,7 +197,7 @@ interface AppContextType {
   setUseWalletBalance: (use: boolean) => void;
   orders: Order[];
   customerOutstanding: number;
-  getCustomerOutstanding: (phoneOrId?: string) => number;
+  getCustomerOutstanding: (phoneOrId?: string, excludeOrderId?: string) => number;
   createOrder: (data: {
     address: Address;
     paymentMethod: PaymentMethod;
@@ -324,8 +325,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
 
   const [users, setUsers] = useState<User[]>(() => {
+    // Safely remove legacy cached entry for phone 9820123456 / user-customer-1
+    try {
+      localStorage.removeItem('om_profile_9820123456');
+      localStorage.removeItem('om_profile_+919820123456');
+      const savedCur = localStorage.getItem('om_current_user');
+      if (savedCur) {
+        const parsedCur = JSON.parse(savedCur);
+        if (parsedCur.phone === '9820123456' || parsedCur.id === 'user-customer-1') {
+          localStorage.removeItem('om_current_user');
+        }
+      }
+      const savedSession = localStorage.getItem('om_customer_session');
+      if (savedSession) {
+        const parsedSession = JSON.parse(savedSession);
+        if (parsedSession.phone === '9820123456') {
+          localStorage.removeItem('om_customer_session');
+        }
+      }
+    } catch {}
+
     const saved = localStorage.getItem('om_users');
-    return saved ? JSON.parse(saved) : INITIAL_USERS;
+    const rawUsers: User[] = saved ? JSON.parse(saved) : INITIAL_USERS;
+    return rawUsers.filter(
+      (u) => u.phone !== '9820123456' && u.id !== 'user-customer-1'
+    );
   });
 
   const [customerFlowStep, setCustomerFlowStep] = useState<CustomerFlowStep>(() => {
@@ -413,19 +437,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [savedPreEditCart, setSavedPreEditCart] = useState<CartItem[] | null>(null);
 
   const [orders, setOrders] = useState<Order[]>(() => {
+    if (isSupabaseConfigured) {
+      return [];
+    }
     const saved = localStorage.getItem('om_orders');
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
-          const missing = INITIAL_ORDERS.filter(
-            (io) => !parsed.some((po: any) => po.id === io.id || po.orderNumber === io.orderNumber)
-          );
-          return missing.length > 0 ? [...parsed, ...missing] : parsed;
+          return parsed.map((o: any) => ({
+            ...o,
+            totalPayable:
+              o.paymentMethod === PaymentMethod.COD
+                ? o.finalAmount
+                : (o.totalPayable ?? o.finalAmount),
+          }));
         }
       } catch {}
     }
-    return INITIAL_ORDERS;
+    return [];
   });
 
   const [selectedAddressId, setSelectedAddressId] = useState<string | null>(() => {
@@ -625,6 +655,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       }
 
+      // When Supabase successfully returns [], set orders to []
+      if (fetchedOrders !== null && fetchedOrders.length === 0) {
+        setOrders([]);
+        return;
+      }
+
       // Fetch persistent COD transactions and allocations from backend API
       const apiData = await fetchCodCollectionsFromApi(
         activeRole === Role.SHOPKEEPER ? undefined : currentUser.phone
@@ -657,9 +693,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               codCollectedAmount: persisted.codCollectedAmount ?? o.codCollectedAmount ?? 0,
               previousOutstanding: persisted.previousOutstanding ?? o.previousOutstanding ?? 0,
               totalPayable:
-                persisted.totalPayable ??
-                o.totalPayable ??
-                o.finalAmount,
+                o.paymentMethod === PaymentMethod.COD
+                  ? o.finalAmount
+                  : (persisted.totalPayable ?? o.totalPayable ?? o.finalAmount),
               paymentStatus: (persisted.paymentStatus as PaymentStatus) || o.paymentStatus,
               status: ((persisted as any).status as OrderStatus) || o.status,
             };
@@ -689,9 +725,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                   codCollectedAmount: persisted.codCollectedAmount ?? o.codCollectedAmount ?? 0,
                   previousOutstanding: persisted.previousOutstanding ?? o.previousOutstanding ?? 0,
                   totalPayable:
-                    persisted.totalPayable ??
-                    o.totalPayable ??
-                    o.finalAmount,
+                    o.paymentMethod === PaymentMethod.COD
+                      ? o.finalAmount
+                      : (persisted.totalPayable ?? o.totalPayable ?? o.finalAmount),
                   paymentStatus: (persisted.paymentStatus as PaymentStatus) || o.paymentStatus,
                   status: ((persisted as any).status as OrderStatus) || o.status,
                 };
@@ -743,6 +779,61 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       refreshOrders();
     }
   }, [currentUser.id, currentUser.phone, activeRole]);
+
+  // Synchronize customer wallet and persistent ledger from Supabase
+  const refreshCustomerWallet = useCallback(async () => {
+    if (!isSupabaseConfigured || !currentUser || !currentUser.phone) return;
+    try {
+      const cleanPhone = currentUser.phone.replace(/\D/g, '').slice(-10);
+      if (!cleanPhone) return;
+
+      const authoritativeBalance = await getCustomerWalletBalanceFromLedger(
+        currentUser.id,
+        cleanPhone
+      );
+
+      const txs = await fetchWalletTransactionsFromSupabase(currentUser.id, cleanPhone);
+      if (txs && txs.length > 0) {
+        setWalletTransactions(txs);
+        try {
+          localStorage.setItem('om_wallet_transactions', JSON.stringify(txs));
+        } catch {}
+      }
+
+      setCurrentUser((prev) => {
+        const prevClean = prev.phone ? prev.phone.replace(/\D/g, '').slice(-10) : '';
+        if (prevClean !== cleanPhone) return prev;
+        if (prev.walletBalance === authoritativeBalance) return prev;
+        const updated = {
+          ...prev,
+          walletBalance: authoritativeBalance,
+        };
+        try {
+          localStorage.setItem('om_current_user', JSON.stringify(updated));
+          localStorage.setItem(`om_profile_${cleanPhone}`, JSON.stringify(updated));
+        } catch {}
+        return updated;
+      });
+
+      setUsers((prev) =>
+        prev.map((u) => {
+          const uClean = u.phone ? u.phone.replace(/\D/g, '').slice(-10) : '';
+          if (uClean === cleanPhone && u.walletBalance !== authoritativeBalance) {
+            return { ...u, walletBalance: authoritativeBalance };
+          }
+          return u;
+        })
+      );
+    } catch (err) {
+      console.warn('Error refreshing customer wallet:', err);
+    }
+  }, [currentUser.id, currentUser.phone]);
+
+  useEffect(() => {
+    if (isSupabaseConfigured && currentUser.phone && activeRole === Role.CUSTOMER) {
+      refreshCustomerWallet();
+    }
+  }, [currentUser.phone, activeRole, refreshCustomerWallet]);
 
   useEffect(() => {
     if (isSupabaseConfigured) {
@@ -796,7 +887,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const userDebt = calculateCustomerOutstanding(orders, matchingUser.phone || matchingUser.id);
       const updatedUser = {
         ...matchingUser,
-        walletBalance: userDebt > 0 ? -userDebt : (matchingUser.walletBalance >= 0 ? matchingUser.walletBalance : 0),
+        walletBalance: matchingUser.walletBalance >= 0 ? matchingUser.walletBalance : 0,
         outstandingBalance: userDebt,
       };
       setCurrentUser(updatedUser);
@@ -1641,17 +1732,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (currentUser.outstandingBalance && currentUser.outstandingBalance > 0) {
       return currentUser.outstandingBalance;
     }
-    if (currentUser.walletBalance && currentUser.walletBalance < 0) {
-      return Math.abs(currentUser.walletBalance);
-    }
     return 0;
-  }, [orders, currentUser.phone, currentUser.id, currentUser.outstandingBalance, currentUser.walletBalance]);
+  }, [orders, currentUser.phone, currentUser.id, currentUser.outstandingBalance]);
 
   const getCustomerOutstanding = useCallback(
-    (phoneOrId?: string): number => {
+    (phoneOrId?: string, excludeOrderId?: string): number => {
       const target = phoneOrId || currentUser.phone || currentUser.id;
       if (!target) return 0;
-      const fromOrders = calculateCustomerOutstanding(orders, target);
+      const fromOrders = calculateCustomerOutstanding(orders, target, excludeOrderId);
       const hasCustomerOrders = orders.some(
         (o) => o.paymentMethod === PaymentMethod.COD && isSameCustomer(o, target)
       );
@@ -1663,48 +1751,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (matchedUser.outstandingBalance && matchedUser.outstandingBalance > 0) {
           return matchedUser.outstandingBalance;
         }
-        if (matchedUser.walletBalance && matchedUser.walletBalance < 0) {
-          return Math.abs(matchedUser.walletBalance);
-        }
       }
       if (target === currentUser.phone || target === currentUser.id) {
         if (currentUser.outstandingBalance && currentUser.outstandingBalance > 0) {
           return currentUser.outstandingBalance;
         }
-        if (currentUser.walletBalance && currentUser.walletBalance < 0) {
-          return Math.abs(currentUser.walletBalance);
-        }
       }
       return 0;
     },
-    [orders, currentUser.phone, currentUser.id, currentUser.outstandingBalance, currentUser.walletBalance, users]
+    [orders, currentUser.phone, currentUser.id, currentUser.outstandingBalance, users]
   );
 
-  // Ensure customer COD outstanding debt is tracked as negative walletBalance,
-  // showing -₹18 when customer owes ₹18 from previous COD order
+  // Keep customer COD outstanding debt tracked in outstandingBalance, completely separate from walletBalance
   useEffect(() => {
     if (activeRole === Role.CUSTOMER && (currentUser.phone || currentUser.id)) {
-      if (customerOutstanding > 0) {
-        const targetWallet = -customerOutstanding;
-        if (currentUser.walletBalance !== targetWallet || currentUser.outstandingBalance !== customerOutstanding) {
-          setCurrentUser((prev) => {
-            const updated = {
-              ...prev,
-              outstandingBalance: customerOutstanding,
-              walletBalance: targetWallet,
-            };
-            try {
-              localStorage.setItem('om_current_user', JSON.stringify(updated));
-            } catch {}
-            return updated;
-          });
-        }
-      } else if (currentUser.walletBalance < 0 && customerOutstanding === 0) {
+      const needsOutstandingSync = currentUser.outstandingBalance !== customerOutstanding;
+      const hasLegacyNegativeWallet = currentUser.walletBalance < 0;
+
+      if (needsOutstandingSync || hasLegacyNegativeWallet) {
         setCurrentUser((prev) => {
           const updated = {
             ...prev,
-            outstandingBalance: 0,
-            walletBalance: 0,
+            outstandingBalance: customerOutstanding,
+            walletBalance: prev.walletBalance < 0 ? 0 : prev.walletBalance,
           };
           try {
             localStorage.setItem('om_current_user', JSON.stringify(updated));
@@ -1761,7 +1830,56 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const discountAmount = isAdvance ? checkoutBreakdown.advanceDiscountAmount : 0;
     const codCharge = isAdvance ? 0 : checkoutBreakdown.codCharge;
 
-    const previousOutstanding = 0; // Never add previous outstanding to the next order
+    // Calculate customer's previously unpaid, eligible outstanding balance
+    // Rules:
+    // 1. Must belong to this customer (by normalized phone or userId)
+    // 2. Exclude the current order being created/edited
+    // 3. Do not count cancelled orders (status === CANCELLED)
+    // 4. Do not count unpaid pending or in-progress orders (status === ORDER_PENDING or not delivered with no collection)
+    // 5. Do not count fully paid orders (paymentStatus === RECEIVED or bill <= collected)
+    // 6. Prevent double-counting: only sum each eligible order's individual unpaid portion: Math.max(0, finalAmount - codCollectedAmount)
+    let eligiblePreviousOutstanding = 0;
+    const customerIdentifier = currentUser.phone || currentUser.id;
+
+    if (customerIdentifier && Array.isArray(orders)) {
+      const eligibleOrders = orders.filter((o) => {
+        if (data.orderId && o.id === data.orderId) return false;
+        if (!isSameCustomer(o, customerIdentifier)) return false;
+        if (o.status === OrderStatus.CANCELLED) return false;
+        if (o.paymentMethod !== PaymentMethod.COD) return false;
+        if (o.paymentStatus === PaymentStatus.RECEIVED) return false;
+
+        // Do not count unpaid pending or in-progress orders
+        const isUnpaidPending =
+          o.status === OrderStatus.ORDER_PENDING ||
+          (o.status !== OrderStatus.DELIVERED && (!o.codCollectedAmount || o.codCollectedAmount <= 0));
+
+        if (isUnpaidPending) return false;
+
+        return true;
+      });
+
+      if (eligibleOrders.length > 0) {
+        for (const o of eligibleOrders) {
+          const bill = Number(o.finalAmount) || 0;
+          const collected = Number(o.codCollectedAmount) || 0;
+          const unpaid = Math.max(0, bill - collected);
+          eligiblePreviousOutstanding += unpaid;
+        }
+        eligiblePreviousOutstanding = Math.round(eligiblePreviousOutstanding * 100) / 100;
+      } else {
+        // If no customer orders in state yet, check if customer has a pre-existing profile debt
+        const hasAnyCustomerOrders = orders.some((o) => isSameCustomer(o, customerIdentifier));
+        if (!hasAnyCustomerOrders) {
+          if (currentUser.outstandingBalance && currentUser.outstandingBalance > 0) {
+            eligiblePreviousOutstanding = Math.round(currentUser.outstandingBalance * 100) / 100;
+          }
+        }
+      }
+    }
+
+    // Previous outstanding balance is included for COD orders
+    const previousOutstanding = isAdvance ? 0 : eligiblePreviousOutstanding;
 
     // Wallet can ONLY be used inside Advance Payment as "Wallet Applied (Advance)"
     // Wallet must be deducted ONLY when:
@@ -1793,9 +1911,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const finalAmount = isAdvance && isExplicitlyUsingWallet
       ? Math.max(0, discountedOrderAmount - walletUsed)
       : discountedOrderAmount;
-    const totalPayable = isAdvance
-      ? finalAmount
-      : Math.max(0, discountedOrderAmount - walletUsed);
+    // Rule: new order totalPayable equals finalAmount only. Keep previousOutstanding separate.
+    const totalPayable = finalAmount;
     const newWalletBalance = isExplicitlyUsingWallet
       ? Math.max(0, currentActualWallet - walletUsed)
       : currentActualWallet;
@@ -1957,9 +2074,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             amount: walletUsed,
             newWalletBalance,
             description: `Wallet Applied (Advance) for Order #${newOrder.orderNumber}`,
-          }).catch((err) => {
-            console.warn('Background Supabase wallet debit error:', err);
-          });
+          })
+            .then(() => {
+              refreshCustomerWallet();
+            })
+            .catch((err) => {
+              console.warn('Background Supabase wallet debit error:', err);
+            });
         }
       }
     }
@@ -2093,18 +2214,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       );
 
       let customerBaseWallet = 0;
-      if (isCurrentCustomer) {
-        customerBaseWallet = currentUser.walletBalance >= 0 ? currentUser.walletBalance : 0;
+      const userPhoneClean = cleanCustomerPhone;
+      const relevantTxs = walletTransactions.filter(
+        (t) =>
+          (userPhoneClean && t.userPhone && t.userPhone.replace(/\D/g, '').slice(-10) === userPhoneClean) ||
+          (target.userId && t.userId === target.userId) ||
+          (customerInUsers && t.userId === customerInUsers.id) ||
+          (isCurrentCustomer && t.userId === currentUser.id)
+      );
+
+      if (relevantTxs.length > 0) {
+        const sorted = [...relevantTxs].sort(
+          (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+        );
+        let running = 0;
+        for (const t of sorted) {
+          if (t.type === 'CREDIT') running += Number(t.amount) || 0;
+          else if (t.type === 'DEBIT') running = Math.max(0, running - (Number(t.amount) || 0));
+        }
+        customerBaseWallet = running;
+      } else if (isCurrentCustomer) {
+        customerBaseWallet = Math.max(0, currentUser.walletBalance || 0);
       } else if (customerInUsers) {
-        customerBaseWallet = customerInUsers.walletBalance >= 0 ? customerInUsers.walletBalance : 0;
-      } else if (cleanCustomerPhone) {
-        try {
-          const cached = localStorage.getItem(`om_profile_${cleanCustomerPhone}`);
-          if (cached) {
-            const parsed = JSON.parse(cached);
-            customerBaseWallet = parsed.walletBalance >= 0 ? parsed.walletBalance : 0;
-          }
-        } catch {}
+        customerBaseWallet = Math.max(0, customerInUsers.walletBalance || 0);
       }
 
       const newCustomerWalletBalance = customerBaseWallet + amountToCredit;
@@ -2210,7 +2342,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       if (isSupabaseConfigured) {
         creditCustomerWalletInSupabase({
-          userId: target.userId || (customerInUsers ? customerInUsers.id : (isCurrentCustomer ? currentUser.id : `user-${cleanCustomerPhone}`)),
+          userId: target.userId || (customerInUsers ? customerInUsers.id : (isCurrentCustomer ? currentUser.id : undefined)),
           customerPhone: customerPhone || (customerInUsers ? customerInUsers.phone : (isCurrentCustomer ? currentUser.phone : cleanCustomerPhone)),
           customerName: target.userName || (customerInUsers ? customerInUsers.name : 'Customer'),
           orderId: target.id,
@@ -2218,9 +2350,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           amount: amountToCredit,
           newWalletBalance: newCustomerWalletBalance,
           description: refundDescription,
-        }).catch((err) => {
-          console.warn('Background Supabase wallet credit error:', err);
-        });
+        })
+          .then(() => {
+            refreshCustomerWallet();
+          })
+          .catch((err) => {
+            console.warn('Background Supabase wallet credit error:', err);
+          });
       }
 
       walletCreditSucceeded = true;
@@ -2408,8 +2544,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, error: 'Collected amount cannot be negative.' };
     }
 
-    const customerPriorDebt = getCustomerOutstanding(order.userPhone || order.userId);
-    const maxCollectible = (Number(order.finalAmount) || 0) + customerPriorDebt;
+    const previouslyCollected = Math.max(0, Number(order.codCollectedAmount) || 0);
+    const remainingOrderBalance = Math.max(0, Math.round(((Number(order.finalAmount) || 0) - previouslyCollected) * 100) / 100);
+    const customerPriorDebt = getCustomerOutstanding(order.userPhone || order.userId, orderId);
+    const maxCollectible = Math.round((remainingOrderBalance + customerPriorDebt) * 100) / 100;
     if (collectedAmount > maxCollectible) {
       return {
         success: false,
@@ -2439,7 +2577,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (isSameCustomer({ userPhone: u.phone, userId: u.id }, targetCustomer)) {
           return {
             ...u,
-            walletBalance: newDebt > 0 ? -newDebt : (u.walletBalance < 0 ? 0 : u.walletBalance),
+            walletBalance: u.walletBalance < 0 ? 0 : u.walletBalance,
             outstandingBalance: newDebt,
           };
         }
@@ -2451,7 +2589,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setCurrentUser((prev) => {
         const updated = {
           ...prev,
-          walletBalance: newDebt > 0 ? -newDebt : (prev.walletBalance < 0 ? 0 : prev.walletBalance),
+          walletBalance: prev.walletBalance < 0 ? 0 : prev.walletBalance,
           outstandingBalance: newDebt,
         };
         try {
@@ -2473,11 +2611,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       customerId: order.userId,
       customerName: order.userName,
       collectedAmount: cleanAmount,
-      previousOutstanding: order.previousOutstanding || 0,
+      previousOutstanding: customerPriorDebt > 0 ? customerPriorDebt : (order.previousOutstanding || 0),
       orderAmount: order.finalAmount,
-      totalPayable: order.totalPayable ?? order.finalAmount,
+      totalPayable: order.finalAmount,
       markAsDelivered,
-      allCustomerOrders: allocationResult.updatedOrders.filter(
+      allCustomerOrders: orders.filter(
         (o) => isSameCustomer(o, order.userPhone || order.userId)
       ),
     }).catch((err) => {
@@ -2681,7 +2819,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
 
       // Check local cache if offline or not returned by Supabase
-      if (!resolvedUser) {
+      if (!resolvedUser && cleanPhone !== '9820123456') {
         const phoneKey = `om_profile_${cleanPhone}`;
         const localProfile = localStorage.getItem(phoneKey);
         if (localProfile) {
@@ -2708,33 +2846,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       }
 
-      // Ensure persistent wallet balance (e.g. from cancellation refunds and order wallet payments) is accurately preserved
-      let resolvedWalletBalance = resolvedUser ? (resolvedUser.walletBalance || 0) : 0;
-      try {
-        const savedTx = localStorage.getItem('om_wallet_transactions');
-        if (savedTx) {
-          const txList: WalletTransaction[] = JSON.parse(savedTx);
-          const userTx = txList.filter(
-            (t) =>
-              (t.userPhone && t.userPhone.replace(/\D/g, '').slice(-10) === cleanPhone.slice(-10)) ||
-              (resolvedUser && t.userId === resolvedUser.id)
-          );
-          if (userTx.length > 0 && typeof userTx[0].balanceAfter === 'number' && userTx[0].balanceAfter >= 0) {
-            resolvedWalletBalance = userTx[0].balanceAfter;
-          }
-        }
-      } catch {}
-
-      if (resolvedWalletBalance <= 0) {
+      // Ensure persistent wallet balance is accurately preserved from authoritative database
+      let resolvedWalletBalance = resolvedUser ? (resolvedUser.walletBalance ?? 0) : 0;
+      if (!resolvedUser) {
         try {
-          const localProfileStr = localStorage.getItem(`om_profile_${cleanPhone}`);
-          if (localProfileStr) {
-            const parsed = JSON.parse(localProfileStr);
-            if (typeof parsed.walletBalance === 'number' && parsed.walletBalance > 0) {
-              resolvedWalletBalance = parsed.walletBalance;
+          const savedTx = localStorage.getItem('om_wallet_transactions');
+          if (savedTx) {
+            const txList: WalletTransaction[] = JSON.parse(savedTx);
+            const userTx = txList.filter(
+              (t) =>
+                t.userPhone && t.userPhone.replace(/\D/g, '').slice(-10) === cleanPhone.slice(-10)
+            );
+            if (userTx.length > 0 && typeof userTx[0].balanceAfter === 'number' && userTx[0].balanceAfter >= 0) {
+              resolvedWalletBalance = userTx[0].balanceAfter;
             }
           }
         } catch {}
+
+        if (cleanPhone === '9820123456') {
+          resolvedWalletBalance = 0;
+        } else if (resolvedWalletBalance <= 0) {
+          try {
+            const localProfileStr = localStorage.getItem(`om_profile_${cleanPhone}`);
+            if (localProfileStr) {
+              const parsed = JSON.parse(localProfileStr);
+              if (typeof parsed.walletBalance === 'number' && parsed.walletBalance > 0) {
+                resolvedWalletBalance = parsed.walletBalance;
+              }
+            }
+          } catch {}
+        }
       }
 
       const userDebt = Number(
@@ -2748,7 +2889,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         phone: cleanPhone,
         role: Role.CUSTOMER,
         referralCode: resolvedUser?.referralCode || `OM${cleanPhone.slice(-4)}`,
-        walletBalance: userDebt > 0 ? -userDebt : (resolvedWalletBalance >= 0 ? resolvedWalletBalance : 0),
+        walletBalance: resolvedWalletBalance >= 0 ? resolvedWalletBalance : 0,
         outstandingBalance: userDebt,
         codOrderCount: resolvedUser?.codOrderCount || 0,
         addresses: resolvedUser?.addresses || [],
@@ -2781,16 +2922,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       if (isSupabaseConfigured) {
         fetchCustomerOrdersFromSupabase(finalUser.id, cleanPhone).then((dbOrders) => {
-          if (dbOrders && dbOrders.length > 0) {
-            setOrders((prev) => {
-              const existingIds = new Set(prev.map((o) => o.id));
-              const existingOrderNums = new Set(prev.map((o) => o.orderNumber));
-              const newOrders = dbOrders.filter((o) => !existingIds.has(o.id) && !existingOrderNums.has(o.orderNumber));
-              return [...prev, ...newOrders];
-            });
+          if (dbOrders !== null) {
+            if (dbOrders.length === 0) {
+              setOrders([]);
+            } else {
+              setOrders(dbOrders);
+            }
           }
         });
         refreshProducts();
+        refreshCustomerWallet();
       }
 
       setCustomerFlowStep(finalUser.name && finalUser.addresses.length > 0 ? 'SHOP' : 'PROFILE');

@@ -377,7 +377,6 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                       <div className="min-w-0">
                         <div className="text-xs font-black text-[#0F2C59] flex items-center gap-1.5">
                           <span>Google Maps Location</span>
-                          <span className="text-[10px] font-semibold text-gray-500 font-normal">(Optional GPS)</span>
                         </div>
                         <p className="text-[11px] text-gray-600 truncate">
                           Pinpoint exact delivery shop or home on Google Maps
@@ -404,7 +403,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
             <div>
               <label className="text-xs font-bold text-gray-700 flex items-center gap-1.5 mb-1.5">
                 <Calendar size={14} className="text-[#FF6B00]" />
-                <span>Preferred Delivery Date</span>
+                <span>Delivery till Date</span>
               </label>
               <input
                 type="date"
@@ -427,8 +426,8 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
               className="w-full bg-[#0F2C59] hover:bg-[#153e7d] text-white p-3.5 rounded-xl font-extrabold text-sm flex items-center justify-between shadow-lg transition"
             >
               <div className="text-left">
-                <div className="text-[10px] text-[#D4AF37]">NEXT STEP</div>
-                <div className="text-sm font-black">Choose Payment (Compare COD vs Advance)</div>
+                <div className="text-[10px] text-[#D4AF37]">Compare Payment Option</div>
+                <div className="text-sm font-black">COD vs Advance</div>
               </div>
               <ArrowRight size={18} className="text-[#D4AF37]" />
             </button>

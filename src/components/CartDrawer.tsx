@@ -616,13 +616,8 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                 onClick={onProceedToCheckout}
                 className="w-full bg-[#0F2C59] hover:bg-[#153e7d] text-white p-3.5 rounded-xl font-extrabold text-sm flex items-center justify-between shadow-lg transition hover:scale-[1.01]"
               >
-                <div>
-                  <div className="text-[10px] text-[#D4AF37] font-medium leading-none">
-                    SELECT PAYMENT & ADDRESS
-                  </div>
-                  <div className="text-base font-black leading-tight text-white">
-                    Proceed to Checkout
-                  </div>
+                <div className="text-base font-black leading-tight text-white">
+                  Select : Address & Delivery Date
                 </div>
                 <div className="bg-[#D4AF37] text-[#0F2C59] p-1.5 rounded-lg">
                   <ArrowRight size={18} />

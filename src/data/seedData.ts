@@ -604,34 +604,6 @@ export const INITIAL_USERS: User[] = [
     ],
     createdAt: new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString(),
   },
-  {
-    id: 'user-customer-1',
-    name: 'Rajesh Gupta',
-    phone: '9820123456',
-    role: Role.CUSTOMER,
-    referralCode: 'OMRAJ772',
-    walletBalance: 150,
-    codOrderCount: 1, // <3, so gets FREE COD delivery!
-    addresses: [
-      {
-        id: 'addr-1',
-        userId: 'user-customer-1',
-        fullAddress: 'Flat 402, Shanti Heights, Sector 19',
-        landmark: 'Near D-Mart',
-        pincode: '400703',
-        isDefault: true,
-      },
-      {
-        id: 'addr-2',
-        userId: 'user-customer-1',
-        fullAddress: 'Shop 4, Modern Kirana Stores, Old Bazar',
-        landmark: 'Behind Jain Temple',
-        pincode: '400701',
-        isDefault: false,
-      },
-    ],
-    createdAt: new Date(Date.now() - 10 * 24 * 3600 * 1000).toISOString(),
-  },
 ];
 
 // Initial realistic orders to showcase 15-minute cancellation window & order tracking

@@ -205,7 +205,9 @@ export const CustomerOrdersDrawer: React.FC<CustomerOrdersDrawerProps> = ({
                       ) : (
                         <>
                           <span className="text-gray-500 text-[10px]">Total Payable: </span>
-                          <span className="font-bold text-gray-800">₹{order.totalPayable ?? order.finalAmount}</span>
+                          <span className="font-bold text-gray-800">
+                            ₹{order.paymentMethod === PaymentMethod.COD ? order.finalAmount : (order.totalPayable ?? order.finalAmount)}
+                          </span>
                         </>
                       )}
                       {order.walletAmountUsed !== undefined && order.walletAmountUsed > 0 && (

@@ -1,5 +1,5 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { User, Order, OrderItem, Address, Role, OrderStatus, PaymentMethod, PaymentStatus, UnitType, Product, ProductVariant, TieredPrice, SystemSetting } from '../types';
+import { User, Order, OrderItem, Address, Role, OrderStatus, PaymentMethod, PaymentStatus, UnitType, Product, ProductVariant, TieredPrice, SystemSetting, WalletTransaction } from '../types';
 import { INITIAL_CATEGORIES, INITIAL_SETTINGS } from '../data/seedData';
 import {
   saveProductWithCascadeSync,
@@ -87,48 +87,128 @@ function parseCustomerAddress(rawAddress?: string | null): {
 }
 
 /**
- * Safely fetches the customer's persistent wallet balance from Supabase's ledger table
- * or localStorage cache. This ensures refunded amounts survive sessions, reloads, and logins
- * even if users table doesn't have a wallet_balance column.
+ * Safely resolves all known identity aliases for a customer (canonical db ID, phone, synthetic user-ID)
+ */
+async function resolveCustomerIdentityAliases(
+  customerId?: string,
+  phone?: string
+): Promise<{ canonicalId: string; allIds: string[]; cleanPhone: string }> {
+  let cleanPhone = phone ? phone.replace(/\D/g, '').slice(-10) : '';
+  if (!cleanPhone && customerId && customerId.startsWith('user-')) {
+    const raw = customerId.slice(5).replace(/\D/g, '').slice(-10);
+    if (raw.length === 10) cleanPhone = raw;
+  }
+
+  const targetIds = new Set<string>();
+  if (customerId) targetIds.add(customerId);
+  if (cleanPhone) {
+    targetIds.add(cleanPhone);
+    targetIds.add(`user-${cleanPhone}`);
+  }
+
+  let canonicalId = customerId && !customerId.startsWith('user-') ? customerId : '';
+
+  if (supabase) {
+    try {
+      if (cleanPhone) {
+        const { data: dbUsers } = await supabase
+          .from('users')
+          .select('id, phone')
+          .eq('phone', cleanPhone)
+          .limit(5);
+
+        if (dbUsers && dbUsers.length > 0) {
+          dbUsers.forEach((u) => {
+            if (u.id) {
+              targetIds.add(u.id);
+              if (!canonicalId) canonicalId = u.id;
+            }
+          });
+        }
+      } else if (customerId && !cleanPhone) {
+        const { data: userRow } = await supabase
+          .from('users')
+          .select('id, phone')
+          .eq('id', customerId)
+          .maybeSingle();
+
+        if (userRow?.phone) {
+          const userPhone = userRow.phone.replace(/\D/g, '').slice(-10);
+          if (userPhone) {
+            cleanPhone = userPhone;
+            targetIds.add(userPhone);
+            targetIds.add(`user-${userPhone}`);
+          }
+        }
+      }
+    } catch {}
+  }
+
+  if (!canonicalId) {
+    canonicalId = customerId || (cleanPhone ? `usr_${cleanPhone}` : 'Customer');
+  }
+
+  return {
+    canonicalId,
+    allIds: Array.from(targetIds).filter(Boolean),
+    cleanPhone,
+  };
+}
+
+/**
+ * Filter strictly for wallet transactions (excludes COD collections and order debts)
+ */
+function isWalletLedgerEntry(r: any): boolean {
+  if (!r) return false;
+  const desc = (r.description || '').toLowerCase();
+  if (desc.includes('cod payment') || desc.includes('cod collection')) return false;
+  if (r.id && (r.id.startsWith('cod_tx_') || r.id.startsWith('led_ord_'))) return false;
+
+  if (r.type === 'DEBIT' && (desc.includes('wallet') || r.id?.startsWith('wtx_'))) return true;
+  if (
+    r.type === 'CREDIT' &&
+    (desc.includes('refund') || desc.includes('wallet') || r.id?.startsWith('wtx_'))
+  )
+    return true;
+
+  return false;
+}
+
+/**
+ * Safely fetches the customer's persistent wallet balance calculated authoritatively
+ * from Supabase's ledger table across all linked customer IDs.
  */
 export async function getCustomerWalletBalanceFromLedger(
   customerId?: string,
   phone?: string
 ): Promise<number> {
-  let balance = 0;
-  let foundWalletEntry = false;
-  const cleanPhone = phone ? phone.replace(/\D/g, '').slice(-10) : '';
+  const { allIds, cleanPhone } = await resolveCustomerIdentityAliases(customerId, phone);
+  if (allIds.length === 0) return 0;
 
   if (supabase) {
     try {
-      const filters: string[] = [];
-      if (customerId) filters.push(`customer_id.eq.${customerId}`);
-      if (cleanPhone) {
-        filters.push(`customer_id.eq.${cleanPhone}`);
-        filters.push(`customer_id.eq.user-${cleanPhone}`);
-      }
-      if (filters.length > 0) {
-        const { data: ledgerRows } = await supabase
-          .from('ledger')
-          .select('balance_after, date, type, description')
-          .or(filters.join(','))
-          .order('date', { ascending: false })
-          .limit(10);
+      const filters = allIds.map((id) => `customer_id.eq.${id}`);
+      const { data: ledgerRows, error } = await supabase
+        .from('ledger')
+        .select('id, balance_after, date, type, amount, description')
+        .or(filters.join(','))
+        .order('date', { ascending: true }); // chronological order
 
-        if (ledgerRows && ledgerRows.length > 0) {
-          // Identify the most recent wallet transaction (DEBIT or CREDIT with Refund/Wallet in description)
-          const walletRow = ledgerRows.find(
-            (r) =>
-              r.type === 'DEBIT' ||
-              (r.description &&
-                (r.description.toLowerCase().includes('wallet') ||
-                  r.description.toLowerCase().includes('refund')))
-          );
+      if (!error && ledgerRows && ledgerRows.length > 0) {
+        const walletRows = ledgerRows.filter(isWalletLedgerEntry);
 
-          if (walletRow && typeof walletRow.balance_after === 'number') {
-            balance = Number(walletRow.balance_after);
-            foundWalletEntry = true;
+        if (walletRows.length > 0) {
+          // Authoritative replay of all wallet transactions (credits - debits)
+          let running = 0;
+          for (const tx of walletRows) {
+            const amt = Number(tx.amount) || 0;
+            if (tx.type === 'CREDIT') {
+              running += amt;
+            } else if (tx.type === 'DEBIT') {
+              running = Math.max(0, running - amt);
+            }
           }
+          return Math.round(running * 100) / 100;
         }
       }
     } catch (err) {
@@ -136,8 +216,8 @@ export async function getCustomerWalletBalanceFromLedger(
     }
   }
 
-  // Fallback to localStorage cache if no Supabase wallet entry was found
-  if (!foundWalletEntry && typeof localStorage !== 'undefined') {
+  // Fallback to localStorage cache only if offline or no Supabase ledger rows exist
+  if (typeof localStorage !== 'undefined') {
     try {
       const txStr = localStorage.getItem('om_wallet_transactions');
       if (txStr) {
@@ -149,27 +229,73 @@ export async function getCustomerWalletBalanceFromLedger(
               (customerId && t.userId === customerId)
           );
           if (match && typeof match.balanceAfter === 'number') {
-            balance = Number(match.balanceAfter);
-            foundWalletEntry = true;
+            return Number(match.balanceAfter);
           }
         }
       }
     } catch {}
 
-    if (!foundWalletEntry && cleanPhone) {
+    if (cleanPhone) {
       try {
         const cached = localStorage.getItem(`om_profile_${cleanPhone}`);
         if (cached) {
           const parsed = JSON.parse(cached);
           if (typeof parsed.walletBalance === 'number' && parsed.walletBalance >= 0) {
-            balance = parsed.walletBalance;
+            return parsed.walletBalance;
           }
         }
       } catch {}
     }
   }
 
-  return balance;
+  return 0;
+}
+
+/**
+ * Fetches all persistent wallet transactions from Supabase ledger for a customer across linked IDs.
+ */
+export async function fetchWalletTransactionsFromSupabase(
+  customerId?: string,
+  phone?: string
+): Promise<WalletTransaction[] | null> {
+  if (!supabase) return null;
+  const { allIds, cleanPhone } = await resolveCustomerIdentityAliases(customerId, phone);
+  if (allIds.length === 0) return null;
+
+  try {
+    const filters = allIds.map((id) => `customer_id.eq.${id}`);
+    const { data: rows, error } = await supabase
+      .from('ledger')
+      .select('*')
+      .or(filters.join(','))
+      .order('date', { ascending: false });
+
+    if (error || !rows) return null;
+
+    const walletRows = rows.filter(isWalletLedgerEntry);
+
+    return walletRows.map((r) => {
+      let orderNum: string | undefined = undefined;
+      const match = r.description?.match(/#([A-Z0-9-]+)/i);
+      if (match) orderNum = match[1];
+
+      return {
+        id: r.id,
+        userId: r.customer_id,
+        userPhone: cleanPhone || r.customer_id,
+        orderId: r.order_id || undefined,
+        orderNumber: orderNum,
+        type: r.type as 'CREDIT' | 'DEBIT',
+        amount: Number(r.amount) || 0,
+        balanceAfter: Number(r.balance_after) || 0,
+        description: r.description,
+        createdAt: r.date,
+      };
+    });
+  } catch (err) {
+    console.warn('Error fetching wallet transactions from Supabase:', err);
+    return null;
+  }
 }
 
 /**
@@ -223,7 +349,7 @@ export async function getOrCreateCustomerByPhone(
         phone: existingUser.phone,
         role: (existingUser.role as Role) || role,
         referralCode: existingUser.referral_code || `OM${cleanPhone.slice(-4)}`,
-        walletBalance: dbOutstanding > 0 ? -dbOutstanding : dbCredits,
+        walletBalance: dbCredits,
         outstandingBalance: dbOutstanding,
         codOrderCount: Number(existingUser.cod_order_count || 0),
         addresses: formattedAddresses,
@@ -449,7 +575,7 @@ export async function saveCustomerProfileToSupabase(
       phone: cleanPhone,
       role: Role.CUSTOMER,
       referralCode: `OM${cleanPhone.slice(-4)}`,
-      walletBalance: dbOutstanding > 0 ? -dbOutstanding : dbCredits,
+      walletBalance: dbCredits,
       outstandingBalance: dbOutstanding,
       codOrderCount: 0,
       addresses: [finalAddressObj],
@@ -544,7 +670,7 @@ export async function fetchCustomerProfileFromSupabase(phone: string): Promise<U
       phone: dbUser.phone,
       role: Role.CUSTOMER,
       referralCode: dbUser.referral_code || `OM${cleanPhone.slice(-4)}`,
-      walletBalance: dbOutstanding > 0 ? -dbOutstanding : dbCredits,
+      walletBalance: dbCredits,
       outstandingBalance: dbOutstanding,
       codOrderCount: Number(dbUser.cod_order_count || 0),
       addresses: formattedAddresses,
@@ -827,7 +953,7 @@ export async function fetchCustomerOrdersFromSupabase(
         codCharge: 0,
         finalAmount,
         previousOutstanding,
-        totalPayable,
+        totalPayable: (o.payment_method === PaymentMethod.COD || o.payment_method === 'COD') ? finalAmount : totalPayable,
         previousOnlinePaid,
         walletAmountUsed: resolvedWalletAmountUsed,
         codCollectedAmount,
@@ -854,7 +980,7 @@ export async function saveOrderToSupabase(order: Order): Promise<boolean> {
     const metaPayload = JSON.stringify({
       codCollected: order.codCollectedAmount || 0,
       prevOutstanding: order.previousOutstanding || 0,
-      totalPayable: order.totalPayable !== undefined ? order.totalPayable : order.finalAmount,
+      totalPayable: order.paymentMethod === PaymentMethod.COD ? order.finalAmount : (order.totalPayable !== undefined ? order.totalPayable : order.finalAmount),
       walletAmountUsed: order.walletAmountUsed || 0,
       previousOnlinePaid: order.previousOnlinePaid || 0,
       stockDeducted: order.stockDeducted ?? false,
@@ -926,7 +1052,7 @@ export async function saveEditedOrderToSupabase(order: Order): Promise<boolean> 
     const metaPayload = JSON.stringify({
       codCollected: order.codCollectedAmount || 0,
       prevOutstanding: order.previousOutstanding || 0,
-      totalPayable: order.totalPayable !== undefined ? order.totalPayable : order.finalAmount,
+      totalPayable: order.paymentMethod === PaymentMethod.COD ? order.finalAmount : (order.totalPayable !== undefined ? order.totalPayable : order.finalAmount),
       walletAmountUsed: order.walletAmountUsed || 0,
       previousOnlinePaid: order.previousOnlinePaid || 0,
       stockDeducted: order.stockDeducted ?? false,
@@ -1080,7 +1206,7 @@ export async function fetchAllOrdersForAdmin(): Promise<Order[] | null> {
         codCharge: 0,
         finalAmount,
         previousOutstanding,
-        totalPayable,
+        totalPayable: (o.payment_method === PaymentMethod.COD || o.payment_method === 'COD') ? finalAmount : totalPayable,
         previousOnlinePaid,
         walletAmountUsed: resolvedWalletAmountUsed,
         codCollectedAmount,
@@ -1264,20 +1390,28 @@ export async function creditCustomerWalletInSupabase(tx: {
   if (!supabase) return false;
 
   try {
-    const cleanPhone = (tx.customerPhone || '').replace(/\D/g, '').slice(-10);
+    const { canonicalId, cleanPhone } = await resolveCustomerIdentityAliases(
+      tx.userId,
+      tx.customerPhone
+    );
 
     // 0. Prevent duplicate ledger entry for the same order refund
     if (tx.orderId || tx.orderNumber) {
       try {
         let dupQuery = supabase.from('ledger').select('id, amount').eq('type', 'CREDIT');
-        if (tx.orderId) {
+        if (tx.orderId && tx.orderNumber) {
+          dupQuery = dupQuery.or(`order_id.eq.${tx.orderId},description.ilike.%${tx.orderNumber}%`);
+        } else if (tx.orderId) {
           dupQuery = dupQuery.eq('order_id', tx.orderId);
         } else if (tx.orderNumber) {
           dupQuery = dupQuery.ilike('description', `%${tx.orderNumber}%`);
         }
         const { data: existingLedger } = await dupQuery;
         if (existingLedger && existingLedger.length > 0) {
-          const totalAlreadyCredited = existingLedger.reduce((sum, r: any) => sum + (Number(r.amount) || 0), 0);
+          const totalAlreadyCredited = existingLedger.reduce(
+            (sum, r: any) => sum + (Number(r.amount) || 0),
+            0
+          );
           if (totalAlreadyCredited >= tx.amount) {
             return true; // Already credited full amount, do not duplicate
           }
@@ -1287,17 +1421,25 @@ export async function creditCustomerWalletInSupabase(tx: {
       }
     }
 
-    // 1. Insert into Supabase 'ledger' table
+    // 1. Authoritatively calculate current balance from persisted ledger records before credit
+    const currentAuthoritativeBalance = await getCustomerWalletBalanceFromLedger(
+      canonicalId,
+      cleanPhone
+    );
+    const authoritativeBalanceAfter =
+      Math.round((currentAuthoritativeBalance + tx.amount) * 100) / 100;
+
+    // 2. Insert into Supabase 'ledger' table using canonical customer ID
     const ledgerPayload = {
       id: `led_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-      customer_id: tx.userId || cleanPhone || tx.customerPhone,
+      customer_id: canonicalId,
       customer_name: tx.customerName || 'Customer',
       order_id: tx.orderId || null,
       date: new Date().toISOString(),
       type: 'CREDIT',
       amount: tx.amount,
       description: tx.description,
-      balance_after: tx.newWalletBalance,
+      balance_after: authoritativeBalanceAfter,
     };
 
     const { error: ledgerError } = await supabase.from('ledger').insert(ledgerPayload);
@@ -1305,10 +1447,10 @@ export async function creditCustomerWalletInSupabase(tx: {
       console.warn('Error inserting wallet credit to Supabase ledger:', ledgerError.message);
     }
 
-    // 2. Safely attempt updating Supabase 'users.wallet_balance'
+    // 3. Safely attempt updating Supabase 'users.wallet_balance' if column exists
     try {
       const updatePayload = {
-        wallet_balance: tx.newWalletBalance,
+        wallet_balance: authoritativeBalanceAfter,
         updated_at: new Date().toISOString(),
       };
 
@@ -1317,11 +1459,11 @@ export async function creditCustomerWalletInSupabase(tx: {
           .from('users')
           .update(updatePayload)
           .eq('phone', cleanPhone);
-      } else if (tx.userId) {
+      } else if (canonicalId) {
         await supabase
           .from('users')
           .update(updatePayload)
-          .eq('id', tx.userId);
+          .eq('id', canonicalId);
       }
     } catch {
       // Ignored if column does not exist on users table
@@ -1350,13 +1492,18 @@ export async function debitCustomerWalletInSupabase(tx: {
   if (!supabase) return false;
 
   try {
-    const cleanPhone = (tx.customerPhone || '').replace(/\D/g, '').slice(-10);
+    const { canonicalId, cleanPhone } = await resolveCustomerIdentityAliases(
+      tx.userId,
+      tx.customerPhone
+    );
 
     // 0. Prevent duplicate ledger entry for the same order debit
     if (tx.orderId || tx.orderNumber) {
       try {
         let dupQuery = supabase.from('ledger').select('id').eq('type', 'DEBIT');
-        if (tx.orderId) {
+        if (tx.orderId && tx.orderNumber) {
+          dupQuery = dupQuery.or(`order_id.eq.${tx.orderId},description.ilike.%${tx.orderNumber}%`);
+        } else if (tx.orderId) {
           dupQuery = dupQuery.eq('order_id', tx.orderId);
         } else if (tx.orderNumber) {
           dupQuery = dupQuery.ilike('description', `%${tx.orderNumber}%`);
@@ -1370,17 +1517,25 @@ export async function debitCustomerWalletInSupabase(tx: {
       }
     }
 
-    // 1. Insert into Supabase 'ledger' table
+    // 1. Authoritatively calculate current balance from persisted ledger records before debit
+    const currentAuthoritativeBalance = await getCustomerWalletBalanceFromLedger(
+      canonicalId,
+      cleanPhone
+    );
+    const authoritativeBalanceAfter =
+      Math.max(0, Math.round((currentAuthoritativeBalance - tx.amount) * 100) / 100);
+
+    // 2. Insert into Supabase 'ledger' table using canonical customer ID
     const ledgerPayload = {
       id: `led_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-      customer_id: tx.userId || cleanPhone || tx.customerPhone,
+      customer_id: canonicalId,
       customer_name: tx.customerName || 'Customer',
       order_id: tx.orderId || null,
       date: new Date().toISOString(),
       type: 'DEBIT',
       amount: tx.amount,
       description: tx.description,
-      balance_after: tx.newWalletBalance,
+      balance_after: authoritativeBalanceAfter,
     };
 
     const { error: ledgerError } = await supabase.from('ledger').insert(ledgerPayload);
@@ -1388,10 +1543,10 @@ export async function debitCustomerWalletInSupabase(tx: {
       console.warn('Error inserting wallet debit to Supabase ledger:', ledgerError.message);
     }
 
-    // 2. Safely attempt updating Supabase 'users.wallet_balance'
+    // 3. Safely attempt updating Supabase 'users.wallet_balance' if column exists
     try {
       const updatePayload = {
-        wallet_balance: tx.newWalletBalance,
+        wallet_balance: authoritativeBalanceAfter,
         updated_at: new Date().toISOString(),
       };
 
@@ -1400,11 +1555,11 @@ export async function debitCustomerWalletInSupabase(tx: {
           .from('users')
           .update(updatePayload)
           .eq('phone', cleanPhone);
-      } else if (tx.userId) {
+      } else if (canonicalId) {
         await supabase
           .from('users')
           .update(updatePayload)
-          .eq('id', tx.userId);
+          .eq('id', canonicalId);
       }
     } catch {
       // Ignored if column does not exist on users table

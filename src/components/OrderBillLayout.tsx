@@ -241,12 +241,12 @@ export const OrderBillLayout: React.FC<OrderBillLayoutProps> = ({ order, setting
           {order.paymentMethod === PaymentMethod.COD && order.previousOutstanding !== undefined && order.previousOutstanding > 0 && (
             <>
               <div className="flex justify-between text-amber-900 font-medium pt-1 border-t border-gray-200">
-                <span>Previous Outstanding:</span>
-                <span className="font-mono">+₹{order.previousOutstanding}</span>
+                <span>Previous COD Outstanding (Separate):</span>
+                <span className="font-mono">₹{order.previousOutstanding}</span>
               </div>
               <div className="flex justify-between text-[#0F2C59] font-black text-xs">
-                <span>Total Payable on Delivery:</span>
-                <span className="font-mono">₹{order.status === 'CANCELLED' ? 0 : (order.totalPayable || order.finalAmount)}</span>
+                <span>Order Payable on Delivery:</span>
+                <span className="font-mono">₹{order.status === 'CANCELLED' ? 0 : order.finalAmount}</span>
               </div>
             </>
           )}

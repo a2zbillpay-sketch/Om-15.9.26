@@ -60,11 +60,8 @@ export const Navbar: React.FC<NavbarProps> = ({
     (o) => o.userId === currentUser.id && o.status !== 'DELIVERED' && o.status !== 'CANCELLED'
   ).length;
 
-  const effectiveWalletBalance = customerOutstanding > 0 ? -customerOutstanding : (currentUser.walletBalance || 0);
-  const isNegativeWallet = effectiveWalletBalance < 0;
-  const formattedBalance = isNegativeWallet
-    ? `-₹${Math.abs(effectiveWalletBalance)}`
-    : `₹${effectiveWalletBalance}`;
+  const walletBalance = Math.max(0, currentUser.walletBalance || 0);
+  const formattedBalance = `₹${walletBalance}`;
 
   const currentAddress = currentUser.addresses.find((a) => a.isDefault) || currentUser.addresses[0];
 
@@ -169,14 +166,10 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <button
                   id="open-wallet-btn"
                   onClick={onOpenWallet}
-                  className={`flex items-center gap-1.5 border px-2.5 py-1.5 rounded-lg text-xs font-bold transition shadow-sm ${
-                    isNegativeWallet
-                      ? 'bg-rose-950/80 hover:bg-rose-900 border-rose-500/40 text-rose-300'
-                      : 'bg-emerald-950/70 hover:bg-emerald-900/80 border-emerald-500/40 text-emerald-300'
-                  }`}
-                  title={isNegativeWallet ? `Wallet Balance: ${formattedBalance}` : "Your Wallet Balance & Referrals"}
+                  className="flex items-center gap-1.5 border px-2.5 py-1.5 rounded-lg text-xs font-bold transition shadow-sm bg-emerald-950/70 hover:bg-emerald-900/80 border-emerald-500/40 text-emerald-300"
+                  title="Your Wallet Balance & Referrals"
                 >
-                  <Wallet size={14} className={isNegativeWallet ? "text-rose-400" : "text-emerald-400"} />
+                  <Wallet size={14} className="text-emerald-400" />
                   <span>{formattedBalance}</span>
                 </button>
 

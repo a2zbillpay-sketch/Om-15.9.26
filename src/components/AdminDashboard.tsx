@@ -1575,16 +1575,33 @@ export const AdminDashboard: React.FC = () => {
                             </a>
                           )}
                         </td>
-                        <td className="p-3">
+                        <td
+                          className="p-3"
+                          onClick={(e) => {
+                            if (order.paymentMethod === PaymentMethod.COD) {
+                              e.stopPropagation();
+                              setSelectedOrderForDetails(null);
+                              setCodCollectingOrder(order);
+                            }
+                          }}
+                        >
                           <div className="flex flex-col gap-1">
                             <span
+                              onClick={(e) => {
+                                if (order.paymentMethod === PaymentMethod.COD) {
+                                  e.stopPropagation();
+                                  setSelectedOrderForDetails(null);
+                                  setCodCollectingOrder(order);
+                                }
+                              }}
                               className={`inline-flex items-center gap-1 w-fit px-2 py-0.5 rounded text-[10px] font-bold ${
                                 order.paymentMethod === PaymentMethod.ADVANCE_ONLINE
                                   ? order.paymentStatus === PaymentStatus.PENDING
                                     ? 'bg-amber-100 text-amber-900 border border-amber-300'
                                     : 'bg-emerald-100 text-emerald-800'
-                                  : 'bg-amber-100 text-amber-800'
+                                  : 'bg-amber-100 text-amber-800 cursor-pointer hover:bg-amber-200/80 transition'
                               }`}
+                              title={order.paymentMethod === PaymentMethod.COD ? 'Click to record or adjust COD cash collection' : undefined}
                             >
                               {order.paymentMethod === PaymentMethod.ADVANCE_ONLINE
                                 ? order.paymentStatus === PaymentStatus.PENDING
@@ -1595,7 +1612,7 @@ export const AdminDashboard: React.FC = () => {
                             {order.paymentMethod === PaymentMethod.COD && (
                               <div className="text-[10px] space-y-0.5">
                                 {order.codCollectedAmount !== undefined && order.codCollectedAmount > 0 ? (
-                                  order.codCollectedAmount >= (order.totalPayable || order.finalAmount) ? (
+                                  order.codCollectedAmount >= order.finalAmount ? (
                                     <span className="text-emerald-700 font-bold block">
                                       Full: ₹{order.codCollectedAmount}
                                     </span>
@@ -1605,7 +1622,7 @@ export const AdminDashboard: React.FC = () => {
                                         Partial: ₹{order.codCollectedAmount}
                                       </span>
                                       <span className="text-red-600 font-semibold block text-[9px]">
-                                        Short: ₹{(order.totalPayable || order.finalAmount) - order.codCollectedAmount}
+                                        Short: ₹{order.finalAmount - order.codCollectedAmount}
                                       </span>
                                     </div>
                                   )
@@ -1616,6 +1633,7 @@ export const AdminDashboard: React.FC = () => {
                                   type="button"
                                   onClick={(e) => {
                                     e.stopPropagation();
+                                    setSelectedOrderForDetails(null);
                                     setCodCollectingOrder(order);
                                   }}
                                   className="inline-flex items-center gap-1 text-[10px] font-bold text-[#0F2C59] hover:text-[#FF6B00] transition cursor-pointer"
@@ -1654,9 +1672,9 @@ export const AdminDashboard: React.FC = () => {
                           )}
                           {order.paymentMethod === PaymentMethod.COD && (
                             <div className="text-[10px] space-y-0.5 mt-0.5">
-                              {order.totalPayable && order.totalPayable !== order.finalAmount && (
-                                <div className="font-extrabold text-[#0F2C59]">
-                                  Payable: ₹{order.totalPayable}
+                              {order.previousOutstanding !== undefined && order.previousOutstanding > 0 && (
+                                <div className="text-rose-800 font-bold text-[9px]">
+                                  Prev COD: ₹{order.previousOutstanding}
                                 </div>
                               )}
                               {order.codCollectedAmount !== undefined && order.codCollectedAmount > 0 && (
@@ -1761,6 +1779,7 @@ export const AdminDashboard: React.FC = () => {
                                       order.paymentMethod === PaymentMethod.COD &&
                                       order.codCollectedAmount === undefined
                                     ) {
+                                      setSelectedOrderForDetails(null);
                                       setCodCollectingOrder(order);
                                     } else {
                                       updateOrderStatus(order.id, newStatus);
@@ -3060,7 +3079,11 @@ export const AdminDashboard: React.FC = () => {
 
       {/* COD Cash Collection & Deposit Modal */}
       <CodCollectionModal
-        order={codCollectingOrder}
+        order={
+          codCollectingOrder
+            ? orders.find((o) => o.id === codCollectingOrder.id) || codCollectingOrder
+            : null
+        }
         isOpen={Boolean(codCollectingOrder)}
         onClose={() => setCodCollectingOrder(null)}
         onSave={(orderId, amount, markDelivered) => {
@@ -3104,7 +3127,7 @@ export const AdminDashboard: React.FC = () => {
 
       {/* Shopkeeper Order Details Modal */}
       <OrderTrackingModal
-        isOpen={Boolean(selectedOrderForDetails)}
+        isOpen={Boolean(selectedOrderForDetails && !codCollectingOrder)}
         order={
           selectedOrderForDetails
             ? orders.find((o) => o.id === selectedOrderForDetails.id) || selectedOrderForDetails

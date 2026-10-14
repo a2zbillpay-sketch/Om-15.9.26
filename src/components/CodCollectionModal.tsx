@@ -28,21 +28,29 @@ export const CodCollectionModal: React.FC<CodCollectionModalProps> = ({
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
 
   const billAmount = Math.max(0, Number(order?.finalAmount) || 0);
-  const orderPayable = Math.max(0, Number(order?.totalPayable ?? billAmount));
+  const previouslyCollected = Math.max(0, Number(order?.codCollectedAmount) || 0);
+  // Rule: Order payable is strictly this order's remaining unpaid balance. Previous COD outstanding remains separate.
+  const remainingOrderBalance = Math.max(0, Math.round((billAmount - previouslyCollected) * 100) / 100);
+  const orderPayable = remainingOrderBalance;
 
   const targetCustomer = order?.userPhone || order?.userId || '';
   const customerUser = users.find(
     (u) =>
       (order?.userPhone &&
         (u.phone === order.userPhone ||
-          u.phone?.replace(/\D/g, '').slice(-10) === order.userPhone?.replace(/\D/g, '').slice(-10))) ||
+          (u.phone && String(u.phone).replace(/\D/g, '').slice(-10) === String(order.userPhone).replace(/\D/g, '').slice(-10)))) ||
       (order?.userId && u.id === order.userId)
   );
 
-  const rawOutstanding = getCustomerOutstanding(targetCustomer);
-  const userWallet = customerUser ? customerUser.walletBalance : (rawOutstanding > 0 ? -rawOutstanding : 0);
-  const negativeWalletDebt = userWallet < 0 ? Math.abs(userWallet) : (rawOutstanding > 0 ? rawOutstanding : 0);
-  const maxCollectible = Math.round((orderPayable + negativeWalletDebt) * 100) / 100;
+  // Rule: Exclude current order so its bill is not double-counted into previous outstanding
+  const rawOutstanding = getCustomerOutstanding(targetCustomer, order?.id);
+  const previousOutstanding = rawOutstanding > 0
+    ? rawOutstanding
+    : (order?.previousOutstanding && order.previousOutstanding > 0
+      ? order.previousOutstanding
+      : (customerUser?.outstandingBalance || 0));
+  // Rule: "Order + Settle" must equal remaining current order balance + previous COD outstanding.
+  const maxCollectible = Math.round((orderPayable + previousOutstanding) * 100) / 100;
 
   useEffect(() => {
     if (order && isOpen) {
@@ -54,7 +62,7 @@ export const CodCollectionModal: React.FC<CodCollectionModalProps> = ({
       setSaveSuccess(false);
       setIsSubmitting(false);
     }
-  }, [order, isOpen]);
+  }, [order?.id, isOpen]);
 
   if (!isOpen || !order) return null;
 
@@ -63,7 +71,7 @@ export const CodCollectionModal: React.FC<CodCollectionModalProps> = ({
   const isNegative = isValidNumber && parsedAmount < 0;
   const exceedsPayable = isValidNumber && parsedAmount > maxCollectible;
   const isFullCollection = isValidNumber && parsedAmount === maxCollectible;
-  const isOrderOnlyCollection = isValidNumber && parsedAmount === orderPayable && negativeWalletDebt > 0;
+  const isOrderOnlyCollection = isValidNumber && parsedAmount === orderPayable && previousOutstanding > 0;
   const isPartial = isValidNumber && parsedAmount > 0 && parsedAmount < orderPayable;
   const isZero = isValidNumber && parsedAmount === 0;
 
@@ -72,11 +80,11 @@ export const CodCollectionModal: React.FC<CodCollectionModalProps> = ({
   const allocatedToOrder = isValidNumber && !isNegative
     ? Math.min(parsedAmount, orderPayable)
     : 0;
-  // 2. Excess cash beyond current order payable settles the customer's negative wallet balance
-  const allocatedToWallet = isValidNumber && !isNegative
-    ? Math.min(Math.max(0, parsedAmount - orderPayable), negativeWalletDebt)
+  // 2. Excess cash beyond current order payable settles the customer's previous outstanding COD debt
+  const allocatedToOutstanding = isValidNumber && !isNegative
+    ? Math.min(Math.max(0, parsedAmount - orderPayable), previousOutstanding)
     : 0;
-  const remainingWalletDebt = Math.max(0, negativeWalletDebt - allocatedToWallet);
+  const remainingOutstandingDebt = Math.max(0, previousOutstanding - allocatedToOutstanding);
 
   const handleInputChange = (val: string) => {
     setError(null);
@@ -140,8 +148,17 @@ export const CodCollectionModal: React.FC<CodCollectionModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
-      <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden border border-gray-100 animate-in fade-in zoom-in duration-200">
+    <div
+      className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs"
+      onClick={(e) => {
+        // Stop event propagation to keep modal open until user completes collection or clicks Cancel/Close
+        e.stopPropagation();
+      }}
+    >
+      <div
+        className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden border border-gray-100 animate-in fade-in zoom-in duration-200"
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* Header */}
         <div className="bg-[#0F2C59] p-5 text-white flex justify-between items-start">
           <div className="flex items-center gap-3">
@@ -171,35 +188,35 @@ export const CodCollectionModal: React.FC<CodCollectionModalProps> = ({
             <div className="flex items-center justify-between font-bold text-gray-700">
               <span className="flex items-center gap-1.5">
                 <Lock size={13} className="text-gray-500" />
-                <span>New Order Bill:</span>
+                <span>Original Order Bill:</span>
               </span>
-              <span className="font-extrabold text-gray-900">₹{orderPayable}</span>
+              <span className="font-extrabold text-gray-900">₹{billAmount}</span>
             </div>
 
-            {negativeWalletDebt > 0 && (
-              <div className="flex items-center justify-between font-bold text-rose-800">
-                <span className="flex items-center gap-1.5">
-                  <Wallet size={13} className="text-rose-600" />
-                  <span>Wallet Balance:</span>
-                </span>
-                <span className="font-extrabold text-rose-800">-₹{negativeWalletDebt}</span>
-              </div>
-            )}
-
-            <div className="border-t border-amber-200/80 pt-1.5 flex items-center justify-between font-black text-sm text-[#0F2C59]">
-              <span>Order Payable Amount:</span>
-              <span className="text-base text-[#0F2C59]">₹{orderPayable}</span>
-            </div>
-
-            {order.codCollectedAmount !== undefined && order.codCollectedAmount > 0 && (
-              <div className="flex items-center justify-between font-bold text-emerald-800 pt-1 border-t border-amber-200/60">
+            {previouslyCollected > 0 && (
+              <div className="flex items-center justify-between font-bold text-emerald-800">
                 <span className="flex items-center gap-1.5">
                   <CheckCircle2 size={13} className="text-emerald-600" />
                   <span>Previously Recorded:</span>
                 </span>
-                <span className="font-extrabold text-emerald-900">₹{order.codCollectedAmount}</span>
+                <span className="font-extrabold text-emerald-900">₹{previouslyCollected}</span>
               </div>
             )}
+
+            {previousOutstanding > 0 && (
+              <div className="flex items-center justify-between font-bold text-rose-800">
+                <span className="flex items-center gap-1.5">
+                  <AlertCircle size={13} className="text-rose-600" />
+                  <span>Previous COD Outstanding:</span>
+                </span>
+                <span className="font-extrabold text-rose-800">₹{previousOutstanding}</span>
+              </div>
+            )}
+
+            <div className="border-t border-amber-200/80 pt-1.5 flex items-center justify-between font-black text-sm text-[#0F2C59]">
+              <span>{previouslyCollected > 0 ? 'Remaining Order Balance:' : 'Order Payable Amount:'}</span>
+              <span className="text-base text-[#0F2C59]">₹{orderPayable}</span>
+            </div>
           </div>
 
           {/* Actual Collected Amount Input */}
@@ -209,7 +226,7 @@ export const CodCollectionModal: React.FC<CodCollectionModalProps> = ({
                 Actual Cash Collected / Deposited:
               </label>
               <div className="flex items-center gap-1.5">
-                {negativeWalletDebt > 0 ? (
+                {previousOutstanding > 0 ? (
                   <>
                     <button
                       type="button"
@@ -272,30 +289,30 @@ export const CodCollectionModal: React.FC<CodCollectionModalProps> = ({
           {isValidNumber && !isNegative && !exceedsPayable && (
             <div className="bg-gray-50 rounded-xl p-3 border border-gray-200 text-xs space-y-1.5">
               <div className="flex justify-between text-gray-600">
-                <span>Applied to Order Bill:</span>
+                <span>{previouslyCollected > 0 ? 'Applied to Remaining Balance:' : 'Applied to Order Bill:'}</span>
                 <span className="font-bold text-[#0F2C59]">
                   ₹{allocatedToOrder} / ₹{orderPayable}
                 </span>
               </div>
 
-              {negativeWalletDebt > 0 && (
+              {previousOutstanding > 0 && (
                 <>
                   <div className="flex justify-between text-gray-600">
-                    <span>Applied to Settle Wallet Balance:</span>
+                    <span>Applied to Previous COD Debt:</span>
                     <span className="font-bold text-rose-800">
-                      ₹{allocatedToWallet} / ₹{negativeWalletDebt}
+                      ₹{allocatedToOutstanding} / ₹{previousOutstanding}
                     </span>
                   </div>
                   <div className="pt-1.5 border-t border-gray-200 flex justify-between items-center font-bold">
-                    <span>Wallet Balance after Settlement:</span>
-                    <span className={remainingWalletDebt > 0 ? 'text-rose-700 font-extrabold' : 'text-emerald-700 font-black'}>
-                      {remainingWalletDebt > 0 ? `-₹${remainingWalletDebt}` : '₹0 (Settled)'}
+                    <span>Previous COD Debt after Settlement:</span>
+                    <span className={remainingOutstandingDebt > 0 ? 'text-rose-700 font-extrabold' : 'text-emerald-700 font-black'}>
+                      {remainingOutstandingDebt > 0 ? `₹${remainingOutstandingDebt}` : '₹0 (Settled)'}
                     </span>
                   </div>
                 </>
               )}
 
-              {negativeWalletDebt === 0 && (
+              {previousOutstanding === 0 && (
                 <div className="pt-1.5 border-t border-gray-200 flex justify-between items-center font-bold">
                   <span>Remaining Unpaid:</span>
                   <span className={parsedAmount < orderPayable ? 'text-amber-700' : 'text-emerald-700 font-black'}>
@@ -310,8 +327,8 @@ export const CodCollectionModal: React.FC<CodCollectionModalProps> = ({
                   <div className="flex items-center gap-1.5 text-[11px] font-bold text-emerald-800 bg-emerald-100/80 px-2.5 py-1 rounded-lg">
                     <CheckCircle2 size={13} className="text-emerald-700 shrink-0" />
                     <span>
-                      {negativeWalletDebt > 0
-                        ? `Full Order & Wallet Settled (₹${maxCollectible})`
+                      {previousOutstanding > 0
+                        ? `Full Order & Previous Debt Settled (₹${maxCollectible})`
                         : `Full Order Cleared (₹${orderPayable})`}
                     </span>
                   </div>
@@ -319,7 +336,7 @@ export const CodCollectionModal: React.FC<CodCollectionModalProps> = ({
                 {isOrderOnlyCollection && (
                   <div className="flex items-center gap-1.5 text-[11px] font-bold text-blue-800 bg-blue-100/80 px-2.5 py-1 rounded-lg">
                     <CheckCircle2 size={13} className="text-blue-700 shrink-0" />
-                    <span>Order Cleared (₹{orderPayable}), Wallet Balance Remains -₹{negativeWalletDebt}</span>
+                    <span>Order Cleared (₹{orderPayable}), Previous COD Debt Remains ₹{previousOutstanding}</span>
                   </div>
                 )}
                 {isPartial && (
