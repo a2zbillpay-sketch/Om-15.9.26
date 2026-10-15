@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'http';
-import { clearAdminSessionCookie } from './verify.js';
+import { clearAdminSessionCookie } from './_verify.js';
 
 export default function handler(req: IncomingMessage, res: ServerResponse) {
   if (req.method !== 'POST') {

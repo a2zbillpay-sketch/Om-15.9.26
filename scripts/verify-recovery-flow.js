@@ -6,12 +6,12 @@ import {
   consumeResetToken,
   hashPasswordWithScrypt,
   verifyScryptHash,
-} from '../api/auth/store.js';
+} from '../api/auth/_store.js';
 import {
   createSessionToken,
   verifySessionToken,
   SESSION_MAX_AGE_MS,
-} from '../api/auth/verify.js';
+} from '../api/auth/_verify.js';
 
 // SAFETY GUARD: Verify this script NEVER imports or invokes production credential mutators
 if (typeof globalThis.setActiveAdminPasswordHash !== 'undefined') {

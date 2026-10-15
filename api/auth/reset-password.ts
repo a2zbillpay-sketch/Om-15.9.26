@@ -3,8 +3,8 @@ import {
   consumeResetToken,
   hashPasswordWithScrypt,
   setActiveAdminPasswordHash,
-} from './store.js';
-import { clearAdminSessionCookie } from './verify.js';
+} from './_store.js';
+import { clearAdminSessionCookie } from './_verify.js';
 
 function readJsonBody(req: IncomingMessage): Promise<any> {
   return new Promise((resolve, reject) => {
