@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { X, Banknote, CheckCircle2, AlertCircle, Lock, Wallet } from 'lucide-react';
-import { Order, OrderStatus } from '../types';
+import { Order, OrderStatus, Role } from '../types';
 import { useApp } from '../context/AppContext';
 
 export interface CodCollectionModalProps {
@@ -36,10 +36,11 @@ export const CodCollectionModal: React.FC<CodCollectionModalProps> = ({
   const targetCustomer = order?.userPhone || order?.userId || '';
   const customerUser = users.find(
     (u) =>
-      (order?.userPhone &&
+      u.role === Role.CUSTOMER &&
+      ((order?.userPhone &&
         (u.phone === order.userPhone ||
           (u.phone && String(u.phone).replace(/\D/g, '').slice(-10) === String(order.userPhone).replace(/\D/g, '').slice(-10)))) ||
-      (order?.userId && u.id === order.userId)
+        (order?.userId && u.id === order.userId))
   );
 
   // Rule: Exclude current order so its bill is not double-counted into previous outstanding

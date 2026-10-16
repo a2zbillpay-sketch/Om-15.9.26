@@ -69,6 +69,7 @@ export interface User {
   codOrderCount: number;
   addresses: Address[];
   createdAt: string;
+  isDatabaseVerified?: boolean;
 }
 
 export interface Category {

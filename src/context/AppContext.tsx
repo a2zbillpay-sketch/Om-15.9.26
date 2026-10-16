@@ -343,6 +343,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           localStorage.removeItem('om_customer_session');
         }
       }
+
+      // Safely purge invalid shopkeeper profile cached under customer profile keys
+      const cachedShopProfile = localStorage.getItem('om_profile_9876543210');
+      if (cachedShopProfile) {
+        try {
+          const parsed = JSON.parse(cachedShopProfile);
+          if (parsed.role !== Role.CUSTOMER || parsed.id === 'user-shopkeeper' || parsed.name?.includes('Proprietor')) {
+            localStorage.removeItem('om_profile_9876543210');
+          }
+        } catch {
+          localStorage.removeItem('om_profile_9876543210');
+        }
+      }
+      if (savedSession) {
+        try {
+          const parsedSession = JSON.parse(savedSession);
+          if (parsedSession.role === Role.CUSTOMER && parsedSession.phone === '9876543210') {
+            const profile = localStorage.getItem('om_profile_9876543210');
+            if (!profile) {
+              localStorage.removeItem('om_customer_session');
+            }
+          }
+        } catch {}
+      }
     } catch {}
 
     const saved = localStorage.getItem('om_users');
@@ -358,7 +382,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       try {
         const session: CustomerSession = JSON.parse(savedSession);
         if (session.role === Role.SHOPKEEPER) return 'SHOP';
-        if (session.profileCompleted) return 'SHOP';
+        if (session.profileCompleted) {
+          if (session.role === Role.CUSTOMER && session.phone === '9876543210') {
+            const cached = localStorage.getItem('om_profile_9876543210');
+            if (!cached) return 'AUTH';
+            try {
+              const parsed = JSON.parse(cached);
+              if (parsed.role !== Role.CUSTOMER || parsed.id === 'user-shopkeeper') return 'AUTH';
+            } catch {
+              return 'AUTH';
+            }
+          }
+          return 'SHOP';
+        }
         return 'PROFILE';
       } catch {
         return 'AUTH';
@@ -376,14 +412,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           return INITIAL_USERS[0];
         }
 
-        // Rule 5: Never use stale cross-customer data. Fetch strictly for session.phone.
+        // Rule: Sourced strictly for session.phone, accepting ONLY Role.CUSTOMER. Never use SHOPKEEPER or ADMIN.
         const phoneKey = `om_profile_${session.phone}`;
         const savedPhoneProfile = localStorage.getItem(phoneKey);
         if (savedPhoneProfile) {
-          return JSON.parse(savedPhoneProfile);
+          try {
+            const parsed = JSON.parse(savedPhoneProfile);
+            if (parsed && parsed.role === Role.CUSTOMER && parsed.id !== 'user-shopkeeper') {
+              return parsed;
+            }
+          } catch {}
         }
 
-        const match = INITIAL_USERS.find((u) => u.phone === session.phone);
+        const match = INITIAL_USERS.find((u) => u.role === Role.CUSTOMER && u.phone === session.phone);
         if (match) return match;
 
         return {
@@ -2209,8 +2250,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       const customerInUsers = users.find(
         (u) =>
-          (target.userId && u.id === target.userId) ||
-          (cleanCustomerPhone && u.phone && u.phone.replace(/\D/g, '').slice(-10) === cleanCustomerPhone)
+          u.role === Role.CUSTOMER &&
+          ((target.userId && u.id === target.userId) ||
+            (cleanCustomerPhone && u.phone && u.phone.replace(/\D/g, '').slice(-10) === cleanCustomerPhone))
       );
 
       let customerBaseWallet = 0;
@@ -2670,6 +2712,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       phone: cleanPhone, // Guaranteed not replaced (Rule 2)
       role: Role.CUSTOMER,
       addresses: [updatedAddress],
+      isDatabaseVerified: isSupabaseConfigured,
     };
 
     // 1. Update state
@@ -2800,11 +2843,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     // CUSTOMER FLOW:
+    const checkCustomerCachedProfile = () => {
+      try {
+        const cached = localStorage.getItem(`om_profile_${cleanPhone}`);
+        if (!cached) return false;
+        const parsed = JSON.parse(cached);
+        return Boolean(parsed && parsed.role === Role.CUSTOMER && parsed.id !== 'user-shopkeeper');
+      } catch {
+        return false;
+      }
+    };
+
     const hasLocalProfile = Boolean(
-      localStorage.getItem(`om_profile_${cleanPhone}`) ||
+      checkCustomerCachedProfile() ||
       users.some((u) => {
         const uClean = u.phone ? u.phone.replace(/\D/g, '').slice(-10) : '';
-        return uClean === cleanPhone.slice(-10);
+        return u.role === Role.CUSTOMER && uClean === cleanPhone.slice(-10);
       })
     );
 
@@ -2813,29 +2867,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (treatAsExisting) {
       // Existing Customer login: must await database profile lookup before advancing
       let resolvedUser: User | null = null;
+      let isVerifiedFromDb = false;
 
       if (isSupabaseConfigured) {
         resolvedUser = await fetchCustomerProfileFromSupabase(cleanPhone);
+        if (resolvedUser && resolvedUser.role === Role.CUSTOMER) {
+          isVerifiedFromDb = true;
+        } else {
+          resolvedUser = null;
+        }
       }
 
-      // Check local cache if offline or not returned by Supabase
+      // Check local cache if offline or not returned by Supabase (strictly Role.CUSTOMER)
       if (!resolvedUser && cleanPhone !== '9820123456') {
         const phoneKey = `om_profile_${cleanPhone}`;
         const localProfile = localStorage.getItem(phoneKey);
         if (localProfile) {
           try {
-            resolvedUser = JSON.parse(localProfile);
+            const parsed = JSON.parse(localProfile);
+            if (parsed && parsed.role === Role.CUSTOMER && parsed.id !== 'user-shopkeeper') {
+              resolvedUser = parsed;
+            } else {
+              localStorage.removeItem(phoneKey);
+            }
           } catch {
             resolvedUser = null;
           }
         }
       }
 
-      // If customer record is not found, fallback to checking local users
+      // If customer record is not found, fallback to checking local users (strictly Role.CUSTOMER)
       if (!resolvedUser) {
         const matchingUser = users.find((u) => {
           const uClean = u.phone ? u.phone.replace(/\D/g, '').slice(-10) : '';
-          return uClean === cleanPhone.slice(-10);
+          return u.role === Role.CUSTOMER && uClean === cleanPhone.slice(-10);
         });
         if (matchingUser) {
           resolvedUser = matchingUser;
@@ -2894,6 +2959,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         codOrderCount: resolvedUser?.codOrderCount || 0,
         addresses: resolvedUser?.addresses || [],
         createdAt: resolvedUser?.createdAt || new Date().toISOString(),
+        isDatabaseVerified: isVerifiedFromDb,
       };
 
       setCurrentUser(finalUser);
@@ -2962,6 +3028,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       codOrderCount: 0,
       addresses: [], // Strictly blank for new customers!
       createdAt: new Date().toISOString(),
+      isDatabaseVerified: false,
     };
 
     setCurrentUser(finalUser);

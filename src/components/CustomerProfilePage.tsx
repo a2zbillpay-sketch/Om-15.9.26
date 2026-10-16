@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { UserCheck, MapPin, Phone, Lock, ArrowRight, ShieldCheck, LogOut, ShoppingBag, Sparkles, Building } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { BrandLogo } from './BrandLogo';
+import { fetchCustomerProfileFromSupabase } from '../lib/supabase';
+import { Role } from '../types';
 
 interface CustomerProfilePageProps {
   onProfileSaved?: () => void;
@@ -26,6 +28,9 @@ export const CustomerProfilePage: React.FC<CustomerProfilePageProps> = ({
   const [isSaving, setIsSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
+  const [isDbVerified, setIsDbVerified] = useState<boolean>(
+    () => Boolean(isSupabaseConfigured && currentUser.isDatabaseVerified && currentUser.role === Role.CUSTOMER)
+  );
 
   // Keep fields synchronized strictly if currentUser changes, without stale cross-user leaks
   useEffect(() => {
@@ -37,6 +42,33 @@ export const CustomerProfilePage: React.FC<CustomerProfilePageProps> = ({
     setErrorMessage('');
     setSuccessMessage('');
   }, [currentUser.id, currentUser.phone, currentUser.name, currentUser.addresses]);
+
+  // Genuinely verify against Supabase database for existing customers
+  useEffect(() => {
+    if (currentUser.isDatabaseVerified && currentUser.role === Role.CUSTOMER) {
+      setIsDbVerified(true);
+      return;
+    }
+
+    let isMounted = true;
+    if (isSupabaseConfigured && currentUser.phone && currentUser.role === Role.CUSTOMER) {
+      fetchCustomerProfileFromSupabase(currentUser.phone)
+        .then((dbUser) => {
+          if (isMounted) {
+            setIsDbVerified(Boolean(dbUser && dbUser.role === Role.CUSTOMER));
+          }
+        })
+        .catch(() => {
+          if (isMounted) setIsDbVerified(false);
+        });
+    } else {
+      setIsDbVerified(false);
+    }
+
+    return () => {
+      isMounted = false;
+    };
+  }, [currentUser.id, currentUser.phone, currentUser.role, currentUser.isDatabaseVerified, isSupabaseConfigured]);
 
   const isNewCustomer = !primaryAddress || !primaryAddress.fullAddress.trim();
 
@@ -118,10 +150,15 @@ export const CustomerProfilePage: React.FC<CustomerProfilePageProps> = ({
                 <Sparkles size={13} className="text-[#D4AF37]" />
                 <span>New Customer Registration &bull; Address initially blank</span>
               </>
-            ) : (
+            ) : isDbVerified ? (
               <>
                 <UserCheck size={13} className="text-emerald-400" />
                 <span>Existing Customer Verified &bull; Profile retrieved from database</span>
+              </>
+            ) : (
+              <>
+                <Building size={13} className="text-amber-300" />
+                <span>Customer Profile &bull; Please confirm delivery details</span>
               </>
             )}
           </div>

@@ -383,6 +383,7 @@ export async function getOrCreateCustomerByPhone(
         .from('users')
         .select('*')
         .eq('phone', cleanPhone)
+        .eq('role', role)
         .order('updated_at', { ascending: false })
         .limit(1);
 
@@ -580,6 +581,7 @@ export async function saveCustomerProfileToSupabase(
       codOrderCount: 0,
       addresses: [finalAddressObj],
       createdAt: targetUser?.updated_at || new Date().toISOString(),
+      isDatabaseVerified: true,
     };
   } catch (err) {
     console.error('Error saving customer profile to Supabase:', err);
@@ -675,6 +677,7 @@ export async function fetchCustomerProfileFromSupabase(phone: string): Promise<U
       codOrderCount: Number(dbUser.cod_order_count || 0),
       addresses: formattedAddresses,
       createdAt: dbUser.updated_at || new Date().toISOString(),
+      isDatabaseVerified: true,
     };
   } catch (err) {
     console.warn('Error fetching customer profile from Supabase:', err);
