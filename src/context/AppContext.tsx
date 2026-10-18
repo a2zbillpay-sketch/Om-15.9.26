@@ -2862,7 +2862,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       })
     );
 
-    const treatAsExisting = options?.isExisting === true || (options?.isExisting === undefined && hasLocalProfile);
+    let treatAsExisting = options?.isExisting === true || (options?.isExisting === undefined && hasLocalProfile);
+
+    // If options?.isExisting was not explicitly true (e.g. submitted from new registration), also check if this mobile is already registered in Supabase
+    if (!treatAsExisting && isSupabaseConfigured) {
+      const existingInDb = await fetchCustomerProfileFromSupabase(cleanPhone);
+      if (existingInDb && existingInDb.role === Role.CUSTOMER) {
+        treatAsExisting = true;
+      }
+    }
 
     if (treatAsExisting) {
       // Existing Customer login: must await database profile lookup before advancing
@@ -2976,7 +2984,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         JSON.stringify({
           phone: cleanPhone,
           role: Role.CUSTOMER,
-          profileCompleted: Boolean(finalUser.name && finalUser.addresses.length > 0),
+          profileCompleted: true,
         })
       );
 
@@ -3000,7 +3008,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         refreshCustomerWallet();
       }
 
-      setCustomerFlowStep(finalUser.name && finalUser.addresses.length > 0 ? 'SHOP' : 'PROFILE');
+      setCustomerFlowStep('SHOP');
       notifyShopkeeperCustomerLogin(finalUser);
       return finalUser;
     }

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import {
-  ShoppingBag,
+  ShoppingCart,
   MapPin,
   Wallet,
   Clock,
@@ -196,7 +196,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                   className="relative flex items-center gap-2 bg-[#FF6B00] hover:bg-[#e05e00] text-white px-3.5 py-1.5 rounded-xl font-extrabold text-xs shadow-md transition hover:scale-105"
                   title={editingOrder ? `Updating Order #${editingOrder.orderNumber}` : 'Shopping Cart'}
                 >
-                  <ShoppingBag size={16} />
+                  <ShoppingCart size={16} />
                   <div className="hidden sm:block text-left">
                     <div className="text-[10px] leading-tight text-white/90">
                       {editingOrder ? `Order #${editingOrder.orderNumber}` : `${totalCartCount} ${totalCartCount === 1 ? 'item' : 'items'}`}

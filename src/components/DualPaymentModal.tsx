@@ -184,11 +184,14 @@ export const DualPaymentModal: React.FC<DualPaymentModalProps> = ({
                 </div>
               ) : null}
 
-              {/* Separate button: Tap to Select Advance Payment */}
+              {/* Separate button: Directly open native UPI payment app */}
               <button
                 id="select-advance-payment-btn"
                 type="button"
-                onClick={() => onSelectPayment('ADVANCE_ONLINE', 'QR')}
+                onClick={() => {
+                  const upiUri = `upi://pay?pa=paytmqr6a2sx0@ptys&pn=${encodeURIComponent('OM DISTRIBUTORS')}&am=${remainingOnlinePayable}&cu=INR`;
+                  window.location.href = upiUri;
+                }}
                 className="mt-3 w-full bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99] text-white py-2.5 px-4 rounded-xl font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-md transition cursor-pointer"
               >
                 <span>Tap to Select Advance Payment</span>

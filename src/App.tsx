@@ -25,7 +25,7 @@ import { AdminLoginModal } from './components/AdminLoginModal';
 import { OrderSuccessModal } from './components/OrderSuccessModal';
 import { ShopkeeperLoginNotifier } from './components/ShopkeeperLoginNotifier';
 import { EditOrderPaymentModal } from './components/EditOrderPaymentModal';
-import { ShieldCheck, Phone, MapPin, Mail, Award, ShoppingBag } from 'lucide-react';
+import { ShieldCheck, Phone, MapPin, Mail, Award, ShoppingCart } from 'lucide-react';
 
 const MainLayout: React.FC = () => {
   const {
@@ -188,7 +188,7 @@ const MainLayout: React.FC = () => {
               onClick={() => setIsCartOpen(true)}
               className="bg-[#FF6B00] hover:bg-[#e05e00] text-white font-extrabold px-3 py-1.5 rounded-lg text-xs cursor-pointer shadow-xs transition flex items-center gap-1.5 active:scale-95"
             >
-              <ShoppingBag size={13} />
+              <ShoppingCart size={13} />
               <span>Review & Update Order ({cart.reduce((sum, it) => sum + it.quantity, 0)})</span>
             </button>
           </div>
@@ -203,7 +203,7 @@ const MainLayout: React.FC = () => {
             <AdminDashboard />
           </div>
         ) : customerFlowStep === 'AUTH' ? (
-          <CustomerAuthPage onSuccess={() => setCustomerFlowStep('PROFILE')} />
+          <CustomerAuthPage />
         ) : customerFlowStep === 'PROFILE' ? (
           <CustomerProfilePage
             onProfileSaved={() => setCustomerFlowStep('SHOP')}

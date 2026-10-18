@@ -5,6 +5,7 @@ import {
   Map,
   AdvancedMarker,
   MapMouseEvent,
+  useMap,
 } from '@vis.gl/react-google-maps';
 import {
   X,
@@ -42,6 +43,30 @@ const extractCoords = (ll: any): { lat: number; lng: number } | null => {
   return { lat, lng };
 };
 
+// Helper component that reliably centers and zooms the Google Map when GPS or search updates coordinates
+const MapPanController: React.FC<{
+  target: { lat: number; lng: number } | null;
+  zoom?: number;
+}> = ({ target, zoom }) => {
+  const map = useMap();
+  useEffect(() => {
+    if (
+      map &&
+      target &&
+      typeof target.lat === 'number' &&
+      typeof target.lng === 'number' &&
+      !isNaN(target.lat) &&
+      !isNaN(target.lng)
+    ) {
+      map.panTo(target);
+      if (typeof zoom === 'number') {
+        map.setZoom(zoom);
+      }
+    }
+  }, [map, target?.lat, target?.lng, zoom]);
+  return null;
+};
+
 export const GoogleLocationPickerModal: React.FC<GoogleLocationPickerModalProps> = ({
   isOpen,
   onClose,
@@ -62,34 +87,18 @@ export const GoogleLocationPickerModal: React.FC<GoogleLocationPickerModalProps>
   });
 
   const [mapCenter, setMapCenter] = useState<{ lat: number; lng: number }>(markerPos);
-  const [mapZoom, setMapZoom] = useState<number>(16);
+  const [panTarget, setPanTarget] = useState<{ lat: number; lng: number } | null>(null);
+  const [mapZoom, setMapZoom] = useState<number>(17);
   const [detectedAddress, setDetectedAddress] = useState<string>(
     initialLocation?.formattedAddress || ''
   );
   const [isDetectingLocation, setIsDetectingLocation] = useState<boolean>(false);
+  const [hasResolvedGps, setHasResolvedGps] = useState<boolean>(Boolean(initialLocation?.latitude));
   const [locationError, setLocationError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [isSearching, setIsSearching] = useState<boolean>(false);
 
-  // Sync initial location when modal opens
-  useEffect(() => {
-    if (isOpen) {
-      const lat = Number(initialLocation?.latitude);
-      const lng = Number(initialLocation?.longitude);
-      if (!isNaN(lat) && !isNaN(lng) && lat !== 0 && lng !== 0) {
-        const pos = { lat, lng };
-        setMarkerPos(pos);
-        setMapCenter(pos);
-        setDetectedAddress(initialLocation?.formattedAddress || '');
-      } else {
-        setMarkerPos(DEFAULT_CENTER);
-        setMapCenter(DEFAULT_CENTER);
-      }
-      setLocationError(null);
-    }
-  }, [isOpen, initialLocation]);
-
-  // Reverse geocode via REST or Geocoder
+  // Reverse geocode via REST
   const reverseGeocode = useCallback(
     async (lat: number, lng: number) => {
       try {
@@ -120,44 +129,87 @@ export const GoogleLocationPickerModal: React.FC<GoogleLocationPickerModalProps>
   );
 
   // Use GPS Current Location
-  const handleUseCurrentLocation = () => {
-    if (!navigator.geolocation) {
-      setLocationError('Geolocation is not supported by your browser/device.');
-      return;
-    }
-
-    setIsDetectingLocation(true);
-    setLocationError(null);
-
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const lat = pos.coords.latitude;
-        const lng = pos.coords.longitude;
-        const newCoords = { lat, lng };
-        setMarkerPos(newCoords);
-        setMapCenter(newCoords);
-        setMapZoom(18);
-        setIsDetectingLocation(false);
-        reverseGeocode(lat, lng);
-      },
-      (err) => {
-        setIsDetectingLocation(false);
-        let msg = 'Unable to retrieve GPS coordinates.';
-        if (err.code === err.PERMISSION_DENIED) {
-          msg = 'GPS permission denied. You can tap anywhere on the map or drag the pin to select your location.';
-        } else if (err.code === err.POSITION_UNAVAILABLE) {
-          msg = 'Location unavailable. Please tap directly on the map or drag the pin to select your location.';
-        } else if (err.code === err.TIMEOUT) {
-          msg = 'GPS request timed out. Please tap directly on the map or drag the pin.';
+  const detectCurrentGpsLocation = useCallback(
+    (isManualClick: boolean = false) => {
+      if (!navigator.geolocation) {
+        if (isManualClick) {
+          setLocationError('Geolocation is not supported by your browser or device.');
         }
-        setLocationError(msg);
-      },
-      {
-        enableHighAccuracy: true,
-        timeout: 12000,
-        maximumAge: 10000,
+        return;
       }
-    );
+
+      setIsDetectingLocation(true);
+      setLocationError(null);
+
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const lat = pos.coords.latitude;
+          const lng = pos.coords.longitude;
+          if (!isNaN(lat) && !isNaN(lng)) {
+            const newCoords = { lat, lng };
+            setMarkerPos(newCoords);
+            setMapCenter(newCoords);
+            setPanTarget(newCoords);
+            setMapZoom(17);
+            setHasResolvedGps(true);
+            setIsDetectingLocation(false);
+            reverseGeocode(lat, lng);
+          } else {
+            setIsDetectingLocation(false);
+          }
+        },
+        (err) => {
+          setIsDetectingLocation(false);
+          let msg = 'Unable to retrieve GPS coordinates.';
+          if (err.code === err.PERMISSION_DENIED) {
+            msg = isManualClick
+              ? 'GPS permission denied. Please tap the map or search an address to place your delivery pin.'
+              : 'Location permission not granted. Tap on the map or search to place your delivery pin.';
+          } else if (err.code === err.POSITION_UNAVAILABLE) {
+            msg = 'GPS location unavailable. Please tap on the map or search to place your delivery pin.';
+          } else if (err.code === err.TIMEOUT) {
+            msg = 'GPS request timed out. Please tap on the map or search to place your delivery pin.';
+          }
+          setLocationError(msg);
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 10000,
+          maximumAge: 60000,
+        }
+      );
+    },
+    [reverseGeocode]
+  );
+
+  // Sync initial location or automatically detect actual GPS coordinates when modal opens
+  useEffect(() => {
+    if (isOpen) {
+      setLocationError(null);
+      const lat = Number(initialLocation?.latitude);
+      const lng = Number(initialLocation?.longitude);
+      if (!isNaN(lat) && !isNaN(lng) && lat !== 0 && lng !== 0) {
+        // Customer already has a pinned delivery location: respect and restore it
+        const pos = { lat, lng };
+        setMarkerPos(pos);
+        setMapCenter(pos);
+        setPanTarget(pos);
+        setMapZoom(17);
+        setDetectedAddress(initialLocation?.formattedAddress || '');
+        setHasResolvedGps(true);
+      } else {
+        // No saved location: automatically acquire the device's actual GPS coordinates
+        setMarkerPos(DEFAULT_CENTER);
+        setMapCenter(DEFAULT_CENTER);
+        setDetectedAddress('');
+        setHasResolvedGps(false);
+        detectCurrentGpsLocation(false);
+      }
+    }
+  }, [isOpen, initialLocation, detectCurrentGpsLocation]);
+
+  const handleUseCurrentLocation = () => {
+    detectCurrentGpsLocation(true);
   };
 
   // Handle map click to place pin (works completely without GPS permission)
@@ -165,7 +217,9 @@ export const GoogleLocationPickerModal: React.FC<GoogleLocationPickerModalProps>
     const coords = extractCoords(e.detail?.latLng);
     if (coords) {
       setMarkerPos(coords);
+      setPanTarget(coords);
       setLocationError(null);
+      setHasResolvedGps(true);
       reverseGeocode(coords.lat, coords.lng);
     }
   };
@@ -194,8 +248,10 @@ export const GoogleLocationPickerModal: React.FC<GoogleLocationPickerModalProps>
         const newPos = { lat, lng };
         setMarkerPos(newPos);
         setMapCenter(newPos);
-        setMapZoom(16);
+        setPanTarget(newPos);
+        setMapZoom(17);
         setDetectedAddress(first.formatted_address);
+        setHasResolvedGps(true);
       } else if (data.status === 'OVER_QUERY_LIMIT') {
         window.dispatchEvent(new CustomEvent('gmp-quota-exceeded'));
         setLocationError('Search quota limit reached. Please tap directly on the map to set your location.');
@@ -211,6 +267,10 @@ export const GoogleLocationPickerModal: React.FC<GoogleLocationPickerModalProps>
   };
 
   const handleConfirmLocation = () => {
+    if (!hasResolvedGps && !detectedAddress) {
+      setLocationError('Please tap on the map or search an address to place your delivery pin first.');
+      return;
+    }
     const lat = Number(markerPos?.lat) || DEFAULT_CENTER.lat;
     const lng = Number(markerPos?.lng) || DEFAULT_CENTER.lng;
     const mapsUrl = `https://www.google.com/maps?q=${lat},${lng}`;
@@ -328,7 +388,7 @@ export const GoogleLocationPickerModal: React.FC<GoogleLocationPickerModalProps>
                 defaultCenter={DEFAULT_CENTER}
                 center={mapCenter}
                 onCenterChanged={(e) => setMapCenter(e.detail.center)}
-                defaultZoom={16}
+                defaultZoom={17}
                 zoom={mapZoom}
                 onZoomChanged={(e) => setMapZoom(e.detail.zoom)}
                 mapId="DEMO_MAP_ID"
@@ -337,6 +397,7 @@ export const GoogleLocationPickerModal: React.FC<GoogleLocationPickerModalProps>
                 gestureHandling="greedy"
                 disableDefaultUI={false}
               >
+                <MapPanController target={panTarget} zoom={mapZoom} />
                 <AdvancedMarker
                   position={markerPos}
                   draggable={true}
@@ -344,6 +405,8 @@ export const GoogleLocationPickerModal: React.FC<GoogleLocationPickerModalProps>
                     const coords = extractCoords(e.latLng);
                     if (coords) {
                       setMarkerPos(coords);
+                      setPanTarget(coords);
+                      setHasResolvedGps(true);
                       setLocationError(null);
                       reverseGeocode(coords.lat, coords.lng);
                     }
@@ -371,9 +434,19 @@ export const GoogleLocationPickerModal: React.FC<GoogleLocationPickerModalProps>
                 <Navigation size={11} className="text-[#FF6B00]" />
                 <span>Selected Google Location</span>
               </div>
-              <p className="text-xs font-bold text-gray-900 truncate">
-                {detectedAddress || 'Selected on Google Maps'}
-              </p>
+              <div className="text-xs font-bold text-gray-900 truncate">
+                {isDetectingLocation ? (
+                  <span className="text-emerald-700 flex items-center gap-1.5 animate-pulse">
+                    <Loader2 size={12} className="animate-spin inline" />
+                    Locating your current GPS coordinates...
+                  </span>
+                ) : (
+                  detectedAddress ||
+                  (hasResolvedGps
+                    ? 'Pinned Location on Map'
+                    : 'Tap on map or search your address to drop pin')
+                )}
+              </div>
               <p className="text-[11px] font-mono text-gray-600">
                 Lat: {Number(markerPos?.lat)?.toFixed ? Number(markerPos.lat).toFixed(5) : markerPos.lat}, Lng:{' '}
                 {Number(markerPos?.lng)?.toFixed ? Number(markerPos.lng).toFixed(5) : markerPos.lng}

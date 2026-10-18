@@ -601,6 +601,20 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                           } & Confirm Order`}
                     </span>
                   </button>
+
+                  {remainingOnlinePayment > 0 && (
+                    <div className="mt-2.5 text-center">
+                      <a
+                        id="checkout-masked-upi-id-link"
+                        href={`upi://pay?pa=paytmqr6a2sx0@ptys&pn=${encodeURIComponent('OM DISTRIBUTORS')}&am=${remainingOnlinePayment}&cu=INR`}
+                        className="inline-flex items-center justify-center gap-1.5 text-xs font-semibold text-emerald-800 hover:text-emerald-950 underline cursor-pointer"
+                        title="Open UPI payment app directly"
+                      >
+                        <span className="text-gray-500 text-[11px]">UPI ID:</span>
+                        <span className="font-mono font-bold">paytm****sx0@ptys</span>
+                      </a>
+                    </div>
+                  )}
                 </>
               );
             })()}

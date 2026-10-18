@@ -32,6 +32,11 @@ export const CustomerAuthPage: React.FC<CustomerAuthPageProps> = ({ onSuccess })
       return;
     }
 
+    if (customerMode === 'NEW' && (!name || !name.trim())) {
+      setError('Please enter your full name to register.');
+      return;
+    }
+
     setIsLoading(true);
 
     try {
@@ -41,7 +46,7 @@ export const CustomerAuthPage: React.FC<CustomerAuthPageProps> = ({ onSuccess })
         customerMode === 'NEW' ? name.trim() : undefined,
         { isExisting: customerMode === 'EXISTING' }
       );
-      if (onSuccess) onSuccess();
+      if (onSuccess && customerMode === 'NEW') onSuccess();
     } catch (err: any) {
       setError(err.message || 'Authentication error. Please try again.');
     } finally {
@@ -258,11 +263,12 @@ export const CustomerAuthPage: React.FC<CustomerAuthPageProps> = ({ onSuccess })
 
                     <div>
                       <label className="block text-xs font-black text-gray-700 uppercase tracking-wider mb-1.5">
-                        Your Full Name (Optional)
+                        Your Full Name <span className="text-rose-500">*</span>
                       </label>
                       <input
                         type="text"
                         id="new-customer-name-input"
+                        required
                         value={name}
                         onChange={(e) => setName(e.target.value)}
                         placeholder="e.g. Ramesh Patil"
@@ -332,11 +338,11 @@ export const CustomerAuthPage: React.FC<CustomerAuthPageProps> = ({ onSuccess })
                       {isLoading ? (
                         <>
                           <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
-                          <span>Looking up Customer Record...</span>
+                          <span>Logging in...</span>
                         </>
                       ) : (
                         <>
-                          <span>Load Saved Profile &amp; Continue</span>
+                          <span>Login</span>
                           <ArrowRight size={16} className="text-[#D4AF37]" />
                         </>
                       )}

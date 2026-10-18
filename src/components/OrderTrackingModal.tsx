@@ -493,20 +493,34 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
                   currentOrder.status !== OrderStatus.CANCELLED &&
                   currentOrder.paymentMethod === PaymentMethod.ADVANCE_ONLINE &&
                   onPayPendingBalance && (
-                    <button
-                      type="button"
-                      id="pay-pending-balance-btn"
-                      onClick={() => {
-                        onClose();
-                        onPayPendingBalance(currentOrder);
-                      }}
-                      className="w-full mt-2.5 py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs rounded-xl shadow-xs transition flex items-center justify-center gap-1.5 cursor-pointer"
-                    >
-                      <CreditCard size={15} />
-                      <span>
-                        Pay Balance ₹{currentOrder.totalPayable ?? currentOrder.finalAmount} Online Now
-                      </span>
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        id="pay-pending-balance-btn"
+                        onClick={() => {
+                          onClose();
+                          onPayPendingBalance(currentOrder);
+                        }}
+                        className="w-full mt-2.5 py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs rounded-xl shadow-xs transition flex items-center justify-center gap-1.5 cursor-pointer"
+                      >
+                        <CreditCard size={15} />
+                        <span>
+                          Pay Balance ₹{currentOrder.totalPayable ?? currentOrder.finalAmount} Online Now
+                        </span>
+                      </button>
+
+                      <div className="mt-1.5 text-center">
+                        <a
+                          id="tracking-masked-upi-id-link"
+                          href={`upi://pay?pa=paytmqr6a2sx0@ptys&pn=${encodeURIComponent('OM DISTRIBUTORS')}&am=${currentOrder.totalPayable ?? currentOrder.finalAmount}&cu=INR`}
+                          className="inline-flex items-center justify-center gap-1.5 text-xs font-semibold text-emerald-800 hover:text-emerald-950 underline cursor-pointer"
+                          title="Open UPI payment app directly"
+                        >
+                          <span className="text-gray-500 text-[11px]">UPI ID:</span>
+                          <span className="font-mono font-bold">paytm****sx0@ptys</span>
+                        </a>
+                      </div>
+                    </>
                   )}
               </>
             )}
