@@ -105,9 +105,6 @@ export const CustomerAuthPage: React.FC<CustomerAuthPageProps> = ({ onSuccess })
           <div className="flex justify-center mb-3">
             <BrandLogo size="lg" className="border border-white/20 rounded-2xl" />
           </div>
-          <span className="text-[10px] uppercase tracking-widest font-black text-[#D4AF37] bg-white/10 px-3 py-1 rounded-full border border-white/10 inline-block mb-2">
-            Wholesale &amp; Retail Groceries &bull; Nashik City
-          </span>
           <h1 className="text-2xl sm:text-3xl font-black tracking-tight text-white">
             OM DISTRIBUTORS
           </h1>
@@ -162,11 +159,7 @@ export const CustomerAuthPage: React.FC<CustomerAuthPageProps> = ({ onSuccess })
           {activePortal === 'CUSTOMER' ? (
             <div className="space-y-6">
               {/* Customer Option Selector (1. New Customer, 2. Existing Customer) */}
-              <div className="space-y-2">
-                <label className="block text-[11px] font-black uppercase tracking-wider text-gray-500">
-                  Select Customer Type
-                </label>
-                <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-2 gap-3">
                   {/* Option 1: New Customer */}
                   <button
                     type="button"
@@ -175,24 +168,19 @@ export const CustomerAuthPage: React.FC<CustomerAuthPageProps> = ({ onSuccess })
                       setCustomerMode('NEW');
                       setError('');
                     }}
-                    className={`p-3.5 rounded-2xl border text-left transition relative flex flex-col justify-between ${
+                    className={`p-3 sm:p-3.5 rounded-2xl border text-center transition relative flex flex-col items-center justify-center min-h-[72px] cursor-pointer ${
                       customerMode === 'NEW'
                         ? 'bg-orange-50/80 border-[#FF6B00] text-gray-900 shadow-sm ring-1 ring-[#FF6B00]'
                         : 'bg-white border-gray-200 text-gray-600 hover:border-gray-300 hover:bg-gray-50'
                     }`}
                   >
-                    <div className="flex items-center justify-between mb-1.5">
-                      <span className="flex items-center gap-1.5 text-xs font-black text-[#FF6B00]">
-                        <UserPlus size={16} />
-                        <span>1. New Customer</span>
-                      </span>
-                      {customerMode === 'NEW' && (
-                        <span className="w-2 h-2 rounded-full bg-[#FF6B00]"></span>
-                      )}
+                    {customerMode === 'NEW' && (
+                      <span className="absolute top-2.5 right-2.5 w-2 h-2 rounded-full bg-[#FF6B00]"></span>
+                    )}
+                    <div className="flex items-center justify-center gap-1.5 text-xs sm:text-sm font-black text-[#FF6B00] leading-snug">
+                      <UserPlus size={16} className="shrink-0" />
+                      <span>नवीन ग्राहक नोंदणी</span>
                     </div>
-                    <span className="text-[11px] text-gray-500 leading-snug">
-                      First-time grocery registration
-                    </span>
                   </button>
 
                   {/* Option 2: Existing Customer */}
@@ -203,40 +191,30 @@ export const CustomerAuthPage: React.FC<CustomerAuthPageProps> = ({ onSuccess })
                       setCustomerMode('EXISTING');
                       setError('');
                     }}
-                    className={`p-3.5 rounded-2xl border text-left transition relative flex flex-col justify-between ${
+                    className={`p-3 sm:p-3.5 rounded-2xl border text-center transition relative flex flex-col items-center justify-center min-h-[72px] cursor-pointer ${
                       customerMode === 'EXISTING'
                         ? 'bg-blue-50/80 border-[#0F2C59] text-gray-900 shadow-sm ring-1 ring-[#0F2C59]'
                         : 'bg-white border-gray-200 text-gray-600 hover:border-gray-300 hover:bg-gray-50'
                     }`}
                   >
-                    <div className="flex items-center justify-between mb-1.5">
-                      <span className="flex items-center gap-1.5 text-xs font-black text-[#0F2C59]">
-                        <UserCheck size={16} className="text-emerald-600" />
-                        <span>2. Existing Customer</span>
-                      </span>
-                      {customerMode === 'EXISTING' && (
-                        <span className="w-2 h-2 rounded-full bg-[#0F2C59]"></span>
-                      )}
+                    {customerMode === 'EXISTING' && (
+                      <span className="absolute top-2.5 right-2.5 w-2 h-2 rounded-full bg-[#0F2C59]"></span>
+                    )}
+                    <div className="flex items-center justify-center gap-1.5 text-xs sm:text-sm font-black text-[#0F2C59] leading-snug">
+                      <UserCheck size={16} className="text-emerald-600 shrink-0" />
+                      <span>नोंदणी केलेले ग्राहक</span>
                     </div>
-                    <span className="text-[11px] text-gray-500 leading-snug">
-                      Auto-load saved profile &amp; address
-                    </span>
                   </button>
                 </div>
-              </div>
 
               {/* Dynamic Customer Form */}
               <form onSubmit={handleCustomerLogin} className="space-y-4 pt-1">
                 {customerMode === 'NEW' ? (
                   /* Option 1: New Customer Form */
                   <>
-                    <div className="bg-orange-50/50 border border-orange-200/60 rounded-xl p-3 text-[11px] text-gray-600">
-                      <strong className="text-[#FF6B00]">New Customer Registration:</strong> Enter your 10-digit mobile number below. You will set up your personalized delivery address in the next step.
-                    </div>
-
                     <div>
                       <label className="block text-xs font-black text-gray-700 uppercase tracking-wider mb-1.5">
-                        Mobile Number <span className="text-rose-500">*</span>
+                        मोबाईल नंबर <span className="text-rose-500">*</span>
                       </label>
                       <div className="flex items-center gap-2">
                         <span className="bg-gray-100 text-gray-700 font-mono font-bold px-3.5 py-2.5 rounded-xl border border-gray-300 text-sm">
@@ -256,14 +234,11 @@ export const CustomerAuthPage: React.FC<CustomerAuthPageProps> = ({ onSuccess })
                           />
                         </div>
                       </div>
-                      <p className="text-[11px] text-gray-500 mt-1">
-                        Your mobile number will anchor your delivery account and contact details.
-                      </p>
                     </div>
 
                     <div>
                       <label className="block text-xs font-black text-gray-700 uppercase tracking-wider mb-1.5">
-                        Your Full Name <span className="text-rose-500">*</span>
+                        तुमचे पूर्ण नाव <span className="text-rose-500">*</span>
                       </label>
                       <input
                         type="text"
@@ -298,10 +273,6 @@ export const CustomerAuthPage: React.FC<CustomerAuthPageProps> = ({ onSuccess })
                 ) : (
                   /* Option 2: Existing Customer Form */
                   <>
-                    <div className="bg-blue-50/50 border border-blue-200/60 rounded-xl p-3 text-[11px] text-gray-600">
-                      <strong className="text-[#0F2C59]">Existing Customer Sign-In:</strong> Enter your registered 10-digit mobile number. Your saved delivery name, address, and landmark will be retrieved automatically.
-                    </div>
-
                     <div>
                       <label className="block text-xs font-black text-gray-700 uppercase tracking-wider mb-1.5">
                         Registered Mobile Number <span className="text-rose-500">*</span>
@@ -324,9 +295,6 @@ export const CustomerAuthPage: React.FC<CustomerAuthPageProps> = ({ onSuccess })
                           />
                         </div>
                       </div>
-                      <p className="text-[11px] text-gray-500 mt-1">
-                        If this mobile number is found in the database, your saved address will be preloaded.
-                      </p>
                     </div>
 
                     <button
@@ -457,11 +425,7 @@ export const CustomerAuthPage: React.FC<CustomerAuthPageProps> = ({ onSuccess })
             </form>
           )}
 
-          {/* Delivery Region Notice */}
-          <div className="pt-4 border-t border-gray-100 flex items-center justify-center gap-2 text-center text-[11px] text-gray-500">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0"></span>
-            <span>We provide home delivery of groceries and essential items only within Nashik city.</span>
-          </div>
+
         </div>
       </div>
 

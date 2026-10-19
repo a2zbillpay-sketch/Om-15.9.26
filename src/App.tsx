@@ -268,7 +268,7 @@ const MainLayout: React.FC = () => {
             <div className="space-y-2 text-gray-300 text-[11px]">
               <div className="flex items-center gap-2">
                 <Phone size={14} className="text-[#FF6B00]" />
-                <span>WhatsApp / Call: +91 98765 43210</span>
+                <span>WhatsApp / Call: +91 9158518639</span>
               </div>
               <div className="flex items-center gap-2">
                 <Mail size={14} className="text-[#FF6B00]" />

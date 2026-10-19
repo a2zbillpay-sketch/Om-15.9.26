@@ -82,9 +82,6 @@ export const CustomerStore: React.FC<CustomerStoreProps> = ({
           <div className="max-w-2xl text-center md:text-left space-y-3">
             <div className="flex flex-wrap items-center gap-3 justify-center md:justify-start">
               <BrandLogo size="lg" />
-              <div>
-                <div className="text-xs text-amber-200 font-semibold tracking-wide uppercase">MULTI SERVICE PROVIDER • We meet your needs.</div>
-              </div>
             </div>
             <h1 className="text-2xl sm:text-4xl font-black tracking-tight text-white leading-tight">
               योग्य दरात <span className="text-[#D4AF37]">किराणा घरात</span>
@@ -120,8 +117,8 @@ export const CustomerStore: React.FC<CustomerStoreProps> = ({
             </div>
             <div className="text-[11px] text-gray-200 mt-2 mb-3 space-y-1 text-center">
               <p>💚 डिलिव्हरीच्या वेळी पेमेंट केल्यास कोणतेही अतिरिक्त COD सेवा शुल्क नाही.</p>
-              <p className="text-[10.5px] text-gray-300">
-                ℹ️ डिलिव्हरीच्या वेळी पेमेंट न केल्यासच ₹49 अतिरिक्त COD सेवा शुल्क लागू होईल.
+              <p className="text-[10.5px] text-red-400 font-medium">
+                डिलिव्हरीच्या वेळी पेमेंट न केल्यास ₹49 COD सेवा शुल्क लागू होईल.
               </p>
             </div>
             <div className="space-y-2">
