@@ -189,7 +189,7 @@ export const DualPaymentModal: React.FC<DualPaymentModalProps> = ({
                 id="select-advance-payment-btn"
                 type="button"
                 onClick={() => {
-                  const upiUri = `upi://pay?pa=paytmqr6a2sx0@ptys&pn=${encodeURIComponent('OM DISTRIBUTORS')}&am=${remainingOnlinePayable}&cu=INR`;
+                  const upiUri = `upi://pay?pa=9158518639@ptaxis&pn=${encodeURIComponent('OM DISTRIBUTORS')}&am=${remainingOnlinePayable}&cu=INR`;
                   window.location.href = upiUri;
                 }}
                 className="mt-3 w-full bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99] text-white py-2.5 px-4 rounded-xl font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-md transition cursor-pointer"

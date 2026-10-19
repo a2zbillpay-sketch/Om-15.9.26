@@ -87,36 +87,43 @@ export const CustomerStore: React.FC<CustomerStoreProps> = ({
               </div>
             </div>
             <h1 className="text-2xl sm:text-4xl font-black tracking-tight text-white leading-tight">
-              Where Savings Meet <span className="text-[#D4AF37]">Your Kitchen</span>
+              योग्य दरात <span className="text-[#D4AF37]">किराणा घरात</span>
             </h1>
             <p className="text-xs sm:text-sm text-gray-200 leading-relaxed font-medium">
-              We provide home delivery of groceries and essential items only within Nashik city.
+              घरपोहोच सेवा संपूर्ण नाशिक शहरात.
             </p>
 
             {/* Value Highlights */}
             <div className="pt-2 flex flex-wrap items-center justify-center md:justify-start gap-3 text-xs">
               <div className="flex items-center gap-1.5 bg-white/10 px-3 py-1.5 rounded-lg border border-white/10">
                 <Percent size={14} className="text-[#D4AF37]" />
-                <span><strong>{settings.advancePaymentDiscountPct}% OFF</strong> on Advance UPI</span>
+                <span><strong>{settings.advancePaymentDiscountPct}% सूट</strong> — ॲडव्हान्स UPI पेमेंटवर</span>
               </div>
               <div className="flex items-center gap-1.5 bg-white/10 px-3 py-1.5 rounded-lg border border-white/10">
                 <Truck size={14} className="text-emerald-400" />
-                <span>Free Delivery Above <strong>₹{settings.freeShippingMinAmount}</strong></span>
+                <span><strong>₹{settings.freeShippingMinAmount}</strong> वरील ऑर्डरवर मोफत डिलिव्हरी</span>
               </div>
               <div className="flex items-center gap-1.5 bg-white/10 px-3 py-1.5 rounded-lg border border-white/10">
                 <RotateCcw size={14} className="text-amber-400" />
-                <span>15-Min Instant Cancellation</span>
+                <span>15 मिनिटांच्या आत ऑर्डर बदलू शकता.</span>
               </div>
             </div>
           </div>
 
           {/* Quick Action PWA / Offer Box */}
           <div className="bg-white/10 backdrop-blur-md p-5 rounded-2xl border border-white/20 text-center max-w-xs shrink-0 shadow-xl">
-            <div className="text-xs font-bold text-[#D4AF37] uppercase tracking-wider">Customer Privilege</div>
-            <div className="text-lg font-extrabold text-white mt-1">First 3 COD Orders FREE</div>
-            <p className="text-[11px] text-gray-200 mt-1 mb-3">
-              No extra COD service fee on your first three grocery orders.
-            </p>
+            <div className="text-xs font-bold text-[#D4AF37] uppercase tracking-wider">
+              🎉 ग्राहकांसाठी खास सवलत!
+            </div>
+            <div className="text-lg font-extrabold text-white mt-1">
+              सर्व COD ऑर्डरवर सेवा शुल्क माफ!
+            </div>
+            <div className="text-[11px] text-gray-200 mt-2 mb-3 space-y-1 text-center">
+              <p>💚 डिलिव्हरीच्या वेळी पेमेंट केल्यास कोणतेही अतिरिक्त COD सेवा शुल्क नाही.</p>
+              <p className="text-[10.5px] text-gray-300">
+                ℹ️ डिलिव्हरीच्या वेळी पेमेंट न केल्यासच ₹49 अतिरिक्त COD सेवा शुल्क लागू होईल.
+              </p>
+            </div>
             <div className="space-y-2">
               <PWAInstallButton variant="prominent" />
               <button
