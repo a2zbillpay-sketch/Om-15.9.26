@@ -164,7 +164,7 @@ export function setAdminSessionCookie(res: ServerResponse, session: AdminSession
   if (!token) return false;
 
   const maxAgeSeconds = Math.floor(SESSION_MAX_AGE_MS / 1000);
-  const cookieStr = `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=None; Secure; Max-Age=${maxAgeSeconds}`;
+  const cookieStr = `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=None; Secure; Partitioned; Max-Age=${maxAgeSeconds}`;
   res.setHeader('Set-Cookie', cookieStr);
   return true;
 }
@@ -173,6 +173,6 @@ export function setAdminSessionCookie(res: ServerResponse, session: AdminSession
  * Clears the secure session cookie on logout.
  */
 export function clearAdminSessionCookie(res: ServerResponse): void {
-  const cookieStr = `${SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=None; Secure; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT`;
+  const cookieStr = `${SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=None; Secure; Partitioned; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT`;
   res.setHeader('Set-Cookie', cookieStr);
 }

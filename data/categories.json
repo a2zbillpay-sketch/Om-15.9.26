@@ -1,0 +1,77 @@
+[
+  {
+    "id": "cat-1",
+    "name": "Rice & Grains",
+    "imageUrl": ""
+  },
+  {
+    "id": "cat-2",
+    "name": "Pulses & Dal",
+    "imageUrl": "https://images.unsplash.com/photo-1596040033229-a9821ebd058d?auto=format&fit=crop&w=400&q=80"
+  },
+  {
+    "id": "cat-3",
+    "name": "Flour & Atta",
+    "imageUrl": "https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&w=400&q=80"
+  },
+  {
+    "id": "cat-4",
+    "name": "Oil & Ghee",
+    "imageUrl": "https://images.unsplash.com/photo-1474979266404-7eaacbcd87c5?auto=format&fit=crop&w=400&q=80"
+  },
+  {
+    "id": "cat-5",
+    "name": "मसाले आणि मसाला",
+    "imageUrl": "/uploads/categories/cat_1792482453174_fvfgoz7.jpg"
+  },
+  {
+    "id": "cat-6",
+    "name": "Snacks & Packaged Foods",
+    "imageUrl": "https://images.unsplash.com/photo-1621996346565-e3d5d6281699?auto=format&fit=crop&w=400&q=80"
+  },
+  {
+    "id": "cat-7",
+    "name": "Fasting foods",
+    "imageUrl": "https://images.unsplash.com/photo-1601050690597-df0568f70950?auto=format&fit=crop&w=400&q=80"
+  },
+  {
+    "id": "cat-8",
+    "name": "Beverages",
+    "imageUrl": "https://images.unsplash.com/photo-1544787219-7f47ccb76574?auto=format&fit=crop&w=400&q=80"
+  },
+  {
+    "id": "cat-9",
+    "name": "Dry fruits",
+    "imageUrl": "https://images.unsplash.com/photo-1599599810769-bcde5a160d32?auto=format&fit=crop&w=400&q=80"
+  },
+  {
+    "id": "cat-10",
+    "name": "Dairy Products",
+    "imageUrl": "https://images.unsplash.com/photo-1628088062854-d1870b4553da?auto=format&fit=crop&w=400&q=80"
+  },
+  {
+    "id": "cat-11",
+    "name": "Personal Care",
+    "imageUrl": "https://images.unsplash.com/photo-1584308666744-24d5c474f2ae?auto=format&fit=crop&w=400&q=80"
+  },
+  {
+    "id": "cat-12",
+    "name": "Cleaning & Household",
+    "imageUrl": "https://images.unsplash.com/photo-1585421514738-01798e348b17?auto=format&fit=crop&w=400&q=80"
+  },
+  {
+    "id": "cat-13",
+    "name": "Pooja Needs",
+    "imageUrl": "https://images.unsplash.com/photo-1609137144813-7d9921338f24?auto=format&fit=crop&w=400&q=80"
+  },
+  {
+    "id": "cat-14",
+    "name": "Ayurvedic Products",
+    "imageUrl": "https://images.unsplash.com/photo-1608571423902-eed4a5ad8108?auto=format&fit=crop&w=400&q=80"
+  },
+  {
+    "id": "cat-15",
+    "name": "Other Grocery Items",
+    "imageUrl": "https://images.unsplash.com/photo-1584269600464-37b1b58a9fe7?auto=format&fit=crop&w=400&q=80"
+  }
+]

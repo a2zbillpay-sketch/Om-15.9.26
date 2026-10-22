@@ -277,9 +277,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       const parsed: Category[] = JSON.parse(saved);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        const existingIds = new Set(parsed.map((c) => c.id));
-        const missingInitials = INITIAL_CATEGORIES.filter((c) => !existingIds.has(c.id));
-        return [...parsed, ...missingInitials];
+        return parsed;
       }
       return INITIAL_CATEGORIES;
     } catch {
@@ -300,8 +298,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!saved) return INITIAL_PRODUCTS;
     try {
       const parsed: Product[] = JSON.parse(saved);
-      const existingIds = new Set(parsed.map((p) => p.id));
-      const missing = INITIAL_PRODUCTS.filter((p) => !existingIds.has(p.id));
+      if (!Array.isArray(parsed)) return INITIAL_PRODUCTS;
       const normalized = parsed.map((p) => {
         let name = p.name;
         let brand = p.brand;
@@ -318,7 +315,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }));
         return { ...p, name, brand, variants: updatedVariants };
       });
-      return [...normalized, ...missing];
+      return normalized;
     } catch {
       return INITIAL_PRODUCTS;
     }
@@ -790,28 +787,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const dbProducts = await fetchProductsFromSupabase();
       // If Supabase is temporarily unavailable (returns null), do not overwrite central catalog
       if (dbProducts !== null) {
-        const dbIds = new Set(dbProducts.map((p) => p.id));
-        const remainingInitials = INITIAL_PRODUCTS.filter((p) => !dbIds.has(p.id));
-        const merged = [...dbProducts, ...remainingInitials];
-        setProducts(merged);
+        setProducts(dbProducts);
       }
     } catch (err) {
       console.warn('Error refreshing products from Supabase:', err);
     }
   };
 
-  // Synchronize categories with Supabase
+  // Synchronize categories with persistent backend storage and Supabase
   const refreshCategories = async () => {
-    if (!isSupabaseConfigured) return;
     try {
       const dbCategories = await fetchCategoriesFromDb();
       if (dbCategories !== null && dbCategories.length > 0) {
-        const dbIds = new Set(dbCategories.map((c) => c.id));
-        const remainingInitials = INITIAL_CATEGORIES.filter((c) => !dbIds.has(c.id));
-        setCategories([...dbCategories, ...remainingInitials]);
+        setCategories(dbCategories);
+        try {
+          localStorage.setItem('om_categories', JSON.stringify(dbCategories));
+        } catch {
+          // ignore
+        }
       }
     } catch (err) {
-      console.warn('Error refreshing categories from Supabase:', err);
+      console.warn('Error refreshing categories:', err);
     }
   };
 
@@ -877,9 +873,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [currentUser.phone, activeRole, refreshCustomerWallet]);
 
   useEffect(() => {
+    refreshCategories();
     if (isSupabaseConfigured) {
       refreshProducts();
-      refreshCategories();
     }
   }, [isSupabaseConfigured]);
 
@@ -1159,14 +1155,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       imageUrl: categoryData.imageUrl ? categoryData.imageUrl.trim() : '',
     };
 
-    if (isSupabaseConfigured) {
-      const dbResult = await saveCategoryToDb(newCategory);
-      if (!dbResult.success) {
-        console.warn('Failed to sync new category to Supabase:', dbResult.error);
-      }
+    const dbResult = await saveCategoryToDb(newCategory);
+    if (!dbResult.success) {
+      console.warn('Failed to sync new category:', dbResult.error);
+      return { success: false, error: dbResult.error || 'Failed to save category.' };
     }
 
-    setCategories((prev) => [...prev, newCategory]);
+    setCategories((prev) => {
+      const updated = [...prev, newCategory];
+      try {
+        localStorage.setItem('om_categories', JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
     return { success: true, category: newCategory };
   };
 
@@ -1200,14 +1201,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       imageUrl: updates.imageUrl !== undefined ? updates.imageUrl.trim() : existing.imageUrl,
     };
 
-    if (isSupabaseConfigured) {
-      const dbResult = await saveCategoryToDb(updatedCategory);
-      if (!dbResult.success) {
-        console.warn('Failed to sync category update to Supabase:', dbResult.error);
-      }
+    const dbResult = await saveCategoryToDb(updatedCategory);
+    if (!dbResult.success) {
+      console.warn('Failed to sync category update:', dbResult.error);
+      return { success: false, error: dbResult.error || 'Failed to update category.' };
     }
 
-    setCategories((prev) => prev.map((c) => (c.id === id ? updatedCategory! : c)));
+    setCategories((prev) => {
+      const updated = prev.map((c) => (c.id === id ? updatedCategory! : c));
+      try {
+        localStorage.setItem('om_categories', JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
     return { success: true, category: updatedCategory };
   };
 
@@ -1226,14 +1232,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
     }
 
-    if (isSupabaseConfigured) {
-      const dbResult = await deleteCategoryFromDb(id);
-      if (!dbResult.success) {
-        console.warn('Failed to delete category in Supabase:', dbResult.error);
-      }
+    const dbResult = await deleteCategoryFromDb(id);
+    if (!dbResult.success) {
+      console.warn('Failed to delete category:', dbResult.error);
+      return { success: false, error: dbResult.error || 'Failed to delete category.' };
     }
 
-    setCategories((prev) => prev.filter((c) => c.id !== id));
+    setCategories((prev) => {
+      const updated = prev.filter((c) => c.id !== id);
+      try {
+        localStorage.setItem('om_categories', JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
     return { success: true };
   };
 

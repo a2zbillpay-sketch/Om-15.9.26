@@ -275,8 +275,52 @@ export async function optimizeProductImage(
 const PRIMARY_BUCKET = 'product-images';
 const FALLBACK_BUCKET = 'products';
 
+async function uploadToServerApi(
+  fileBlob: Blob,
+  originalFileName: string,
+  folder: string
+): Promise<ImageUploadResult | null> {
+  try {
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(fileBlob);
+    });
+
+    const res = await fetch('/api/categories', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        action: 'upload',
+        dataUrl,
+        fileName: originalFileName,
+        folder,
+      }),
+    });
+
+    if (res.ok) {
+      const json = await res.json();
+      if (json.success && json.url) {
+        return {
+          success: true,
+          url: json.url,
+          isCloudStorage: true,
+        };
+      }
+    } else {
+      const errorJson = await res.json().catch(() => ({}));
+      console.warn('Storage upload error response:', errorJson?.error || res.statusText);
+    }
+  } catch (e) {
+    console.warn('Server upload notice (falling back):', e);
+  }
+  return null;
+}
+
 /**
- * Uploads an optimized product image blob to cloud storage (Supabase Storage).
+ * Uploads an optimized product image blob to cloud storage (Supabase Storage or Server).
  * Falls back gracefully in local development when Supabase Storage is not provisioned.
  */
 export async function uploadProductImageToStorage(
@@ -284,7 +328,13 @@ export async function uploadProductImageToStorage(
   originalFileName: string = 'product.jpg',
   folder: string = 'catalog'
 ): Promise<ImageUploadResult> {
-  // If Supabase is configured and connected
+  // 1. Primary: Try server upload endpoint for persistent, permanent file storage
+  const serverResult = await uploadToServerApi(fileBlob, originalFileName, folder);
+  if (serverResult && serverResult.success) {
+    return serverResult;
+  }
+
+  // 2. If Supabase is configured and connected
   if (isSupabaseConfigured && supabase) {
     try {
       const ext = originalFileName.split('.').pop()?.toLowerCase() || 'jpg';
