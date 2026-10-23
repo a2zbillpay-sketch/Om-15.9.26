@@ -77,7 +77,10 @@ export async function loadCategories(): Promise<CategoryItem[]> {
   const supabase = getSupabaseClient();
   if (supabase) {
     try {
-      const { data, error } = await supabase.from('categories').select('id, name, image_url');
+      const { data, error } = await supabase
+        .from('categories')
+        .select('id, name, image_url, display_order')
+        .order('display_order', { ascending: true });
       if (!error && Array.isArray(data) && data.length > 0) {
         return data.map((row) => ({
           id: String(row.id),
@@ -102,19 +105,21 @@ export function saveCategoriesToFile(categories: CategoryItem[]): void {
   }
 }
 
-async function syncCategoryToSupabaseIfConfigured(category: CategoryItem): Promise<void> {
+async function syncCategoryToSupabaseIfConfigured(category: CategoryItem, orderIndex?: number): Promise<void> {
   const supabase = getSupabaseClient();
   if (!supabase) return;
 
   try {
-    const { error } = await supabase.from('categories').upsert(
-      {
-        id: category.id,
-        name: category.name.trim(),
-        image_url: category.imageUrl && category.imageUrl.trim() ? category.imageUrl.trim() : null,
-      },
-      { onConflict: 'id' }
-    );
+    const payload: Record<string, any> = {
+      id: category.id,
+      name: category.name.trim(),
+      image_url: category.imageUrl && category.imageUrl.trim() ? category.imageUrl.trim() : null,
+      updated_at: new Date().toISOString(),
+    };
+    if (typeof orderIndex === 'number') {
+      payload.display_order = orderIndex;
+    }
+    const { error } = await supabase.from('categories').upsert(payload, { onConflict: 'id' });
     if (error && !error.message?.includes('schema cache')) {
       console.warn('Supabase categories table upsert note:', error.message);
     }
@@ -337,8 +342,8 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
         })).filter((c: CategoryItem) => c.name.length > 0);
 
         saveCategoriesToFile(validatedCategories);
-        for (const cat of validatedCategories) {
-          syncCategoryToSupabaseIfConfigured(cat).catch(() => {});
+        for (let i = 0; i < validatedCategories.length; i++) {
+          syncCategoryToSupabaseIfConfigured(validatedCategories[i], i + 1).catch(() => {});
         }
 
         res.statusCode = 200;
@@ -372,8 +377,9 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
         updatedList = [...current, updatedItem];
       }
 
+      const orderIndex = existingIndex >= 0 ? existingIndex + 1 : updatedList.length;
       saveCategoriesToFile(updatedList);
-      syncCategoryToSupabaseIfConfigured(updatedItem).catch(() => {});
+      syncCategoryToSupabaseIfConfigured(updatedItem, orderIndex).catch(() => {});
 
       // Safe cleanup of replaced photo ONLY after successful category save
       if (oldImageUrl && oldImageUrl !== updatedItem.imageUrl) {

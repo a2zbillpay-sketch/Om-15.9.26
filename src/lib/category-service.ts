@@ -71,7 +71,8 @@ export async function fetchCategoriesFromDb(): Promise<Category[] | null> {
     try {
       const { data: catData, error: catError } = await supabase
         .from('categories')
-        .select('id, name, image_url');
+        .select('id, name, image_url, display_order')
+        .order('display_order', { ascending: true });
 
       if (!catError && Array.isArray(catData) && catData.length > 0) {
         const dbCategories: Category[] = catData.map((row) => ({
