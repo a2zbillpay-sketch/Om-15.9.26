@@ -60,14 +60,15 @@ export const CustomerStore: React.FC<CustomerStoreProps> = ({
 
   // Filter products by category and search
   const filteredProducts = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
     return products.filter((p) => {
       const matchesCategory =
         selectedCategoryId === 'ALL' || p.categoryId === selectedCategoryId;
       const matchesSearch =
-        !searchQuery.trim() ||
-        p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (p.brand && p.brand.toLowerCase().includes(searchQuery.toLowerCase())) ||
-        p.description.toLowerCase().includes(searchQuery.toLowerCase());
+        !query ||
+        p.name.toLowerCase().includes(query) ||
+        (p.brand && p.brand.toLowerCase().includes(query)) ||
+        p.description.toLowerCase().includes(query);
       return matchesCategory && matchesSearch;
     });
   }, [products, selectedCategoryId, searchQuery]);
