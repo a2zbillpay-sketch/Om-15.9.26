@@ -36,6 +36,7 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
   const [isBarcodeScannerOpen, setIsBarcodeScannerOpen] = useState(false);
   const [barcodeError, setBarcodeError] = useState<string | null>(null);
   const [description, setDescription] = useState('');
+  const [searchKeywords, setSearchKeywords] = useState('');
   const [isDiscountExcluded, setIsDiscountExcluded] = useState(false);
   const [lowStockThreshold, setLowStockThreshold] = useState<string>('');
   const [variants, setVariants] = useState<ProductVariant[]>([]);
@@ -52,6 +53,7 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
       setBarcode(product.barcode || '');
       setBarcodeError(null);
       setDescription(product.description || '');
+      setSearchKeywords(product.searchKeywords || '');
       setIsDiscountExcluded(Boolean(product.isDiscountExcluded));
       setLowStockThreshold(
         product.lowStockThreshold !== undefined && product.lowStockThreshold !== null
@@ -269,6 +271,7 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
         imageUrl: imageUrl.trim(),
         barcode: validatedBarcode,
         description: description.trim(),
+        searchKeywords: searchKeywords.trim() || undefined,
         isDiscountExcluded,
         lowStockThreshold: parsedThreshold,
         variants: processedVariants,
@@ -459,6 +462,23 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
               className="w-full p-2.5 border border-gray-300 rounded-xl text-gray-900 focus:border-[#0F2C59] focus:ring-1 focus:ring-[#0F2C59] outline-none"
               placeholder="Short description of this product..."
             />
+          </div>
+
+          <div>
+            <label className="font-bold text-gray-700 block mb-1">
+              Search Keywords / Synonyms <span className="text-xs text-gray-400 font-normal">(Comma-separated • For customer search only)</span>
+            </label>
+            <input
+              type="text"
+              id="edit-product-search-keywords-input"
+              value={searchKeywords}
+              onChange={(e) => setSearchKeywords(e.target.value)}
+              className="w-full p-2.5 border border-gray-300 rounded-xl text-gray-900 focus:border-[#0F2C59] focus:ring-1 focus:ring-[#0F2C59] outline-none"
+              placeholder="e.g. साबण, bathing bar, bath soap, santur"
+            />
+            <p className="text-[11px] text-gray-500 mt-1">
+              अनेक शोध शब्द स्वल्पविरामाने (comma) वेगळे करा. हे शब्द ग्राहकांना शोधताना उपयोगी पडतील पण स्टोअरमध्ये स्वतंत्रपणे दिसणार नाहीत.
+            </p>
           </div>
 
           {/* Price Capped / Regulated Item Toggle */}

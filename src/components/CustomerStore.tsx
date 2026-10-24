@@ -64,11 +64,22 @@ export const CustomerStore: React.FC<CustomerStoreProps> = ({
     return products.filter((p) => {
       const matchesCategory =
         selectedCategoryId === 'ALL' || p.categoryId === selectedCategoryId;
+      const matchesKeywords =
+        Boolean(p.searchKeywords) &&
+        (p.searchKeywords!.toLowerCase().includes(query) ||
+          p.searchKeywords!
+            .toLowerCase()
+            .split(',')
+            .some((kw) => {
+              const trimmedKw = kw.trim();
+              return trimmedKw.length > 0 && (trimmedKw.includes(query) || query.includes(trimmedKw));
+            }));
       const matchesSearch =
         !query ||
         p.name.toLowerCase().includes(query) ||
         (p.brand && p.brand.toLowerCase().includes(query)) ||
-        p.description.toLowerCase().includes(query);
+        p.description.toLowerCase().includes(query) ||
+        matchesKeywords;
       return matchesCategory && matchesSearch;
     });
   }, [products, selectedCategoryId, searchQuery]);

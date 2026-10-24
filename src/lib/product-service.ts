@@ -352,6 +352,9 @@ export function normalizeAndValidateProduct(raw: any): ProductValidationResult {
   const categoryId = raw.categoryId ? String(raw.categoryId).trim() : '';
   const imageUrl = raw.imageUrl && String(raw.imageUrl).trim() ? String(raw.imageUrl).trim() : undefined;
   const isDiscountExcluded = Boolean(raw.isDiscountExcluded);
+  const searchKeywords = raw.searchKeywords && String(raw.searchKeywords).trim()
+    ? String(raw.searchKeywords).trim()
+    : undefined;
 
   // Barcode normalization & validation
   const barcodeValidation = normalizeAndValidateBarcode(raw.barcode);
@@ -384,6 +387,7 @@ export function normalizeAndValidateProduct(raw: any): ProductValidationResult {
       categoryId,
       imageUrl,
       barcode,
+      searchKeywords,
       purchasePrice:
         raw.purchasePrice !== undefined && raw.purchasePrice !== null && !isNaN(Number(raw.purchasePrice))
           ? Number(raw.purchasePrice)
@@ -434,6 +438,8 @@ export async function saveProductWithCascadeSync(
       ? (primaryVariant.packLabel || `${primaryVariant.packSize || 1} ${primaryVariant.unit || 'KG'}`)
       : '1 KG';
 
+    const keywordsVal = product.searchKeywords && product.searchKeywords.trim() ? product.searchKeywords.trim() : null;
+
     const productPayload: Record<string, any> = {
       id: product.id,
       name: product.name,
@@ -448,6 +454,8 @@ export async function saveProductWithCascadeSync(
       wholesale_tier_discount: product.variants || [],
       barcode: product.barcode && product.barcode.trim() ? product.barcode.trim() : null,
       is_discount_excluded: product.isDiscountExcluded ?? false,
+      search_keywords: keywordsVal,
+      badge: keywordsVal,
       updated_at: new Date().toISOString(),
     };
 
@@ -455,13 +463,24 @@ export async function saveProductWithCascadeSync(
       .from('products')
       .upsert(productPayload, { onConflict: 'id' });
 
-    // Graceful fallback: If barcode or is_discount_excluded column has not yet been migrated in Supabase table
-    if (prodInsertResult.error && prodInsertResult.error.message?.includes('barcode')) {
-      const fallbackPayload = { ...productPayload };
-      delete fallbackPayload.barcode;
+    // Graceful fallback: If search_keywords column has not yet been added to Supabase public.products table
+    if (
+      prodInsertResult.error &&
+      (prodInsertResult.error.message?.includes('search_keywords') ||
+        prodInsertResult.error.message?.toLowerCase().includes("search_keywords"))
+    ) {
+      delete productPayload.search_keywords;
       prodInsertResult = await supabaseClient
         .from('products')
-        .upsert(fallbackPayload, { onConflict: 'id' });
+        .upsert(productPayload, { onConflict: 'id' });
+    }
+
+    // Graceful fallback: If barcode or is_discount_excluded column has not yet been migrated in Supabase table
+    if (prodInsertResult.error && prodInsertResult.error.message?.includes('barcode')) {
+      delete productPayload.barcode;
+      prodInsertResult = await supabaseClient
+        .from('products')
+        .upsert(productPayload, { onConflict: 'id' });
     }
 
     if (
@@ -469,11 +488,10 @@ export async function saveProductWithCascadeSync(
       (prodInsertResult.error.message?.includes('is_discount_excluded') ||
         prodInsertResult.error.message?.toLowerCase().includes("could not find the 'is_discount_excluded' column"))
     ) {
-      const fallbackPayload = { ...productPayload };
-      delete fallbackPayload.is_discount_excluded;
+      delete productPayload.is_discount_excluded;
       prodInsertResult = await supabaseClient
         .from('products')
-        .upsert(fallbackPayload, { onConflict: 'id' });
+        .upsert(productPayload, { onConflict: 'id' });
     }
 
     if (prodInsertResult.error) {

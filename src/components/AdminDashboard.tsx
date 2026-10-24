@@ -683,6 +683,7 @@ export const AdminDashboard: React.FC = () => {
     barcode: '',
     isDiscountExcluded: false,
     lowStockThreshold: '',
+    searchKeywords: '',
   });
 
   // Multiple variants state for the new product - always starts with a 100% BLANK row
@@ -709,6 +710,8 @@ export const AdminDashboard: React.FC = () => {
       imageUrl: '',
       barcode: '',
       isDiscountExcluded: false,
+      lowStockThreshold: '',
+      searchKeywords: '',
     });
     // Table always opens completely blank with 0 pre-filled values
     setVariantRows([createBlankVariantRow()]);
@@ -725,6 +728,8 @@ export const AdminDashboard: React.FC = () => {
       imageUrl: '',
       barcode: initialBarcode,
       isDiscountExcluded: false,
+      lowStockThreshold: '',
+      searchKeywords: '',
     });
     setVariantRows([createBlankVariantRow()]);
     setFormValidationError(null);
@@ -782,6 +787,8 @@ export const AdminDashboard: React.FC = () => {
       imageUrl: '',
       barcode: '',
       isDiscountExcluded: false,
+      lowStockThreshold: '',
+      searchKeywords: '',
     });
     setVariantRows([createBlankVariantRow()]);
     setFormValidationError(null);
@@ -983,10 +990,13 @@ export const AdminDashboard: React.FC = () => {
   });
 
   const filteredProducts = products.filter((p) => {
+    const searchQ = inventorySearch.trim().toLowerCase();
     const matchesSearch =
-      p.name.toLowerCase().includes(inventorySearch.toLowerCase()) ||
-      (p.brand && p.brand.toLowerCase().includes(inventorySearch.toLowerCase())) ||
-      (p.barcode && p.barcode.toLowerCase().includes(inventorySearch.toLowerCase()));
+      !searchQ ||
+      p.name.toLowerCase().includes(searchQ) ||
+      (p.brand && p.brand.toLowerCase().includes(searchQ)) ||
+      (p.barcode && p.barcode.toLowerCase().includes(searchQ)) ||
+      (p.searchKeywords && p.searchKeywords.toLowerCase().includes(searchQ));
     if (!matchesSearch) return false;
 
     if (inventoryStockFilter === 'LOW_STOCK') {
@@ -1196,6 +1206,7 @@ export const AdminDashboard: React.FC = () => {
       categoryId: newProductData.categoryId,
       imageUrl: newProductData.imageUrl.trim() || undefined,
       barcode: validatedBarcode,
+      searchKeywords: newProductData.searchKeywords.trim() || undefined,
       purchasePrice: constructedVariants[0]?.purchasePrice,
       discount: constructedVariants[0]?.discount,
       isDiscountExcluded: newProductData.isDiscountExcluded,
@@ -2586,6 +2597,39 @@ export const AdminDashboard: React.FC = () => {
                         Already used by &quot;{newBarcodeConflict.name}&quot;{newBarcodeConflict.brand ? ` (${newBarcodeConflict.brand})` : ''}
                       </p>
                     )}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                  <div>
+                    <label className="font-bold text-gray-700 block mb-1">
+                      Description <span className="text-xs text-gray-400 font-normal">(Optional)</span>
+                    </label>
+                    <input
+                      type="text"
+                      id="new-product-description-input"
+                      placeholder="Short description of this product..."
+                      value={newProductData.description}
+                      onChange={(e) => setNewProductData({ ...newProductData, description: e.target.value })}
+                      className="w-full p-2.5 border border-gray-300 rounded-xl outline-none focus:border-[#0F2C59] focus:ring-1 focus:ring-[#0F2C59] text-gray-900 bg-white"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="font-bold text-gray-700 block mb-1">
+                      Search Keywords / Synonyms <span className="text-xs text-gray-400 font-normal">(Comma-separated • For search only)</span>
+                    </label>
+                    <input
+                      type="text"
+                      id="new-product-search-keywords-input"
+                      placeholder="e.g. साबण, bathing bar, bath soap, santur"
+                      value={newProductData.searchKeywords}
+                      onChange={(e) => setNewProductData({ ...newProductData, searchKeywords: e.target.value })}
+                      className="w-full p-2.5 border border-gray-300 rounded-xl outline-none focus:border-[#0F2C59] focus:ring-1 focus:ring-[#0F2C59] text-gray-900 bg-white"
+                    />
+                    <p className="text-[10px] text-gray-500 mt-1">
+                      अनेक शोध शब्द स्वल्पविरामाने (comma) वेगळे करा. हे शब्द ग्राहकांना शोधताना उपयोगी पडतील पण स्टोअरमध्ये स्वतंत्रपणे दिसणार नाहीत.
+                    </p>
                   </div>
                 </div>
 

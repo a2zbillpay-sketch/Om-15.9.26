@@ -1762,6 +1762,7 @@ export async function fetchProductsFromSupabase(): Promise<Product[] | null> {
         imageUrl: p.image_url && String(p.image_url).trim() ? String(p.image_url).trim() : undefined,
         barcode: p.barcode ? String(p.barcode).trim() : null,
         isDiscountExcluded: p.is_discount_excluded ?? false,
+        searchKeywords: (p.search_keywords || p.badge || '').trim() || undefined,
         purchasePrice: p.purchase_price !== undefined ? Number(p.purchase_price) : (variants[0]?.purchasePrice || undefined),
         discount: p.discount !== undefined ? Number(p.discount) : (variants[0]?.discount || undefined),
         variants,

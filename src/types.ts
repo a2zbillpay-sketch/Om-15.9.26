@@ -113,6 +113,7 @@ export interface Product {
   imageUrl?: string;
   barcode?: string | null;
   isDiscountExcluded: boolean;
+  searchKeywords?: string;
   purchasePrice?: number;
   discount?: number;
   lowStockThreshold?: number;
