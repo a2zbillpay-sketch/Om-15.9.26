@@ -56,7 +56,9 @@ import {
   fetchCategoriesFromDb,
   saveCategoryToDb,
   deleteCategoryFromDb,
+  reorderCategoriesInDb,
 } from '../lib/category-service';
+import { reorderProductsInDb } from '../lib/product-service';
 import {
   calculateCustomerOutstanding,
   allocateCodCollection,
@@ -159,6 +161,7 @@ interface AppContextType {
     updates: { name?: string; imageUrl?: string }
   ) => Promise<{ success: boolean; error?: string; category?: Category }>;
   deleteCategory: (id: string) => Promise<{ success: boolean; error?: string }>;
+  reorderCategories: (newCategories: Category[]) => Promise<{ success: boolean; error?: string }>;
   products: Product[];
   addProduct: (product: Omit<Product, 'id' | 'createdAt'>) => Promise<{ success: boolean; error?: string }>;
   bulkAddProducts: (
@@ -166,6 +169,8 @@ interface AppContextType {
   ) => Promise<{ successCount: number; failedCount: number; errors: string[] }>;
   updateProduct: (id: string, updates: Partial<Product>) => Promise<{ success: boolean; error?: string }>;
   deleteProduct: (id: string) => void;
+  reorderProducts: (newProducts: Product[]) => Promise<{ success: boolean; error?: string }>;
+  reorderVariants: (productId: string, newVariants: ProductVariant[]) => Promise<{ success: boolean; error?: string }>;
   cart: CartItem[];
   addToCart: (product: Product, variant: ProductVariant, quantity?: number) => void;
   updateCartQty: (variantId: string, quantity: number) => void;
@@ -1246,6 +1251,57 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return updated;
     });
     return { success: true };
+  };
+
+  const reorderCategories = async (
+    newCategories: Category[]
+  ): Promise<{ success: boolean; error?: string }> => {
+    // 1. Optimistically update local state & localStorage
+    setCategories(newCategories);
+    try {
+      localStorage.setItem('om_categories', JSON.stringify(newCategories));
+    } catch {}
+
+    // 2. Persist to server and Supabase
+    const res = await reorderCategoriesInDb(newCategories);
+    if (!res.success) {
+      console.warn('Reorder categories sync note:', res.error);
+    }
+    return res;
+  };
+
+  const reorderProducts = async (
+    newProducts: Product[]
+  ): Promise<{ success: boolean; error?: string }> => {
+    // 1. Optimistically update local state & localStorage
+    setProducts(newProducts);
+    try {
+      localStorage.setItem('om_products', JSON.stringify(newProducts));
+    } catch {}
+
+    // 2. Persist to server and Supabase
+    const res = await reorderProductsInDb(newProducts);
+    if (!res.success) {
+      console.warn('Reorder products sync note:', res.error);
+    }
+    return res;
+  };
+
+  const reorderVariants = async (
+    productId: string,
+    newVariants: ProductVariant[]
+  ): Promise<{ success: boolean; error?: string }> => {
+    const targetProduct = products.find((p) => p.id === productId);
+    if (!targetProduct) {
+      return { success: false, error: 'Product not found.' };
+    }
+
+    const updatedProduct: Product = {
+      ...targetProduct,
+      variants: newVariants,
+    };
+
+    return updateProduct(productId, updatedProduct);
   };
 
   // Cart operations (scoped to active customer)
@@ -3100,11 +3156,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addCategory,
         updateCategory,
         deleteCategory,
+        reorderCategories,
         products,
         addProduct,
         bulkAddProducts,
         updateProduct,
         deleteProduct,
+        reorderProducts,
+        reorderVariants,
         cart,
         addToCart,
         updateCartQty,

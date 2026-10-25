@@ -18,7 +18,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
   );
   const [isZoomOpen, setIsZoomOpen] = useState(false);
   const [isRequestModalOpen, setIsRequestModalOpen] = useState(false);
-  const [requestedQty, setRequestedQty] = useState<number>(1);
+  const [requestedQty, setRequestedQty] = useState<number>(0);
   const [hasRequested, setHasRequested] = useState<boolean>(false);
   const [lastRequestDate, setLastRequestDate] = useState<string>('');
 
@@ -59,11 +59,11 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
   };
 
   const handleRequestProduct = () => {
-    const qty = Math.max(1, requestedQty);
+    if (requestedQty <= 0) return;
     const req = requestProduct({
       product,
       variant: currentVariant,
-      quantity: qty,
+      quantity: requestedQty,
     });
     setHasRequested(true);
     setLastRequestDate(req.requestDate);
@@ -87,7 +87,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
         <div className="pt-2.5 px-3 flex items-center justify-between gap-1 min-h-[28px]">
           {isOutOfStock ? (
             <span className="bg-red-600 text-white font-black text-[10px] px-2 py-0.5 rounded-full uppercase tracking-wider shadow-xs">
-              Out of Stock
+              शिल्लक नाही
             </span>
           ) : discountPercent > 0 ? (
             <span className="bg-emerald-600 text-white font-black text-[10px] px-2 py-0.5 rounded-full uppercase tracking-wider shadow-xs">
@@ -248,17 +248,17 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
 
               {/* Clear Out of Stock Label */}
               <span className="text-xs font-bold text-red-600 bg-red-50 px-2.5 py-1.5 rounded-lg border border-red-200 shrink-0">
-                Out of Stock
+                शिल्लक नाही
               </span>
             </div>
 
             {/* Book this Product Action Row - Fully visible on mobile screens, no horizontal overflow or clipping */}
             <div className="flex items-center gap-2 w-full">
-              {/* Optional quantity selector for product request */}
+              {/* Quantity selector for product request */}
               <div className="flex items-center bg-gray-100 rounded-xl p-0.5 border border-gray-200 shrink-0">
                 <button
                   type="button"
-                  onClick={() => setRequestedQty((q) => Math.max(1, q - 1))}
+                  onClick={() => setRequestedQty((q) => Math.max(0, q - 1))}
                   className="w-7 h-7 flex items-center justify-center text-gray-600 hover:text-black hover:bg-white rounded-lg transition font-bold text-xs cursor-pointer"
                   title="Decrease requested quantity"
                   aria-label="Decrease requested quantity"
@@ -284,11 +284,16 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
                 id={`request-product-${currentVariant.id}`}
                 type="button"
                 onClick={handleRequestProduct}
-                className="flex-1 min-w-0 bg-[#0F2C59] hover:bg-[#153e7d] text-white font-bold text-xs py-2 px-2.5 rounded-xl shadow-xs transition flex items-center justify-center gap-1.5 cursor-pointer"
-                title="Book this product when it becomes available"
+                disabled={requestedQty <= 0}
+                className={`flex-1 min-w-0 font-bold text-xs py-2 px-2.5 rounded-xl shadow-xs transition flex items-center justify-center gap-1.5 ${
+                  requestedQty <= 0
+                    ? 'bg-gray-300 text-gray-500 cursor-not-allowed opacity-75'
+                    : 'bg-[#0F2C59] hover:bg-[#153e7d] text-white cursor-pointer active:scale-95'
+                }`}
+                title={requestedQty <= 0 ? 'कृपया आधी + दाबून संख्या निवडा' : 'आणून द्या'}
               >
-                <BellRing size={13} className="text-[#D4AF37] shrink-0" />
-                <span className="truncate">Book this Product</span>
+                <BellRing size={13} className={requestedQty <= 0 ? 'text-gray-400 shrink-0' : 'text-[#D4AF37] shrink-0'} />
+                <span className="truncate">आणून द्या</span>
                 {hasRequested && (
                   <span className="bg-emerald-500/25 text-emerald-300 text-[10px] px-1.5 py-0.2 rounded font-bold shrink-0 border border-emerald-400/40">
                     ✓ Saved

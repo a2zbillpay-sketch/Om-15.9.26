@@ -6,6 +6,7 @@ import {
   Clock,
   ShieldCheck,
   Search,
+  Mic,
   User as UserIcon,
   Upload,
   LogOut,
@@ -52,6 +53,61 @@ export const Navbar: React.FC<NavbarProps> = ({
   } = useApp();
 
   const [isLogoModalOpen, setIsLogoModalOpen] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const recognitionRef = React.useRef<any>(null);
+
+  const toggleVoiceSearch = () => {
+    if (isListening) {
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.stop();
+        } catch {}
+      }
+      setIsListening(false);
+      return;
+    }
+
+    const SpeechRecognition =
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+
+    if (!SpeechRecognition) {
+      alert('Voice search is not supported in this browser. Please type to search.');
+      return;
+    }
+
+    try {
+      const recognition = new SpeechRecognition();
+      recognition.lang = 'mr-IN'; // Default Marathi / Indian English
+      recognition.interimResults = false;
+      recognition.maxAlternatives = 1;
+
+      recognition.onstart = () => {
+        setIsListening(true);
+      };
+
+      recognition.onresult = (event: any) => {
+        const transcript = event.results?.[0]?.[0]?.transcript;
+        if (transcript) {
+          setSearchQuery(transcript.trim());
+        }
+        setIsListening(false);
+      };
+
+      recognition.onerror = () => {
+        setIsListening(false);
+      };
+
+      recognition.onend = () => {
+        setIsListening(false);
+      };
+
+      recognitionRef.current = recognition;
+      recognition.start();
+    } catch {
+      setIsListening(false);
+    }
+  };
+
   const isShopkeeper = activeRole !== Role.CUSTOMER;
 
   const totalCartCount = cart.reduce((acc, i) => acc + i.quantity, 0);
@@ -140,16 +196,35 @@ export const Navbar: React.FC<NavbarProps> = ({
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search Basmati Rice, Toor Dal, Atta, Cooking Oil, Spices..."
-              className="w-full pl-9 pr-4 py-2 bg-white text-gray-900 rounded-xl text-xs font-medium outline-none focus:ring-2 focus:ring-[#D4AF37] shadow-inner placeholder:text-gray-400"
+              className="w-full pl-9 pr-16 py-2 bg-white text-gray-900 rounded-xl text-xs font-medium outline-none focus:ring-2 focus:ring-[#D4AF37] shadow-inner placeholder:text-gray-400"
             />
-            {searchQuery && (
+            <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery('')}
+                  className="text-gray-400 hover:text-gray-700 text-xs font-bold p-1 cursor-pointer"
+                  title="Clear search"
+                  aria-label="Clear search"
+                >
+                  ✕
+                </button>
+              )}
               <button
-                onClick={() => setSearchQuery('')}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-700 text-xs font-bold"
+                type="button"
+                id="btn-voice-search-desktop"
+                onClick={toggleVoiceSearch}
+                className={`p-1.5 rounded-lg transition-colors cursor-pointer flex items-center justify-center ${
+                  isListening
+                    ? 'bg-red-500 text-white animate-pulse'
+                    : 'text-[#FF6B00] hover:bg-orange-50'
+                }`}
+                title={isListening ? 'Listening... Speak product name' : 'Voice Search - बोलून शोधा'}
+                aria-label="Voice Search"
               >
-                ✕
+                <Mic size={15} />
               </button>
-            )}
+            </div>
           </div>
         )}
 
@@ -278,18 +353,34 @@ export const Navbar: React.FC<NavbarProps> = ({
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search Basmati Rice, Toor Dal, Atta, Cooking Oil, Spices..."
-              className="w-full pl-9 pr-8 py-2.5 bg-white text-gray-900 rounded-xl text-xs font-medium outline-none focus:ring-2 focus:ring-[#D4AF37] shadow-inner placeholder:text-gray-400"
+              className="w-full pl-9 pr-16 py-2.5 bg-white text-gray-900 rounded-xl text-xs font-medium outline-none focus:ring-2 focus:ring-[#D4AF37] shadow-inner placeholder:text-gray-400"
             />
-            {searchQuery && (
+            <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery('')}
+                  className="text-gray-400 hover:text-gray-700 text-xs font-bold p-1 cursor-pointer"
+                  aria-label="Clear search"
+                >
+                  ✕
+                </button>
+              )}
               <button
                 type="button"
-                onClick={() => setSearchQuery('')}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-700 text-xs font-bold p-1 cursor-pointer"
-                aria-label="Clear search"
+                id="btn-voice-search-mobile"
+                onClick={toggleVoiceSearch}
+                className={`p-1.5 rounded-lg transition-colors cursor-pointer flex items-center justify-center ${
+                  isListening
+                    ? 'bg-red-500 text-white animate-pulse'
+                    : 'text-[#FF6B00] hover:bg-orange-50'
+                }`}
+                title={isListening ? 'Listening... Speak product name' : 'Voice Search - बोलून शोधा'}
+                aria-label="Voice Search"
               >
-                ✕
+                <Mic size={15} />
               </button>
-            )}
+            </div>
           </div>
         </div>
       )}

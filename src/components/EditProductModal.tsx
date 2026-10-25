@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { X, Save, Layers, Check, Trash2, AlertCircle, Scan, Loader2, Plus } from 'lucide-react';
 import { Product, ProductVariant, TieredPrice } from '../types';
 import { useApp } from '../context/AppContext';
@@ -26,7 +26,7 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
   onSave,
   existingProducts = [],
 }) => {
-  const { categories, settings } = useApp();
+  const { categories, settings, reorderVariants } = useApp();
   const availableCategories = categories && categories.length > 0 ? categories : INITIAL_CATEGORIES;
   const [name, setName] = useState('');
   const [brand, setBrand] = useState('');
@@ -43,6 +43,97 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [variantError, setVariantError] = useState<string | null>(null);
+
+  // Dedicated Handle-Only Pointer Drag & Drop for Variants (Mobile Touch & Desktop)
+  const [activeDragIdx, setActiveDragIdx] = useState<number | null>(null);
+  const [dropTargetIdx, setDropTargetIdx] = useState<number | null>(null);
+  const variantListRef = useRef<HTMLDivElement>(null);
+  const activeDragRef = useRef<number | null>(null);
+  const dropTargetRef = useRef<number | null>(null);
+  const variantsRef = useRef<ProductVariant[]>(variants);
+  variantsRef.current = variants;
+
+  const handleHandlePointerDown = (e: React.PointerEvent<HTMLDivElement>, fromIdx: number) => {
+    // Only primary touch/click allowed
+    if (e.button !== 0 && e.pointerType === 'mouse') return;
+    if (variants.length <= 1) return;
+
+    // Prevent scrolling and text selection during drag on handle
+    e.preventDefault();
+    e.stopPropagation();
+
+    activeDragRef.current = fromIdx;
+    dropTargetRef.current = fromIdx;
+    setActiveDragIdx(fromIdx);
+    setDropTargetIdx(fromIdx);
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      moveEvent.preventDefault();
+      if (activeDragRef.current === null || !variantListRef.current) return;
+
+      const clientY = moveEvent.clientY;
+      const cardElements = variantListRef.current.querySelectorAll<HTMLElement>('[data-variant-card-idx]');
+      let closestIdx: number | null = null;
+      let minDistance = Infinity;
+
+      cardElements.forEach((el) => {
+        const rect = el.getBoundingClientRect();
+        const midY = rect.top + rect.height / 2;
+        const dist = Math.abs(clientY - midY);
+        const idxAttr = el.getAttribute('data-variant-card-idx');
+        if (idxAttr !== null) {
+          const idxVal = Number(idxAttr);
+          if (dist < minDistance) {
+            minDistance = dist;
+            closestIdx = idxVal;
+          }
+        }
+      });
+
+      if (closestIdx !== null && closestIdx !== dropTargetRef.current) {
+        dropTargetRef.current = closestIdx;
+        setDropTargetIdx(closestIdx);
+      }
+    };
+
+    const handlePointerUp = () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('pointercancel', handlePointerUp);
+
+      const from = activeDragRef.current;
+      const to = dropTargetRef.current;
+
+      activeDragRef.current = null;
+      dropTargetRef.current = null;
+      setActiveDragIdx(null);
+      setDropTargetIdx(null);
+
+      if (from !== null && to !== null && from !== to) {
+        const currentVariants = [...variantsRef.current];
+        const [movedItem] = currentVariants.splice(from, 1);
+        currentVariants.splice(to, 0, movedItem);
+
+        const sequenced = currentVariants.map((v, i) => ({
+          ...v,
+          displayOrder: i + 1,
+        }));
+
+        setVariants(sequenced);
+
+        // Immediate persistence in AppContext, localStorage and Supabase
+        if (product?.id && reorderVariants) {
+          reorderVariants(product.id, sequenced).catch((err) => {
+            console.warn('Reorder variants sync notice:', err);
+          });
+        }
+      }
+    };
+
+    window.addEventListener('pointermove', handlePointerMove, { passive: false });
+    window.addEventListener('pointerup', handlePointerUp);
+    window.addEventListener('pointercancel', handlePointerUp);
+  };
 
   useEffect(() => {
     if (product) {
@@ -218,7 +309,7 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
         : undefined;
 
     // Process variants: allow decimal Selling Prices and preserve independent slabs for each variant
-    const processedVariants = variants.map((v) => {
+    const processedVariants = variants.map((v, idx) => {
       const cleanPrice = String(v.baseSellingPrice || '').replace(/,/g, '.').replace(/[^0-9.]/g, '');
       const numSellingPrice = parseFloat(cleanPrice) || 0;
       const validTieredPrices = Array.isArray(v.tieredPrices)
@@ -235,6 +326,7 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
 
       return {
         ...v,
+        displayOrder: idx + 1,
         mrp: Number(v.mrp),
         baseSellingPrice: numSellingPrice,
         purchasePrice:
@@ -544,32 +636,75 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
               </div>
             )}
 
-            <div className="space-y-2.5 max-h-56 overflow-y-auto pr-1">
-              {variants.map((variant, idx) => (
-                <div
-                  key={variant.id}
-                  className="bg-gray-50 p-3 rounded-xl border border-gray-200 text-xs space-y-2"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-1.5 min-w-0">
-                      <span className="font-bold text-gray-800 truncate">
-                        {formatVariantPack(variant)}
-                      </span>
-                      <span className="text-[10px] text-gray-400 font-mono">
-                        ({variant.id})
-                      </span>
-                    </div>
-                    {variants.length > 1 && (
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteVariant(idx)}
-                        className="text-gray-400 hover:text-red-600 transition p-1"
-                        title="Remove Variant"
-                      >
-                        <Trash2 size={13} />
-                      </button>
+            <div ref={variantListRef} className="space-y-2.5 max-h-56 overflow-y-auto pr-1">
+              {variants.map((variant, idx) => {
+                const isBeingDragged = activeDragIdx === idx;
+                const isDropTarget = dropTargetIdx === idx && activeDragIdx !== null && activeDragIdx !== idx;
+
+                return (
+                  <React.Fragment key={variant.id}>
+                    {/* Clear Drop Indicator Bar when dragging over this position */}
+                    {isDropTarget && (
+                      <div className="flex items-center gap-2 py-1 my-0.5 px-2.5 rounded-lg bg-orange-100/90 border border-orange-300 shadow-xs animate-fadeIn">
+                        <div className="w-2 h-2 rounded-full bg-[#FF6B00] animate-ping shrink-0" />
+                        <div className="h-0.5 flex-1 bg-[#FF6B00] rounded-full" />
+                        <span className="text-[10px] font-black text-[#FF6B00] uppercase tracking-wider shrink-0 flex items-center gap-1">
+                          <span>Drop Here</span>
+                          <span className="font-mono bg-white px-1.5 py-0.2 rounded border border-orange-300 text-[9px] text-gray-800">
+                            #{idx + 1}
+                          </span>
+                        </span>
+                        <div className="h-0.5 flex-1 bg-[#FF6B00] rounded-full" />
+                        <div className="w-2 h-2 rounded-full bg-[#FF6B00] animate-ping shrink-0" />
+                      </div>
                     )}
-                  </div>
+
+                    <div
+                      data-variant-card-idx={idx}
+                      className={`p-3 rounded-xl border text-xs space-y-2 transition-all relative ${
+                        isBeingDragged
+                          ? 'opacity-40 border-2 border-dashed border-[#0F2C59] bg-blue-50/20 scale-[0.99]'
+                          : isDropTarget
+                          ? 'border-2 border-dashed border-[#FF6B00] bg-orange-50/40 ring-2 ring-[#FF6B00]/30 shadow-xs'
+                          : 'bg-gray-50 border-gray-200'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          {variants.length > 1 && (
+                            <div
+                              data-drag-handle
+                              onPointerDown={(e) => handleHandlePointerDown(e, idx)}
+                              className="touch-none select-none w-7 h-7 rounded-lg bg-white hover:bg-[#0F2C59] active:bg-[#0F2C59] text-gray-600 hover:text-white active:text-white flex items-center justify-center cursor-grab active:cursor-grabbing transition-colors shrink-0 shadow-2xs border border-gray-300 hover:border-[#0F2C59]"
+                              title="Hold and drag ⠿ to reorder variant"
+                              aria-label="Drag handle to reorder variant"
+                            >
+                              <span className="text-sm font-black leading-none select-none tracking-tighter">
+                                ⠿
+                              </span>
+                            </div>
+                          )}
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-[#0F2C59] text-white shrink-0">
+                            #{idx + 1}{idx === 0 ? ' (Default)' : ''}
+                          </span>
+                          <span className="font-bold text-gray-800 truncate">
+                            {formatVariantPack(variant)}
+                          </span>
+                          <span className="text-[10px] text-gray-400 font-mono">
+                            ({variant.id})
+                          </span>
+                        </div>
+                        {variants.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteVariant(idx)}
+                            className="text-gray-400 hover:text-red-600 transition p-1"
+                            title="Remove Variant"
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        )}
+                      </div>
 
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                     <div>
@@ -739,7 +874,9 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
                     </button>
                   </div>
                 </div>
-              ))}
+              </React.Fragment>
+            );
+          })}
             </div>
           </div>
 

@@ -12,6 +12,9 @@ import {
   Layers,
   Package,
   ZoomIn,
+  GripVertical,
+  ArrowUp,
+  ArrowDown,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { Category } from '../types';
@@ -61,11 +64,24 @@ const CategoryPhotoThumbnail: React.FC<{
 };
 
 export const CategoryManagement: React.FC = () => {
-  const { categories, products, addCategory, updateCategory, deleteCategory } = useApp();
+  const {
+    categories,
+    products,
+    addCategory,
+    updateCategory,
+    deleteCategory,
+    reorderCategories,
+  } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [editingCategory, setEditingCategory] = useState<Category | null>(null);
+
+  // Drag & drop reordering state
+  const [isReorderMode, setIsReorderMode] = useState(false);
+  const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+  const [isSavingReorder, setIsSavingReorder] = useState(false);
 
   // Form state for Add/Edit
   const [formData, setFormData] = useState<CategoryFormData>({ name: '', imageUrl: '' });
@@ -223,6 +239,29 @@ export const CategoryManagement: React.FC = () => {
     }
   };
 
+  const handleMoveCategory = async (fromIndex: number, toIndex: number) => {
+    if (fromIndex === toIndex || toIndex < 0 || toIndex >= categories.length) return;
+    const reordered = [...categories];
+    const [moved] = reordered.splice(fromIndex, 1);
+    reordered.splice(toIndex, 0, moved);
+
+    const withOrder = reordered.map((c, i) => ({ ...c, displayOrder: i + 1 }));
+    setIsSavingReorder(true);
+    const res = await reorderCategories(withOrder);
+    setIsSavingReorder(false);
+    if (res.success) {
+      setSuccessMessage('Category sequence updated successfully.');
+      setTimeout(() => setSuccessMessage(null), 3000);
+    }
+  };
+
+  const handleDropCategory = (targetIndex: number) => {
+    if (draggedIndex === null) return;
+    handleMoveCategory(draggedIndex, targetIndex);
+    setDraggedIndex(null);
+    setDragOverIndex(null);
+  };
+
   return (
     <div className="space-y-4 w-full max-w-full min-w-0">
       {/* Success Notification Banner */}
@@ -281,6 +320,23 @@ export const CategoryManagement: React.FC = () => {
             )}
           </div>
 
+          {/* Reorder Categories Toggle Button */}
+          <button
+            type="button"
+            id="btn-toggle-reorder-categories"
+            onClick={() => setIsReorderMode((prev) => !prev)}
+            className={`px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition cursor-pointer border shrink-0 ${
+              isReorderMode
+                ? 'bg-[#FF6B00] text-white border-[#FF6B00] shadow-sm'
+                : 'bg-orange-50 hover:bg-orange-100 text-[#0F2C59] border-orange-200'
+            }`}
+            title="Drag & Drop or use arrows to reorder categories"
+          >
+            <GripVertical size={14} className={isReorderMode ? 'text-white' : 'text-[#FF6B00]'} />
+            <span className="hidden sm:inline">{isReorderMode ? 'Done Reordering' : 'Reorder Categories'}</span>
+            <span className="sm:hidden">{isReorderMode ? 'Done' : 'Reorder'}</span>
+          </button>
+
           {/* Add Category Button */}
           <button
             type="button"
@@ -293,6 +349,24 @@ export const CategoryManagement: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {isReorderMode && (
+        <div className="bg-amber-50 border border-amber-200 p-2.5 rounded-xl text-xs text-amber-900 flex items-center justify-between gap-2 animate-in fade-in">
+          <div className="flex items-center gap-2">
+            <GripVertical size={15} className="text-[#FF6B00] shrink-0" />
+            <span className="font-semibold">
+              <strong>Drag & Drop Mode:</strong> कार्ड्स ड्रॅग करून किंवा बाण (↑ / ↓) वापरून कॅटेगरीचा क्रम बदला. बदललेला क्रम ग्राहकांना तात्काळ दिसेल.
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setIsReorderMode(false)}
+            className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-lg shrink-0 cursor-pointer text-[11px]"
+          >
+            Done
+          </button>
+        </div>
+      )}
 
       {/* Categories List / Grid */}
       {filteredCategories.length === 0 ? (
@@ -331,14 +405,71 @@ export const CategoryManagement: React.FC = () => {
           {filteredCategories.map((cat) => {
             const count = productCountMap.get(cat.id) || 0;
             const hasProducts = count > 0;
+            const catIndex = categories.findIndex((c) => c.id === cat.id);
+            const isDragging = draggedIndex === catIndex;
+            const isOver = dragOverIndex === catIndex;
 
             return (
               <div
                 key={cat.id}
                 id={`category-card-${cat.id}`}
-                className="bg-white rounded-2xl border border-gray-200 p-3.5 shadow-xs hover:shadow-md transition-all flex flex-col justify-between group w-full max-w-full min-w-0 overflow-hidden"
+                draggable={!searchQuery}
+                onDragStart={() => setDraggedIndex(catIndex)}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  if (dragOverIndex !== catIndex) setDragOverIndex(catIndex);
+                }}
+                onDrop={() => handleDropCategory(catIndex)}
+                onDragEnd={() => {
+                  setDraggedIndex(null);
+                  setDragOverIndex(null);
+                }}
+                className={`bg-white rounded-2xl border p-3.5 shadow-xs hover:shadow-md transition-all flex flex-col justify-between group w-full max-w-full min-w-0 overflow-hidden relative ${
+                  isOver
+                    ? 'border-2 border-dashed border-[#FF6B00] bg-orange-50/20 scale-[0.98]'
+                    : isDragging
+                    ? 'opacity-40 border-gray-300'
+                    : 'border-gray-200'
+                }`}
               >
                 <div>
+                  {/* Top Bar: Sequence Rank & Drag Handle */}
+                  <div className="flex items-center justify-between pb-2 mb-2 border-b border-gray-100 text-xs">
+                    <div className="flex items-center gap-1.5">
+                      <span
+                        className="cursor-grab active:cursor-grabbing text-gray-400 hover:text-[#FF6B00] p-0.5 rounded transition"
+                        title="Drag to reorder"
+                      >
+                        <GripVertical size={15} />
+                      </span>
+                      <span className="text-[10px] font-black px-1.5 py-0.5 bg-gray-100 text-gray-700 rounded-md font-mono" title="Display Order Sequence">
+                        #{catIndex + 1}
+                      </span>
+                    </div>
+
+                    {/* Move Up / Move Down Quick Action Buttons */}
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => handleMoveCategory(catIndex, catIndex - 1)}
+                        disabled={catIndex === 0 || isSavingReorder}
+                        className="p-1 rounded hover:bg-gray-100 text-gray-500 disabled:opacity-20 disabled:cursor-not-allowed transition cursor-pointer"
+                        title="Move Up"
+                      >
+                        <ArrowUp size={12} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleMoveCategory(catIndex, catIndex + 1)}
+                        disabled={catIndex === categories.length - 1 || isSavingReorder}
+                        className="p-1 rounded hover:bg-gray-100 text-gray-500 disabled:opacity-20 disabled:cursor-not-allowed transition cursor-pointer"
+                        title="Move Down"
+                      >
+                        <ArrowDown size={12} />
+                      </button>
+                    </div>
+                  </div>
+
                   <div className="flex gap-3 items-center">
                     {/* Category Image Preview & Lightbox */}
                     <CategoryPhotoThumbnail

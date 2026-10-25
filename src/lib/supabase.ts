@@ -1599,14 +1599,21 @@ export async function fetchProductsFromSupabase(): Promise<Product[] | null> {
   if (!supabase) return null;
 
   try {
-    // Attempt ordering by updated_at (fallback to unsorted if column is unavailable)
+    // Attempt ordering by display_order first, then updated_at (fallback to unsorted if columns unavailable)
     let prodResult = await supabase
       .from('products')
       .select('*')
-      .order('updated_at', { ascending: false });
+      .order('display_order', { ascending: true });
 
     if (prodResult.error) {
-      console.warn('Ordering products by updated_at failed, falling back to unordered select:', prodResult.error.message);
+      prodResult = await supabase
+        .from('products')
+        .select('*')
+        .order('updated_at', { ascending: false });
+    }
+
+    if (prodResult.error) {
+      console.warn('Ordering products failed, falling back to unordered select:', prodResult.error.message);
       prodResult = await supabase.from('products').select('*');
     }
 
@@ -1765,9 +1772,19 @@ export async function fetchProductsFromSupabase(): Promise<Product[] | null> {
         searchKeywords: (p.search_keywords || p.badge || '').trim() || undefined,
         purchasePrice: p.purchase_price !== undefined ? Number(p.purchase_price) : (variants[0]?.purchasePrice || undefined),
         discount: p.discount !== undefined ? Number(p.discount) : (variants[0]?.discount || undefined),
+        displayOrder: typeof p.display_order === 'number' ? p.display_order : undefined,
         variants,
         createdAt: p.created_at || p.updated_at || new Date().toISOString(),
       };
+    });
+
+    assembledProducts.sort((a, b) => {
+      if (typeof a.displayOrder === 'number' && typeof b.displayOrder === 'number') {
+        return a.displayOrder - b.displayOrder;
+      }
+      if (typeof a.displayOrder === 'number') return -1;
+      if (typeof b.displayOrder === 'number') return 1;
+      return 0;
     });
 
     return assembledProducts;

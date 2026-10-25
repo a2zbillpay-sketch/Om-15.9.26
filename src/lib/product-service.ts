@@ -456,12 +456,25 @@ export async function saveProductWithCascadeSync(
       is_discount_excluded: product.isDiscountExcluded ?? false,
       search_keywords: keywordsVal,
       badge: keywordsVal,
+      display_order: typeof product.displayOrder === 'number' ? product.displayOrder : undefined,
       updated_at: new Date().toISOString(),
     };
 
     let prodInsertResult = await supabaseClient
       .from('products')
       .upsert(productPayload, { onConflict: 'id' });
+
+    // Graceful fallback: If display_order column has not yet been added to Supabase table
+    if (
+      prodInsertResult.error &&
+      (prodInsertResult.error.message?.includes('display_order') ||
+        prodInsertResult.error.message?.toLowerCase().includes('display_order'))
+    ) {
+      delete productPayload.display_order;
+      prodInsertResult = await supabaseClient
+        .from('products')
+        .upsert(productPayload, { onConflict: 'id' });
+    }
 
     // Graceful fallback: If search_keywords column has not yet been added to Supabase public.products table
     if (
@@ -679,4 +692,47 @@ export function processBulkProductRows(rows: BulkUploadRow[]): BulkUploadResult 
   }
 
   return { validProducts, errors };
+}
+
+/**
+ * Persists the reordered list of products to server & Supabase.
+ */
+export async function reorderProductsInDb(
+  products: Product[]
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const res = await fetch('/api/products', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      credentials: 'include',
+      body: JSON.stringify({
+        action: 'reorder',
+        products,
+      }),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.success) {
+        if (typeof window !== 'undefined' && window.localStorage) {
+          try {
+            localStorage.setItem('om_products', JSON.stringify(products));
+          } catch {}
+        }
+        return { success: true };
+      }
+      return { success: false, error: data?.error || 'Failed to reorder products.' };
+    }
+
+    const errorJson = await res.json().catch(() => ({}));
+    return {
+      success: false,
+      error: errorJson?.error || `Server responded with status ${res.status}`,
+    };
+  } catch (err: any) {
+    console.warn('Failed to reorder products:', err);
+    return { success: false, error: err?.message || 'Network error reordering products.' };
+  }
 }

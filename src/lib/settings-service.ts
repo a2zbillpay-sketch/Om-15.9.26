@@ -333,11 +333,11 @@ export function subscribeToSettingsSync(
   window.addEventListener('focus', handleRevalidation);
   document.addEventListener('visibilitychange', handleVisibilityChange);
 
-  // 5. Background polling every 3 seconds to guarantee instant sync
-  // even across different browser profiles/sandboxes (PWA vs Samsung Browser vs AI Studio)
+  // 5. Periodic background polling every 10 minutes (600,000 ms) to keep settings synced
+  // while preventing excessive Supabase and server egress bandwidth consumption
   const pollInterval = window.setInterval(() => {
     handleRevalidation();
-  }, 3000);
+  }, 600000);
 
   // Cleanup handler
   return () => {

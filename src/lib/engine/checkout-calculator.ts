@@ -101,9 +101,8 @@ export function calculateCheckoutTotals(
   // Final Calculations: Original product price and bill amount remain unchanged
   const codFinalTotal = Math.max(0, subtotal + deliveryFee + codCharge);
   const advanceFinalTotal = Math.max(0, subtotal + deliveryFee - advanceDiscountAmount);
-  // Previous outstanding is never added to the next order payable amount
-  const cleanOutstanding = 0;
-  const codTotalPayable = codFinalTotal;
+  const cleanOutstanding = Math.max(0, Number(previousOutstanding) || 0);
+  const codTotalPayable = codFinalTotal + cleanOutstanding;
   const advanceTotalPayable = advanceFinalTotal;
 
   // 5. Wallet Usage Calculation

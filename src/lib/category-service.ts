@@ -19,10 +19,11 @@ export async function fetchCategoriesFromDb(): Promise<Category[] | null> {
     if (res.ok) {
       const data = await res.json();
       if (data && data.success && Array.isArray(data.categories) && data.categories.length > 0) {
-        const serverCats: Category[] = data.categories.map((c: any) => ({
+        const serverCats: Category[] = data.categories.map((c: any, idx: number) => ({
           id: String(c.id),
           name: String(c.name || '').trim(),
           imageUrl: c.imageUrl ? String(c.imageUrl).trim() : '',
+          displayOrder: typeof c.display_order === 'number' ? c.display_order : (idx + 1),
         }));
 
         // Check if client has local customizations in localStorage that should be preserved & synced to server
@@ -75,10 +76,11 @@ export async function fetchCategoriesFromDb(): Promise<Category[] | null> {
         .order('display_order', { ascending: true });
 
       if (!catError && Array.isArray(catData) && catData.length > 0) {
-        const dbCategories: Category[] = catData.map((row) => ({
+        const dbCategories: Category[] = catData.map((row, idx: number) => ({
           id: row.id,
           name: row.name,
           imageUrl: (row.image_url && String(row.image_url).trim()) || '',
+          displayOrder: typeof row.display_order === 'number' ? row.display_order : (idx + 1),
         }));
 
         return dbCategories;
@@ -170,5 +172,45 @@ export async function deleteCategoryFromDb(
   } catch (err: any) {
     console.warn('Failed to delete category from /api/categories:', err);
     return { success: false, error: err?.message || 'Network error deleting category.' };
+  }
+}
+
+/**
+ * Persists the reordered list of categories with updated display orders to server & Supabase.
+ */
+export async function reorderCategoriesInDb(
+  categories: Category[]
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const res = await fetch('/api/categories', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      credentials: 'include',
+      body: JSON.stringify({ categories }),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.success) {
+        if (typeof window !== 'undefined' && window.localStorage) {
+          try {
+            localStorage.setItem('om_categories', JSON.stringify(categories));
+          } catch {}
+        }
+        return { success: true };
+      }
+      return { success: false, error: data?.error || 'Failed to reorder categories.' };
+    }
+
+    const errorJson = await res.json().catch(() => ({}));
+    return {
+      success: false,
+      error: errorJson?.error || `Server responded with status ${res.status}`,
+    };
+  } catch (err: any) {
+    console.warn('Failed to reorder categories:', err);
+    return { success: false, error: err?.message || 'Network error reordering categories.' };
   }
 }

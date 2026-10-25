@@ -42,6 +42,7 @@ import {
   UserCheck,
   Volume2,
   Bell,
+  GripVertical,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { useApp } from '../context/AppContext';
@@ -62,6 +63,7 @@ import { BulkProductUploadModal } from './BulkProductUploadModal';
 import { ProductImageUploader } from './ProductImageUploader';
 import { ImageLightboxModal } from './ImageLightboxModal';
 import { OrderTrackingModal } from './OrderTrackingModal';
+import { ProductReorderModal } from './ProductReorderModal';
 import { formatVariantPack } from '../utils/variantFormatter';
 import {
   normalizeAndValidateBarcode,
@@ -625,6 +627,8 @@ export const AdminDashboard: React.FC = () => {
 
   // Add product modal state
   const [isAddProductModalOpen, setIsAddProductModalOpen] = useState(false);
+  // Reorder products modal state
+  const [isProductReorderModalOpen, setIsProductReorderModalOpen] = useState(false);
   // Edit individual product state
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   // Add variant to individual product state
@@ -1938,6 +1942,17 @@ export const AdminDashboard: React.FC = () => {
                 </button>
 
                 <button
+                  type="button"
+                  id="btn-inventory-reorder-products"
+                  onClick={() => setIsProductReorderModalOpen(true)}
+                  className="bg-amber-600 hover:bg-amber-700 text-white px-3 py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shadow-2xs transition active:scale-95 cursor-pointer flex-1 sm:flex-none"
+                  title="Reorder products with Drag & Drop or Move buttons (क्रम बदला)"
+                >
+                  <GripVertical size={13} className="text-amber-200" />
+                  <span>Reorder Products</span>
+                </button>
+
+                <button
                   id="open-add-product-btn"
                   onClick={handleOpenAddProductModal}
                   className="bg-[#0F2C59] hover:bg-[#153e7d] text-white px-3.5 py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shadow-sm transition cursor-pointer w-full sm:w-auto"
@@ -2213,11 +2228,16 @@ export const AdminDashboard: React.FC = () => {
                           )}
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center justify-between gap-1">
-                              {p.brand ? (
-                                <span className="text-[10px] font-bold text-[#FF6B00] uppercase truncate">{p.brand}</span>
-                              ) : (
-                                <span />
-                              )}
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                {typeof p.displayOrder === 'number' && (
+                                  <span className="text-[10px] font-black bg-[#0F2C59] text-white px-1.5 py-0.2 rounded shrink-0" title={`Catalog Display Order #${p.displayOrder}`}>
+                                    #{p.displayOrder}
+                                  </span>
+                                )}
+                                {p.brand ? (
+                                  <span className="text-[10px] font-bold text-[#FF6B00] uppercase truncate">{p.brand}</span>
+                                ) : null}
+                              </div>
                               {p.barcode && (
                                 <span className="text-[9px] font-mono bg-gray-100 text-gray-700 px-1.5 py-0.5 rounded border border-gray-200 shrink-0" title={`Barcode: ${p.barcode}`}>
                                   {p.barcode}
@@ -3178,6 +3198,12 @@ export const AdminDashboard: React.FC = () => {
             : null
         }
         onClose={() => setSelectedOrderForDetails(null)}
+      />
+
+      {/* Product Display Sequence Reorder Modal */}
+      <ProductReorderModal
+        isOpen={isProductReorderModalOpen}
+        onClose={() => setIsProductReorderModalOpen(false)}
       />
     </div>
   );

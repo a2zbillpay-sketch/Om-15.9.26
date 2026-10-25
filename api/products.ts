@@ -1,4 +1,6 @@
 import { IncomingMessage, ServerResponse } from 'http';
+import fs from 'node:fs';
+import path from 'node:path';
 import { createClient } from '@supabase/supabase-js';
 import { verifyAdminSession } from './auth/_verify';
 import {
@@ -6,6 +8,37 @@ import {
   saveProductWithCascadeSync,
   deleteProductWithCascade,
 } from '../src/lib/product-service';
+
+const DATA_DIR = path.resolve(process.cwd(), 'data');
+const PRODUCTS_FILE = path.resolve(DATA_DIR, 'products.json');
+
+function loadProductsFromFile(): any[] {
+  try {
+    if (fs.existsSync(PRODUCTS_FILE)) {
+      const content = fs.readFileSync(PRODUCTS_FILE, 'utf8');
+      if (content.trim()) {
+        const parsed = JSON.parse(content);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    }
+  } catch (err) {
+    console.error('Failed to read products.json:', err);
+  }
+  return [];
+}
+
+function saveProductsToFile(products: any[]): void {
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    const tempFile = `${PRODUCTS_FILE}.tmp.${Date.now()}`;
+    fs.writeFileSync(tempFile, JSON.stringify(products, null, 2), 'utf8');
+    fs.renameSync(tempFile, PRODUCTS_FILE);
+  } catch (err) {
+    console.error('Failed to write products.json:', err);
+  }
+}
 
 function sendJson(res: ServerResponse, statusCode: number, data: any) {
   res.statusCode = statusCode;
@@ -54,7 +87,16 @@ function getServerSupabaseClient() {
 }
 
 export default async function handler(req: IncomingMessage, res: ServerResponse) {
-  // Enforce Shopkeeper/Admin authorization
+  const method = req.method?.toUpperCase();
+  const supabase = getServerSupabaseClient();
+
+  // Public GET: Fetch persistent products from server storage
+  if (method === 'GET') {
+    const list = loadProductsFromFile();
+    return sendJson(res, 200, { success: true, products: list });
+  }
+
+  // Enforce Shopkeeper/Admin authorization for mutations
   const session = verifyAdminSession(req);
   if (!session || session.role !== 'SHOPKEEPER') {
     return sendJson(res, 401, {
@@ -62,12 +104,37 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
     });
   }
 
-  const method = req.method?.toUpperCase();
-  const supabase = getServerSupabaseClient();
-
   if (method === 'POST') {
     try {
       const body = await parseJsonBody(req);
+
+      // Reorder Action: Updates display order sequence across all products
+      if (body.action === 'reorder' && Array.isArray(body.products)) {
+        const reordered = body.products.map((p: any, idx: number) => ({
+          ...p,
+          displayOrder: idx + 1,
+        }));
+        saveProductsToFile(reordered);
+
+        if (supabase) {
+          for (let i = 0; i < reordered.length; i++) {
+            const pid = reordered[i].id;
+            if (pid) {
+              try {
+                await supabase
+                  .from('products')
+                  .update({ display_order: i + 1, updated_at: new Date().toISOString() })
+                  .eq('id', pid);
+              } catch {
+                // Ignore if display_order column not yet provisioned in Supabase table
+              }
+            }
+          }
+        }
+
+        return sendJson(res, 200, { success: true, products: reordered });
+      }
+
       const validation = normalizeAndValidateProduct(body);
 
       if (!validation.valid || !validation.product) {
@@ -75,6 +142,17 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
       }
 
       const product = validation.product;
+
+      // Also persist to products.json
+      const currentProducts = loadProductsFromFile();
+      const existingIdx = currentProducts.findIndex((p: any) => p.id === product.id);
+      if (existingIdx >= 0) {
+        currentProducts[existingIdx] = product;
+      } else {
+        product.displayOrder = currentProducts.length + 1;
+        currentProducts.push(product);
+      }
+      saveProductsToFile(currentProducts);
 
       // If Supabase is configured, persist with cascade sync
       if (supabase) {
@@ -101,6 +179,22 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
 
       const product = validation.product;
 
+      // Update in products.json
+      const currentProducts = loadProductsFromFile();
+      const existingIdx = currentProducts.findIndex((p: any) => p.id === product.id);
+      if (existingIdx >= 0) {
+        currentProducts[existingIdx] = {
+          ...currentProducts[existingIdx],
+          ...product,
+          displayOrder: currentProducts[existingIdx].displayOrder ?? product.displayOrder ?? (existingIdx + 1),
+        };
+        saveProductsToFile(currentProducts);
+      } else {
+        product.displayOrder = currentProducts.length + 1;
+        currentProducts.push(product);
+        saveProductsToFile(currentProducts);
+      }
+
       if (supabase) {
         const dbResult = await saveProductWithCascadeSync(supabase, product);
         if (!dbResult.success) {
@@ -126,6 +220,13 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
 
       if (!productId) {
         return sendJson(res, 400, { error: 'Product ID is required for deletion' });
+      }
+
+      // Remove from products.json
+      const currentProducts = loadProductsFromFile();
+      const updatedList = currentProducts.filter((p: any) => p.id !== productId);
+      if (updatedList.length !== currentProducts.length) {
+        saveProductsToFile(updatedList);
       }
 
       if (supabase) {

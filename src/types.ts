@@ -77,6 +77,7 @@ export interface Category {
   name: string;
   imageUrl: string;
   productCount?: number;
+  displayOrder?: number;
 }
 
 export interface TieredPrice {
@@ -102,6 +103,7 @@ export interface ProductVariant {
   tieredPrices: TieredPrice[];
   imageUrl?: string;
   lowStockThreshold?: number;
+  displayOrder?: number;
 }
 
 export interface Product {
@@ -117,6 +119,7 @@ export interface Product {
   purchasePrice?: number;
   discount?: number;
   lowStockThreshold?: number;
+  displayOrder?: number;
   variants: ProductVariant[];
   createdAt: string;
 }

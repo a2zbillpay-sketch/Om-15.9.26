@@ -255,6 +255,8 @@ export const GoogleLocationPickerModal: React.FC<GoogleLocationPickerModalProps>
       } else if (data.status === 'OVER_QUERY_LIMIT') {
         window.dispatchEvent(new CustomEvent('gmp-quota-exceeded'));
         setLocationError('Search quota limit reached. Please tap directly on the map to set your location.');
+      } else if (data.status === 'REQUEST_DENIED') {
+        setLocationError('Search service permission restricted. Please tap directly on the map to pinpoint your location.');
       } else {
         setLocationError(`No Google Maps location found for "${searchQuery}". Try tapping directly on the map.`);
       }
