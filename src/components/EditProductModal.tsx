@@ -1,12 +1,27 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Save, Layers, Check, Trash2, AlertCircle, Scan, Loader2, Plus } from 'lucide-react';
-import { Product, ProductVariant, TieredPrice } from '../types';
+import { X, Save, Layers, Check, Trash2, AlertCircle, Scan, Loader2, Plus, Copy, Sparkles } from 'lucide-react';
+import { Product, ProductVariant, TieredPrice, UnitType } from '../types';
 import { useApp } from '../context/AppContext';
 import { INITIAL_CATEGORIES } from '../data/seedData';
 import { formatVariantPack } from '../utils/variantFormatter';
 import { BarcodeScannerModal } from './BarcodeScannerModal';
 import { ProductImageUploader } from './ProductImageUploader';
 import { normalizeAndValidateBarcode } from '../lib/product-service';
+
+const COMMON_PACK_PRESETS: { label: string; size: string; unit: UnitType }[] = [
+  { label: '250 G', size: '250', unit: UnitType.G },
+  { label: '500 G', size: '500', unit: UnitType.G },
+  { label: '1 KG', size: '1', unit: UnitType.KG },
+  { label: '2 KG', size: '2', unit: UnitType.KG },
+  { label: '5 KG', size: '5', unit: UnitType.KG },
+  { label: '10 KG', size: '10', unit: UnitType.KG },
+  { label: '25 KG Katta', size: '25', unit: UnitType.KATTA },
+  { label: '50 KG Katta', size: '50', unit: UnitType.KATTA },
+  { label: '1 Liter', size: '1', unit: UnitType.LITER },
+  { label: '5 L Can', size: '5', unit: UnitType.CAN },
+  { label: '1 Box / Ctn', size: '1', unit: UnitType.BOX },
+  { label: '1 Unit (NOS)', size: '1', unit: UnitType.NOS },
+];
 
 interface EditProductModalProps {
   product: Product | null;
@@ -17,6 +32,7 @@ interface EditProductModalProps {
     updates: Partial<Product>
   ) => Promise<{ success: boolean; error?: string }> | void;
   existingProducts?: Product[];
+  initialAddVariant?: boolean;
 }
 
 export const EditProductModal: React.FC<EditProductModalProps> = ({
@@ -25,8 +41,9 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
   onClose,
   onSave,
   existingProducts = [],
+  initialAddVariant = false,
 }) => {
-  const { categories, settings, reorderVariants } = useApp();
+  const { categories, settings } = useApp();
   const availableCategories = categories && categories.length > 0 ? categories : INITIAL_CATEGORIES;
   const [name, setName] = useState('');
   const [brand, setBrand] = useState('');
@@ -52,6 +69,7 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
   const dropTargetRef = useRef<number | null>(null);
   const variantsRef = useRef<ProductVariant[]>(variants);
   variantsRef.current = variants;
+  const isSubmittingRef = useRef(false);
 
   const handleHandlePointerDown = (e: React.PointerEvent<HTMLDivElement>, fromIdx: number) => {
     // Only primary touch/click allowed
@@ -120,13 +138,6 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
         }));
 
         setVariants(sequenced);
-
-        // Immediate persistence in AppContext, localStorage and Supabase
-        if (product?.id && reorderVariants) {
-          reorderVariants(product.id, sequenced).catch((err) => {
-            console.warn('Reorder variants sync notice:', err);
-          });
-        }
       }
     };
 
@@ -136,7 +147,7 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
   };
 
   useEffect(() => {
-    if (product) {
+    if (product && isOpen) {
       setName(product.name || '');
       setBrand(product.brand || '');
       setCategoryId(product.categoryId || 'cat-1');
@@ -151,12 +162,35 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
           ? String(product.lowStockThreshold)
           : ''
       );
-      setVariants(product.variants ? JSON.parse(JSON.stringify(product.variants)) : []);
+
+      const clonedVariants: ProductVariant[] = product.variants
+        ? JSON.parse(JSON.stringify(product.variants))
+        : [];
+
+      // If opened specifically to add a new variant, automatically append one blank form row
+      if (initialAddVariant) {
+        clonedVariants.push({
+          id: `var-new-${Date.now()}-${clonedVariants.length}-${Math.random().toString(36).substring(2, 6)}`,
+          productId: product.id,
+          packSize: '' as any,
+          unit: '' as any,
+          packLabel: '',
+          mrp: '' as any,
+          baseSellingPrice: '' as any,
+          stockQuantity: 10,
+          maxOrderLimit: 12,
+          tieredPrices: [],
+          displayOrder: clonedVariants.length + 1,
+        });
+      }
+
+      setVariants(clonedVariants);
       setSavedSuccess(false);
       setIsSaving(false);
+      isSubmittingRef.current = false;
       setVariantError(null);
     }
-  }, [product]);
+  }, [product, isOpen, initialAddVariant]);
 
   if (!isOpen || !product) return null;
 
@@ -167,6 +201,9 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
   ) => {
     setVariants((prev) => {
       const updated = [...prev];
+      const current = updated[index];
+      if (!current) return prev;
+
       let formattedVal: any = value;
       if (field === 'stockQuantity') {
         const num = Number(value);
@@ -174,16 +211,97 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
       } else if (field === 'baseSellingPrice') {
         // Keep string while typing to allow decimal typing such as 9.50, 9.5, 10.25 without swallowing "." or trailing "0"
         formattedVal = value;
-      } else if (typeof updated[index][field] === 'number') {
+      } else if (field === 'packSize') {
+        const num = Number(value);
+        formattedVal = isNaN(num) || num <= 0 ? value : num;
+        // Auto-update pack label hint if user hasn't explicitly customized it
+        const currentUnit = current.unit || '';
+        if (!current.packLabel || current.packLabel === `${current.packSize} ${currentUnit}`.trim()) {
+          updated[index] = {
+            ...current,
+            packSize: formattedVal,
+            packLabel: value && currentUnit ? `${value} ${currentUnit}` : '',
+          };
+          return updated;
+        }
+      } else if (field === 'unit') {
+        formattedVal = value;
+        const currentSize = current.packSize || '';
+        if (!current.packLabel || current.packLabel === `${currentSize} ${current.unit}`.trim()) {
+          updated[index] = {
+            ...current,
+            unit: formattedVal,
+            packLabel: currentSize && value ? `${currentSize} ${value}` : '',
+          };
+          return updated;
+        }
+      } else if (typeof (current as any)[field] === 'number') {
         const num = Number(value);
         formattedVal = isNaN(num) ? 0 : num;
       }
+
       updated[index] = {
-        ...updated[index],
+        ...current,
         [field]: formattedVal,
       };
       return updated;
     });
+  };
+
+  const handleAddBlankVariant = () => {
+    if (!product) return;
+    const newId = `var-${product.id}-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    const newVariant: ProductVariant = {
+      id: newId,
+      productId: product.id,
+      packSize: '' as any,
+      unit: '' as any,
+      packLabel: '',
+      mrp: '' as any,
+      baseSellingPrice: '' as any,
+      stockQuantity: 10,
+      maxOrderLimit: 12,
+      tieredPrices: [],
+      displayOrder: variants.length + 1,
+    };
+    setVariants((prev) => [...prev, newVariant]);
+    setVariantError(null);
+  };
+
+  const handleAddPresetVariant = (presetSize: string, presetUnit: UnitType) => {
+    if (!product) return;
+    const numSize = Number(presetSize) || 1;
+    const newId = `var-${product.id}-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    const newVariant: ProductVariant = {
+      id: newId,
+      productId: product.id,
+      packSize: numSize,
+      unit: presetUnit,
+      packLabel: `${presetSize} ${presetUnit}`,
+      mrp: '' as any,
+      baseSellingPrice: '' as any,
+      stockQuantity: 10,
+      maxOrderLimit: 12,
+      tieredPrices: [],
+      displayOrder: variants.length + 1,
+    };
+    setVariants((prev) => [...prev, newVariant]);
+    setVariantError(null);
+  };
+
+  const handleDuplicateVariant = (idx: number) => {
+    if (!product) return;
+    const source = variants[idx];
+    if (!source) return;
+    const newId = `var-${product.id}-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    const cloned: ProductVariant = {
+      ...JSON.parse(JSON.stringify(source)),
+      id: newId,
+      productId: product.id,
+      displayOrder: variants.length + 1,
+    };
+    setVariants((prev) => [...prev, cloned]);
+    setVariantError(null);
   };
 
   const handleDeleteVariant = (index: number) => {
@@ -282,6 +400,7 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmittingRef.current || isSaving) return;
     if (!name.trim()) return;
 
     let validatedBarcode: string | undefined = undefined;
@@ -300,6 +419,12 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
       validatedBarcode = barcodeValidation.barcode || undefined;
     }
 
+    if (variants.length === 0) {
+      setVariantError('Please add at least one Pack Variant.');
+      return;
+    }
+
+    isSubmittingRef.current = true;
     setIsSaving(true);
     setVariantError(null);
 
@@ -308,24 +433,43 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
         ? Math.max(1, parseInt(lowStockThreshold, 10))
         : undefined;
 
+    // Existing variants must strictly preserve their IDs, prices, and stock
+    const existingVariantsMap = new Map((product.variants || []).map((v) => [v.id, v]));
+
     // Process variants: allow decimal Selling Prices and preserve independent slabs for each variant
     const processedVariants = variants.map((v, idx) => {
+      const isExisting = existingVariantsMap.has(v.id);
+      const variantId =
+        isExisting && v.id
+          ? v.id
+          : `var-${product.id}-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 6)}`;
+
       const cleanPrice = String(v.baseSellingPrice || '').replace(/,/g, '.').replace(/[^0-9.]/g, '');
       const numSellingPrice = parseFloat(cleanPrice) || 0;
       const validTieredPrices = Array.isArray(v.tieredPrices)
         ? v.tieredPrices
             .filter((tp) => Number(tp.minQty) > 0 && Number(tp.unitPrice) > 0)
             .map((tp, tpIdx) => ({
-              id: tp.id || `tp-${v.id}-${tpIdx}-${Date.now()}`,
-              variantId: v.id,
+              id: tp.id || `tp-${variantId}-${tpIdx}-${Date.now()}`,
+              variantId: variantId,
               minQty: Number(tp.minQty),
               maxQty: tp.maxQty && Number(tp.maxQty) >= Number(tp.minQty) ? Number(tp.maxQty) : 9999,
               unitPrice: Number(tp.unitPrice),
             }))
         : [];
 
+      const parsedSize = Number(v.packSize);
+      const safeSize = isNaN(parsedSize) || parsedSize <= 0 ? 1 : parsedSize;
+      const safeUnit = v.unit || UnitType.KG;
+      const safeLabel = v.packLabel && String(v.packLabel).trim() ? String(v.packLabel).trim() : `${safeSize} ${safeUnit}`.trim();
+
       return {
         ...v,
+        id: variantId,
+        productId: product.id,
+        packSize: safeSize,
+        unit: safeUnit,
+        packLabel: safeLabel,
         displayOrder: idx + 1,
         mrp: Number(v.mrp),
         baseSellingPrice: numSellingPrice,
@@ -337,7 +481,7 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
           v.discount !== undefined && v.discount !== null && !isNaN(Number(v.discount))
             ? Number(v.discount)
             : undefined,
-        stockQuantity: Number(v.stockQuantity),
+        stockQuantity: Number(v.stockQuantity) || 0,
         maxOrderLimit: Number(v.maxOrderLimit || 12),
         tieredPrices: validTieredPrices,
       };
@@ -345,12 +489,34 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
 
     for (let i = 0; i < processedVariants.length; i++) {
       const v = processedVariants[i];
+      if (!v.packSize || Number(v.packSize) <= 0) {
+        setVariantError(`Variant #${i + 1}: Please enter a valid Pack Size (e.g. 250, 500, 1).`);
+        setIsSaving(false);
+        isSubmittingRef.current = false;
+        return;
+      }
+      if (!v.unit) {
+        setVariantError(`Variant #${i + 1}: Please select a Unit (e.g. G, KG, LITER).`);
+        setIsSaving(false);
+        isSubmittingRef.current = false;
+        return;
+      }
+      if (isNaN(v.mrp) || v.mrp <= 0) {
+        setVariantError(`Variant #${i + 1}: MRP must be greater than 0.`);
+        setIsSaving(false);
+        isSubmittingRef.current = false;
+        return;
+      }
       if (isNaN(v.baseSellingPrice) || v.baseSellingPrice <= 0) {
         setVariantError(`Variant #${i + 1}: Selling Price must be greater than 0 (e.g. ₹9.50, ₹10.25).`);
+        setIsSaving(false);
+        isSubmittingRef.current = false;
         return;
       }
       if (v.baseSellingPrice > v.mrp) {
         setVariantError(`Variant #${i + 1}: Base Selling Price (₹${v.baseSellingPrice}) cannot exceed MRP (₹${v.mrp}).`);
+        setIsSaving(false);
+        isSubmittingRef.current = false;
         return;
       }
     }
@@ -372,6 +538,7 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
       if (res && !res.success) {
         setVariantError(res.error || 'Failed to save product updates.');
         setIsSaving(false);
+        isSubmittingRef.current = false;
         return;
       }
 
@@ -379,11 +546,13 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
       setTimeout(() => {
         setSavedSuccess(false);
         setIsSaving(false);
+        isSubmittingRef.current = false;
         onClose();
       }, 400);
     } catch (err: any) {
       setVariantError(err?.message || 'Failed to save product updates.');
       setIsSaving(false);
+      isSubmittingRef.current = false;
     }
   };
 
@@ -617,16 +786,44 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
             </div>
           </div>
 
-          {/* Existing Pack Variants for this Item */}
+          {/* Pack Variants & Pricing for this Item */}
           <div className="pt-2 border-t border-gray-200">
-            <div className="flex items-center justify-between mb-2">
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
               <span className="font-extrabold text-[#0F2C59] flex items-center gap-1.5">
-                <Layers size={14} className="text-[#D4AF37]" />
-                <span>Existing Pack Variants ({variants.length})</span>
+                <Layers size={14} className="text-[#FF6B00]" />
+                <span>Pack Variants & Pricing ({variants.length})</span>
               </span>
-              <span className="text-[10px] text-gray-500">
-                Edit prices or stock directly
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  id="btn-edit-add-blank-variant"
+                  onClick={handleAddBlankVariant}
+                  className="bg-[#FF6B00] hover:bg-[#e05e00] text-white px-3 py-1 rounded-xl font-bold text-xs flex items-center gap-1.5 shadow-sm transition cursor-pointer"
+                >
+                  <Plus size={14} />
+                  <span>+ Add Pack Variant</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Quick Add Common Pack Sizes Toolbar */}
+            <div className="bg-amber-50/70 border border-amber-200/80 rounded-xl p-2 mb-2.5 flex flex-wrap items-center gap-1.5">
+              <span className="text-[11px] font-black text-amber-900 flex items-center gap-1 mr-1">
+                <Sparkles size={13} className="text-[#FF6B00]" />
+                Quick Add Common Pack Sizes:
               </span>
+              {COMMON_PACK_PRESETS.map((preset) => (
+                <button
+                  key={preset.label}
+                  type="button"
+                  onClick={() => handleAddPresetVariant(preset.size, preset.unit)}
+                  className="bg-white hover:bg-amber-100/80 text-amber-950 border border-amber-300/80 hover:border-amber-400 px-2 py-0.5 rounded-lg text-[11px] font-bold shadow-2xs transition active:scale-95 flex items-center gap-1 cursor-pointer"
+                  title={`Add ${preset.label} variant`}
+                >
+                  <Plus size={11} className="text-amber-700" />
+                  <span>{preset.label}</span>
+                </button>
+              ))}
             </div>
 
             {variantError && (
@@ -636,7 +833,7 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
               </div>
             )}
 
-            <div ref={variantListRef} className="space-y-2.5 max-h-56 overflow-y-auto pr-1">
+            <div ref={variantListRef} className="space-y-2.5 max-h-72 overflow-y-auto pr-1">
               {variants.map((variant, idx) => {
                 const isBeingDragged = activeDragIdx === idx;
                 const isDropTarget = dropTargetIdx === idx && activeDragIdx !== null && activeDragIdx !== idx;
@@ -675,13 +872,14 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
                             <div
                               data-drag-handle
                               onPointerDown={(e) => handleHandlePointerDown(e, idx)}
-                              className="touch-none select-none w-7 h-7 rounded-lg bg-white hover:bg-[#0F2C59] active:bg-[#0F2C59] text-gray-600 hover:text-white active:text-white flex items-center justify-center cursor-grab active:cursor-grabbing transition-colors shrink-0 shadow-2xs border border-gray-300 hover:border-[#0F2C59]"
-                              title="Hold and drag ⠿ to reorder variant"
+                              className="touch-none select-none flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-white hover:bg-[#0F2C59] active:bg-[#0F2C59] text-gray-700 hover:text-white active:text-white border border-gray-300 hover:border-[#0F2C59] cursor-grab active:cursor-grabbing transition-colors shadow-2xs font-bold text-[11px]"
+                              title="Hold and drag ⠿ to reorder this variant"
                               aria-label="Drag handle to reorder variant"
                             >
-                              <span className="text-sm font-black leading-none select-none tracking-tighter">
+                              <span className="text-sm font-black leading-none select-none">
                                 ⠿
                               </span>
+                              <span className="text-[10px] font-bold">Drag Handle</span>
                             </div>
                           )}
                           <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-[#0F2C59] text-white shrink-0">
@@ -694,76 +892,137 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
                             ({variant.id})
                           </span>
                         </div>
-                        {variants.length > 1 && (
+                        <div className="flex items-center gap-1">
                           <button
                             type="button"
-                            onClick={() => handleDeleteVariant(idx)}
-                            className="text-gray-400 hover:text-red-600 transition p-1"
-                            title="Remove Variant"
+                            onClick={() => handleDuplicateVariant(idx)}
+                            className="text-gray-500 hover:text-[#0F2C59] hover:bg-white p-1 rounded transition cursor-pointer"
+                            title="Duplicate this variant"
                           >
-                            <Trash2 size={13} />
+                            <Copy size={13} />
                           </button>
-                        )}
+                          {variants.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteVariant(idx)}
+                              className="text-gray-400 hover:text-red-600 hover:bg-white p-1 rounded transition cursor-pointer"
+                              title="Remove Variant"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          )}
+                        </div>
                       </div>
 
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                    <div>
-                      <label className="text-[10px] font-bold text-gray-600 block mb-0.5">
-                        Selling Price (₹)
-                      </label>
-                      <input
-                        type="number"
-                        step="any"
-                        min="0"
-                        placeholder="e.g. 9.50"
-                        value={variant.baseSellingPrice}
-                        onChange={(e) =>
-                          handleUpdateVariant(idx, 'baseSellingPrice', e.target.value)
-                        }
-                        className="w-full p-1.5 border border-gray-300 rounded-lg text-xs font-bold text-[#0F2C59] bg-white outline-none"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-bold text-gray-600 block mb-0.5">
-                        MRP (₹)
-                      </label>
-                      <input
-                        type="number"
-                        min="0"
-                        value={variant.mrp}
-                        onChange={(e) => handleUpdateVariant(idx, 'mrp', e.target.value)}
-                        className="w-full p-1.5 border border-gray-300 rounded-lg text-xs bg-white outline-none"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-bold text-gray-600 block mb-0.5">
-                        Stock Qty
-                      </label>
-                      <input
-                        type="number"
-                        min="0"
-                        value={variant.stockQuantity}
-                        onChange={(e) =>
-                          handleUpdateVariant(idx, 'stockQuantity', e.target.value)
-                        }
-                        className="w-full p-1.5 border border-gray-300 rounded-lg text-xs bg-white outline-none"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-bold text-gray-600 block mb-0.5">
-                        Max Order Limit
-                      </label>
-                      <input
-                        type="number"
-                        min="1"
-                        value={variant.maxOrderLimit}
-                        onChange={(e) =>
-                          handleUpdateVariant(idx, 'maxOrderLimit', e.target.value)
-                        }
-                        className="w-full p-1.5 border border-gray-300 rounded-lg text-xs bg-white outline-none"
-                      />
-                    </div>
-                  </div>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
+                        <div>
+                          <label className="text-[10px] font-bold text-gray-600 block mb-0.5">
+                            Pack Size *
+                          </label>
+                          <input
+                            type="number"
+                            step="any"
+                            min="0.01"
+                            placeholder="e.g. 1"
+                            value={variant.packSize ?? ''}
+                            onChange={(e) =>
+                              handleUpdateVariant(idx, 'packSize', e.target.value)
+                            }
+                            className="w-full p-1.5 border border-gray-300 rounded-lg text-xs font-bold text-gray-900 bg-white outline-none focus:border-[#0F2C59]"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold text-gray-600 block mb-0.5">
+                            Unit *
+                          </label>
+                          <select
+                            value={variant.unit || ''}
+                            onChange={(e) =>
+                              handleUpdateVariant(idx, 'unit', e.target.value)
+                            }
+                            className="w-full p-1.5 border border-gray-300 rounded-lg text-xs font-bold text-gray-900 bg-white outline-none focus:border-[#0F2C59]"
+                          >
+                            <option value="">Select Unit</option>
+                            {Object.values(UnitType).map((u) => (
+                              <option key={u} value={u}>
+                                {u}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold text-gray-600 block mb-0.5">
+                            Selling Price (₹) *
+                          </label>
+                          <input
+                            type="number"
+                            step="any"
+                            min="0"
+                            placeholder="e.g. 9.50"
+                            value={variant.baseSellingPrice ?? ''}
+                            onChange={(e) =>
+                              handleUpdateVariant(idx, 'baseSellingPrice', e.target.value)
+                            }
+                            className="w-full p-1.5 border border-gray-300 rounded-lg text-xs font-bold text-[#0F2C59] bg-white outline-none focus:border-[#0F2C59]"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold text-gray-600 block mb-0.5">
+                            MRP (₹) *
+                          </label>
+                          <input
+                            type="number"
+                            step="any"
+                            min="0"
+                            placeholder="e.g. 10"
+                            value={variant.mrp ?? ''}
+                            onChange={(e) => handleUpdateVariant(idx, 'mrp', e.target.value)}
+                            className="w-full p-1.5 border border-gray-300 rounded-lg text-xs bg-white outline-none focus:border-[#0F2C59]"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold text-gray-600 block mb-0.5">
+                            Stock Qty
+                          </label>
+                          <input
+                            type="number"
+                            min="0"
+                            value={variant.stockQuantity ?? 0}
+                            onChange={(e) =>
+                              handleUpdateVariant(idx, 'stockQuantity', e.target.value)
+                            }
+                            className="w-full p-1.5 border border-gray-300 rounded-lg text-xs bg-white outline-none focus:border-[#0F2C59]"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold text-gray-600 block mb-0.5">
+                            Max Order Limit
+                          </label>
+                          <input
+                            type="number"
+                            min="1"
+                            value={variant.maxOrderLimit ?? 12}
+                            onChange={(e) =>
+                              handleUpdateVariant(idx, 'maxOrderLimit', e.target.value)
+                            }
+                            className="w-full p-1.5 border border-gray-300 rounded-lg text-xs bg-white outline-none focus:border-[#0F2C59]"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold text-gray-600 block mb-0.5">
+                            Pack Label (Optional)
+                          </label>
+                          <input
+                            type="text"
+                            placeholder="e.g. 1 KG Pouch"
+                            value={variant.packLabel ?? ''}
+                            onChange={(e) =>
+                              handleUpdateVariant(idx, 'packLabel', e.target.value)
+                            }
+                            className="w-full p-1.5 border border-gray-300 rounded-lg text-xs bg-white outline-none focus:border-[#0F2C59]"
+                          />
+                        </div>
+                      </div>
 
                   {/* Wholesale Bulk Discount Slab (Optional) for EACH product variant */}
                   <div className="mt-2.5 pt-2 border-t border-gray-200">

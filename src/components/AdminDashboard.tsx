@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Package,
   Layers,
@@ -53,7 +53,6 @@ import { AdminSettingsControl } from './AdminSettingsControl';
 import { CategoryManagement } from './CategoryManagement';
 import { LogoUploadModal } from './LogoUploadModal';
 import { EditProductModal } from './EditProductModal';
-import { AddVariantModal } from './AddVariantModal';
 import { InlineVariantStockEditor } from './InlineVariantStockEditor';
 import { BarcodeScannerModal } from './BarcodeScannerModal';
 import { BarcodeLookupBanner } from './BarcodeLookupBanner';
@@ -129,6 +128,7 @@ export const AdminDashboard: React.FC = () => {
     addProduct,
     updateProduct,
     deleteProduct,
+    reorderVariants,
     settings,
     setActiveRole,
     users,
@@ -631,22 +631,103 @@ export const AdminDashboard: React.FC = () => {
   const [isProductReorderModalOpen, setIsProductReorderModalOpen] = useState(false);
   // Edit individual product state
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
-  // Add variant to individual product state
-  const [addingVariantProduct, setAddingVariantProduct] = useState<Product | null>(null);
+  const [initialAddVariantForEdit, setInitialAddVariantForEdit] = useState(false);
   // Fullscreen photo preview lightbox state
   const [zoomImageProduct, setZoomImageProduct] = useState<Product | null>(null);
 
-  const handleSaveEditProduct = async (productId: string, updates: Partial<Product>) => {
-    return await updateProduct(productId, updates);
+  // Directly drag & drop reorder variants on the product inventory cards (Mobile Touch & Mouse)
+  const [draggingCardVariant, setDraggingCardVariant] = useState<{
+    productId: string;
+    fromIndex: number;
+    targetIndex: number;
+  } | null>(null);
+
+  const draggingCardVariantRef = useRef<{
+    productId: string;
+    fromIndex: number;
+    targetIndex: number;
+  } | null>(null);
+
+  const handleVariantCardPointerDown = (
+    e: React.PointerEvent,
+    productId: string,
+    variantIdx: number
+  ) => {
+    if (e.button !== 0 && e.pointerType === 'mouse') return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    const initial = { productId, fromIndex: variantIdx, targetIndex: variantIdx };
+    draggingCardVariantRef.current = initial;
+    setDraggingCardVariant(initial);
+
+    const container = document.getElementById(`inventory-product-variants-${productId}`);
+
+    const handlePointerMove = (moveEvt: PointerEvent) => {
+      moveEvt.preventDefault();
+      if (!draggingCardVariantRef.current || !container) return;
+
+      const clientY = moveEvt.clientY;
+      const variantCards = container.querySelectorAll<HTMLElement>('[data-variant-box-idx]');
+      let closestIdx: number | null = null;
+      let minDistance = Infinity;
+
+      variantCards.forEach((card) => {
+        const rect = card.getBoundingClientRect();
+        const midY = rect.top + rect.height / 2;
+        const dist = Math.abs(clientY - midY);
+        const idxAttr = card.getAttribute('data-variant-box-idx');
+        if (idxAttr !== null) {
+          const idxVal = Number(idxAttr);
+          if (dist < minDistance) {
+            minDistance = dist;
+            closestIdx = idxVal;
+          }
+        }
+      });
+
+      if (closestIdx !== null && closestIdx !== draggingCardVariantRef.current.targetIndex) {
+        const updated = { ...draggingCardVariantRef.current, targetIndex: closestIdx };
+        draggingCardVariantRef.current = updated;
+        setDraggingCardVariant(updated);
+      }
+    };
+
+    const handlePointerUp = async () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('pointercancel', handlePointerUp);
+
+      const current = draggingCardVariantRef.current;
+      draggingCardVariantRef.current = null;
+      setDraggingCardVariant(null);
+
+      if (current && current.fromIndex !== current.targetIndex) {
+        const targetProd = products.find((p) => p.id === current.productId);
+        if (targetProd && Array.isArray(targetProd.variants)) {
+          const reordered = [...targetProd.variants];
+          const [movedItem] = reordered.splice(current.fromIndex, 1);
+          reordered.splice(current.targetIndex, 0, movedItem);
+
+          const sequenced = reordered.map((v, i) => ({
+            ...v,
+            displayOrder: i + 1,
+          }));
+
+          if (reorderVariants) {
+            await reorderVariants(current.productId, sequenced);
+          }
+        }
+      }
+    };
+
+    window.addEventListener('pointermove', handlePointerMove, { passive: false });
+    window.addEventListener('pointerup', handlePointerUp);
+    window.addEventListener('pointercancel', handlePointerUp);
   };
 
-  const handleAddVariantToProduct = (productId: string, newVariant: ProductVariant) => {
-    const target = products.find((p) => p.id === productId);
-    if (!target) return;
-    setAddingVariantProduct(null);
-    updateProduct(productId, {
-      variants: [...target.variants, newVariant],
-    });
+  const handleSaveEditProduct = async (productId: string, updates: Partial<Product>) => {
+    return await updateProduct(productId, updates);
   };
 
   const handleSaveStock = async (
@@ -2138,8 +2219,14 @@ export const AdminDashboard: React.FC = () => {
             <BarcodeLookupBanner
               result={barcodeLookupResult}
               onClear={handleClearBarcodeLookup}
-              onOpenEditor={(p) => setEditingProduct(p)}
-              onAddVariant={(p) => setAddingVariantProduct(p)}
+              onOpenEditor={(p) => {
+                setInitialAddVariantForEdit(false);
+                setEditingProduct(p);
+              }}
+              onAddVariant={(p) => {
+                setInitialAddVariantForEdit(true);
+                setEditingProduct(p);
+              }}
               onAddProductWithBarcode={(barcode) => handleOpenAddProductModalWithBarcode(barcode)}
               onlyShowMatched={onlyShowLookupMatched}
               onToggleOnlyShowMatched={() => setOnlyShowLookupMatched((prev) => !prev)}
@@ -2284,7 +2371,10 @@ export const AdminDashboard: React.FC = () => {
                                 <button
                                   type="button"
                                   id={`item-edit-btn-${p.id}`}
-                                  onClick={() => setEditingProduct(p)}
+                                  onClick={() => {
+                                    setInitialAddVariantForEdit(false);
+                                    setEditingProduct(p);
+                                  }}
                                   className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-white hover:bg-gray-100 text-[#0F2C59] border border-[#0F2C59]/30 hover:border-[#0F2C59] text-xs font-bold rounded-lg shadow-2xs transition active:scale-95 cursor-pointer touch-manipulation"
                                   title={`Edit ${p.name}`}
                                 >
@@ -2295,7 +2385,10 @@ export const AdminDashboard: React.FC = () => {
                                 <button
                                   type="button"
                                   id={`item-add-variant-btn-${p.id}`}
-                                  onClick={() => setAddingVariantProduct(p)}
+                                  onClick={() => {
+                                    setInitialAddVariantForEdit(true);
+                                    setEditingProduct(p);
+                                  }}
                                   className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-[#0F2C59] hover:bg-[#163a6e] text-white text-xs font-bold rounded-lg shadow-2xs transition active:scale-95 cursor-pointer touch-manipulation"
                                   title={`+ Add Variant for ${p.name}`}
                                 >
@@ -2312,45 +2405,101 @@ export const AdminDashboard: React.FC = () => {
                           </div>
                         </div>
 
-                        <div className="mt-3 space-y-2">
-                          {p.variants.map((v) => (
-                            <div key={v.id} className="bg-gray-50 p-2.5 rounded-lg border border-gray-200 text-xs">
-                              <div className="flex justify-between items-center font-bold">
-                                <span>{formatVariantPack(v)}</span>
-                                <div className="flex items-center gap-1.5 flex-wrap justify-end">
-                                  {v.purchasePrice !== undefined && v.purchasePrice > 0 && (
-                                    <span className="text-[10px] font-semibold text-amber-900 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200" title="Purchase Price (Cost)">
-                                      Purchase: ₹{v.purchasePrice}
+                        <div id={`inventory-product-variants-${p.id}`} className="mt-3 space-y-2">
+                          {p.variants.map((v, vIdx) => {
+                            const isBeingDragged =
+                              draggingCardVariant?.productId === p.id &&
+                              draggingCardVariant?.fromIndex === vIdx;
+                            const isDropTarget =
+                              draggingCardVariant?.productId === p.id &&
+                              draggingCardVariant?.targetIndex === vIdx &&
+                              draggingCardVariant?.fromIndex !== vIdx;
+
+                            return (
+                              <React.Fragment key={v.id}>
+                                {/* Clear Drop Indicator Bar right before the target variant box */}
+                                {isDropTarget && (
+                                  <div className="flex items-center gap-2 py-1 my-0.5 px-2.5 rounded-lg bg-orange-100/90 border border-orange-300 shadow-xs animate-fadeIn">
+                                    <div className="w-2 h-2 rounded-full bg-[#FF6B00] animate-ping shrink-0" />
+                                    <div className="h-0.5 flex-1 bg-[#FF6B00] rounded-full" />
+                                    <span className="text-[10px] font-black text-[#FF6B00] uppercase tracking-wider shrink-0 flex items-center gap-1">
+                                      <span>Drop Here</span>
+                                      <span className="font-mono bg-white px-1.5 py-0.2 rounded border border-orange-300 text-[9px] text-gray-800">
+                                        #{vIdx + 1}
+                                      </span>
                                     </span>
+                                    <div className="h-0.5 flex-1 bg-[#FF6B00] rounded-full" />
+                                    <div className="w-2 h-2 rounded-full bg-[#FF6B00] animate-ping shrink-0" />
+                                  </div>
+                                )}
+
+                                <div
+                                  data-variant-box-idx={vIdx}
+                                  className={`p-2.5 rounded-lg border text-xs transition-all relative ${
+                                    isBeingDragged
+                                      ? 'opacity-40 border-2 border-dashed border-[#0F2C59] bg-blue-50/20 scale-[0.99]'
+                                      : isDropTarget
+                                      ? 'border-2 border-dashed border-[#FF6B00] bg-orange-50/40 ring-2 ring-[#FF6B00]/30 shadow-xs'
+                                      : 'bg-gray-50 border-gray-200'
+                                  }`}
+                                >
+                                  {/* Top Bar with ⠿ Drag Handle Button */}
+                                  {p.variants.length > 1 && (
+                                    <div className="flex items-center justify-between pb-1.5 mb-1.5 border-b border-gray-200/80">
+                                      <div
+                                        data-drag-handle
+                                        onPointerDown={(e) => handleVariantCardPointerDown(e, p.id, vIdx)}
+                                        className="touch-none select-none flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-white hover:bg-[#0F2C59] active:bg-[#0F2C59] text-gray-700 hover:text-white active:text-white border border-gray-300 hover:border-[#0F2C59] cursor-grab active:cursor-grabbing transition-colors shadow-2xs font-bold text-[11px]"
+                                        title="Hold and drag ⠿ to reorder this variant"
+                                        aria-label="Drag handle to reorder variant"
+                                      >
+                                        <span className="text-sm font-black leading-none select-none">⠿</span>
+                                        <span className="text-[10px] font-bold">Drag Handle</span>
+                                      </div>
+                                      <span className="text-[10px] font-bold text-gray-500 font-mono">
+                                        #{vIdx + 1}{vIdx === 0 ? ' (Default Pack)' : ''}
+                                      </span>
+                                    </div>
                                   )}
-                                  <span className="text-[#0F2C59]">
-                                    ₹{Number.isInteger(v.baseSellingPrice) ? v.baseSellingPrice : v.baseSellingPrice.toFixed(2)}
-                                  </span>
-                                  {v.mrp > v.baseSellingPrice && (
-                                    <span className="text-gray-400 font-normal text-[11px]">(MRP ₹{v.mrp})</span>
-                                  )}
-                                  {((v.discount && v.discount > 0) || (p.discount && p.discount > 0)) && (
-                                    <span className="text-[10px] font-extrabold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
-                                      {v.discount || p.discount}% OFF
-                                    </span>
+
+                                  <div className="flex justify-between items-center font-bold">
+                                    <span className="text-gray-900">{formatVariantPack(v)}</span>
+                                    <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                                      {v.purchasePrice !== undefined && v.purchasePrice > 0 && (
+                                        <span className="text-[10px] font-semibold text-amber-900 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200" title="Purchase Price (Cost)">
+                                          Purchase: ₹{v.purchasePrice}
+                                        </span>
+                                      )}
+                                      <span className="text-[#0F2C59]">
+                                        ₹{Number.isInteger(v.baseSellingPrice) ? v.baseSellingPrice : v.baseSellingPrice.toFixed(2)}
+                                      </span>
+                                      {v.mrp > v.baseSellingPrice && (
+                                        <span className="text-gray-400 font-normal text-[11px]">(MRP ₹{v.mrp})</span>
+                                      )}
+                                      {((v.discount && v.discount > 0) || (p.discount && p.discount > 0)) && (
+                                        <span className="text-[10px] font-extrabold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                                          {v.discount || p.discount}% OFF
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                  <div className="flex justify-between items-center text-[10px] text-gray-500 mt-2 pt-1.5 border-t border-gray-200">
+                                    <InlineVariantStockEditor
+                                      product={p}
+                                      variant={v}
+                                      onSaveStock={handleSaveStock}
+                                    />
+                                    <span className="text-[10px] text-gray-400">Max: {v.maxOrderLimit}</span>
+                                  </div>
+                                  {v.tieredPrices && v.tieredPrices.length > 0 && (
+                                    <div className="mt-1 pt-1 border-t border-gray-200 text-[9px] text-emerald-800 font-semibold">
+                                      Bulk Slab: {v.tieredPrices[0].minQty}+ units @ ₹{v.tieredPrices[0].unitPrice}
+                                    </div>
                                   )}
                                 </div>
-                              </div>
-                              <div className="flex justify-between items-center text-[10px] text-gray-500 mt-2 pt-1.5 border-t border-gray-200">
-                                <InlineVariantStockEditor
-                                  product={p}
-                                  variant={v}
-                                  onSaveStock={handleSaveStock}
-                                />
-                                <span className="text-[10px] text-gray-400">Max: {v.maxOrderLimit}</span>
-                              </div>
-                              {v.tieredPrices && v.tieredPrices.length > 0 && (
-                                <div className="mt-1 pt-1 border-t border-gray-200 text-[9px] text-emerald-800 font-semibold">
-                                  Bulk Slab: {v.tieredPrices[0].minQty}+ units @ ₹{v.tieredPrices[0].unitPrice}
-                                </div>
-                              )}
-                            </div>
-                          ))}
+                              </React.Fragment>
+                            );
+                          })}
                         </div>
                       </div>
 
@@ -3092,21 +3241,17 @@ export const AdminDashboard: React.FC = () => {
         onClose={() => setIsLogoModalOpen(false)}
       />
 
-      {/* Edit Individual Item Modal */}
+      {/* Edit Individual Item Modal (Unified editing & multi-variant management) */}
       <EditProductModal
         product={editingProduct}
         isOpen={Boolean(editingProduct)}
-        onClose={() => setEditingProduct(null)}
+        onClose={() => {
+          setEditingProduct(null);
+          setInitialAddVariantForEdit(false);
+        }}
         onSave={handleSaveEditProduct}
         existingProducts={products}
-      />
-
-      {/* Add Variant to Specific Item Modal */}
-      <AddVariantModal
-        product={addingVariantProduct}
-        isOpen={Boolean(addingVariantProduct)}
-        onClose={() => setAddingVariantProduct(null)}
-        onAddVariant={handleAddVariantToProduct}
+        initialAddVariant={initialAddVariantForEdit}
       />
 
       {/* Barcode Scanner for Add Product */}
