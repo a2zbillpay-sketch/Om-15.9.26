@@ -51,6 +51,9 @@ import {
   deleteProductFromSupabase,
   updateProductStockInSupabase,
   saveEditedOrderToSupabase,
+  saveProductRequestToSupabase,
+  fetchProductRequestsFromSupabase,
+  subscribeToProductRequests,
 } from '../lib/supabase';
 import {
   fetchCategoriesFromDb,
@@ -251,6 +254,7 @@ interface AppContextType {
     quantity: number;
     customerOverride?: { name?: string; phone?: string; id?: string };
   }) => ProductRequest;
+  refreshProductRequests: () => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -527,6 +531,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   });
 
+  const refreshProductRequests = useCallback(async () => {
+    try {
+      const remote = await fetchProductRequestsFromSupabase();
+      if (remote && Array.isArray(remote)) {
+        setProductRequests((prev) => {
+          const map = new Map<string, ProductRequest>();
+          remote.forEach((r) => map.set(r.id, r));
+          prev.forEach((r) => {
+            if (!map.has(r.id)) {
+              map.set(r.id, r);
+            }
+          });
+          const merged = Array.from(map.values()).sort(
+            (a, b) => new Date(b.requestDate || b.createdAt).getTime() - new Date(a.requestDate || a.createdAt).getTime()
+          );
+          try {
+            localStorage.setItem('om_product_requests', JSON.stringify(merged));
+          } catch {}
+          return merged;
+        });
+      }
+    } catch (err) {
+      console.warn('Error refreshing product requests:', err);
+    }
+  }, []);
+
   const requestProduct = useCallback(
     (data: {
       product: Product;
@@ -570,7 +600,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
 
       setProductRequests((prev) => {
-        const updated = [newRequest, ...prev];
+        const updated = [newRequest, ...prev.filter((r) => r.id !== newRequest.id)];
         try {
           localStorage.setItem('om_product_requests', JSON.stringify(updated));
           const cleanPhone = customerPhone.replace(/\D/g, '').slice(-10);
@@ -581,10 +611,101 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return updated;
       });
 
+      // Persist to Supabase product_requests table
+      saveProductRequestToSupabase(newRequest).catch((err) => {
+        console.warn('Notice saving product request to Supabase:', err);
+      });
+
+      // Real-time broadcast to all browser tabs and windows
+      try {
+        if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+          const bc = new BroadcastChannel('om_product_request_channel');
+          bc.postMessage({ type: 'NEW_REQUEST', request: newRequest });
+          setTimeout(() => {
+            try {
+              bc.close();
+            } catch {}
+          }, 1000);
+          window.dispatchEvent(new CustomEvent('om_product_requests_updated', { detail: newRequest }));
+        }
+      } catch {}
+
       return newRequest;
     },
     [currentUser.id, currentUser.name, currentUser.phone]
   );
+
+  // Synchronize product requests across tabs, windows, and remote Supabase
+  useEffect(() => {
+    refreshProductRequests();
+
+    const unsubscribeSupabase = subscribeToProductRequests((incoming) => {
+      setProductRequests((prev) => {
+        if (prev.some((r) => r.id === incoming.id)) return prev;
+        const updated = [incoming, ...prev];
+        try {
+          localStorage.setItem('om_product_requests', JSON.stringify(updated));
+        } catch {}
+        return updated;
+      });
+    });
+
+    let bc: BroadcastChannel | null = null;
+    try {
+      if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+        bc = new BroadcastChannel('om_product_request_channel');
+        bc.onmessage = (event) => {
+          if (event.data?.type === 'NEW_REQUEST' && event.data.request) {
+            const incoming: ProductRequest = event.data.request;
+            setProductRequests((prev) => {
+              if (prev.some((r) => r.id === incoming.id)) return prev;
+              const updated = [incoming, ...prev];
+              try {
+                localStorage.setItem('om_product_requests', JSON.stringify(updated));
+              } catch {}
+              return updated;
+            });
+          }
+        };
+      }
+    } catch {}
+
+    const handleCustomUpdate = (e: Event) => {
+      const detail = (e as CustomEvent)?.detail;
+      if (detail && detail.id) {
+        setProductRequests((prev) => {
+          if (prev.some((r) => r.id === detail.id)) return prev;
+          const updated = [detail, ...prev];
+          try {
+            localStorage.setItem('om_product_requests', JSON.stringify(updated));
+          } catch {}
+          return updated;
+        });
+      }
+    };
+    window.addEventListener('om_product_requests_updated', handleCustomUpdate);
+
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === 'om_product_requests' && e.newValue) {
+        try {
+          const parsed = JSON.parse(e.newValue);
+          if (Array.isArray(parsed)) {
+            setProductRequests(parsed);
+          }
+        } catch {}
+      }
+    };
+    window.addEventListener('storage', handleStorage);
+
+    return () => {
+      unsubscribeSupabase();
+      try {
+        bc?.close();
+      } catch {}
+      window.removeEventListener('om_product_requests_updated', handleCustomUpdate);
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, [refreshProductRequests]);
 
   useEffect(() => {
     localStorage.setItem('om_wallet_transactions', JSON.stringify(walletTransactions));
@@ -749,6 +870,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } else if (fetchedOrders && fetchedOrders.length > 0) {
         setOrders(fetchedOrders);
       }
+      refreshProductRequests().catch(() => {});
     } catch (err) {
       console.warn('Error refreshing orders and COD ledger:', err);
     }
@@ -3208,6 +3330,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         markAllNotificationsAsRead,
         productRequests,
         requestProduct,
+        refreshProductRequests,
       }}
     >
       {children}

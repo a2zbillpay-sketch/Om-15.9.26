@@ -302,6 +302,17 @@ export function normalizeAndValidateVariant(
     tieredPrices.push(tpResult.tieredPrice);
   }
 
+  const barcodeValidation = normalizeAndValidateBarcode(raw.barcode);
+  const variantBarcode = barcodeValidation.valid ? barcodeValidation.barcode : null;
+  const variantImageUrl = raw.imageUrl || raw.image_url ? String(raw.imageUrl || raw.image_url).trim() : undefined;
+  const purchasePrice =
+    raw.purchasePrice !== undefined && raw.purchasePrice !== null && !isNaN(Number(raw.purchasePrice))
+      ? Number(raw.purchasePrice)
+      : (raw.purchase_price !== undefined && raw.purchase_price !== null && !isNaN(Number(raw.purchase_price)) ? Number(raw.purchase_price) : undefined);
+  const displayOrder = typeof raw.displayOrder === 'number'
+    ? raw.displayOrder
+    : (typeof raw.display_order === 'number' ? raw.display_order : index + 1);
+
   return {
     valid: true,
     variant: {
@@ -312,10 +323,7 @@ export function normalizeAndValidateVariant(
       packLabel,
       mrp,
       baseSellingPrice,
-      purchasePrice:
-        raw.purchasePrice !== undefined && raw.purchasePrice !== null && !isNaN(Number(raw.purchasePrice))
-          ? Number(raw.purchasePrice)
-          : undefined,
+      purchasePrice,
       discount:
         raw.discount !== undefined && raw.discount !== null && !isNaN(Number(raw.discount))
           ? Number(raw.discount)
@@ -327,6 +335,9 @@ export function normalizeAndValidateVariant(
         raw.lowStockThreshold !== undefined && raw.lowStockThreshold !== null && !isNaN(Number(raw.lowStockThreshold))
           ? Math.max(1, Number(raw.lowStockThreshold))
           : undefined,
+      barcode: variantBarcode,
+      imageUrl: variantImageUrl,
+      displayOrder,
     },
   };
 }
@@ -444,7 +455,10 @@ export async function saveProductWithCascadeSync(
       id: product.id,
       name: product.name,
       category: categoryName,
+      category_id: product.categoryId || null,
       sub_category: product.brand || '',
+      brand: product.brand || '',
+      description: product.description || '',
       price: basePrice,
       mrp: mrp,
       stock: totalStock,
@@ -463,6 +477,18 @@ export async function saveProductWithCascadeSync(
     let prodInsertResult = await supabaseClient
       .from('products')
       .upsert(productPayload, { onConflict: 'id' });
+
+    // Graceful fallback: If category_id column is not in table schema
+    if (
+      prodInsertResult.error &&
+      (prodInsertResult.error.message?.includes('category_id') ||
+        prodInsertResult.error.message?.toLowerCase().includes("could not find the 'category_id' column"))
+    ) {
+      delete productPayload.category_id;
+      prodInsertResult = await supabaseClient
+        .from('products')
+        .upsert(productPayload, { onConflict: 'id' });
+    }
 
     // Graceful fallback: If display_order column has not yet been added to Supabase table
     if (
@@ -547,7 +573,7 @@ export async function saveProductWithCascadeSync(
         }
 
         if (incomingVariants.length > 0) {
-          const variantsPayload = incomingVariants.map((v) => ({
+          const variantsPayload = incomingVariants.map((v, vIdx) => ({
             id: v.id,
             product_id: product.id,
             unit: v.unit,
@@ -555,14 +581,31 @@ export async function saveProductWithCascadeSync(
             pack_label: v.packLabel || `${v.packSize} ${v.unit}`,
             mrp: Number(v.mrp),
             base_selling_price: Number(v.baseSellingPrice),
+            purchase_price: v.purchasePrice !== undefined && v.purchasePrice !== null ? Number(v.purchasePrice) : null,
+            barcode: v.barcode && String(v.barcode).trim() ? String(v.barcode).trim() : null,
+            image_url: v.imageUrl && String(v.imageUrl).trim() ? String(v.imageUrl).trim() : null,
+            display_order: typeof v.displayOrder === 'number' ? v.displayOrder : vIdx + 1,
             stock_quantity: v.stockQuantity !== undefined && v.stockQuantity !== null ? Number(v.stockQuantity) : 0,
             max_order_limit: v.maxOrderLimit !== undefined && v.maxOrderLimit !== null ? Number(v.maxOrderLimit) : 12,
             updated_at: new Date().toISOString(),
           }));
 
-          await supabaseClient
+          let varInsert = await supabaseClient
             .from('product_variants')
             .upsert(variantsPayload, { onConflict: 'id' });
+
+          if (varInsert.error) {
+            // Strip any optional columns not yet added to PostgreSQL table
+            const stripped = variantsPayload.map((row) => {
+              const r: Record<string, any> = { ...row };
+              if (varInsert.error?.message?.includes('barcode')) delete r.barcode;
+              if (varInsert.error?.message?.includes('image_url')) delete r.image_url;
+              if (varInsert.error?.message?.includes('purchase_price')) delete r.purchase_price;
+              if (varInsert.error?.message?.includes('display_order')) delete r.display_order;
+              return r;
+            });
+            await supabaseClient.from('product_variants').upsert(stripped, { onConflict: 'id' });
+          }
         }
       }
     } catch {

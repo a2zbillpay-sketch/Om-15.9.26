@@ -481,6 +481,8 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
           v.discount !== undefined && v.discount !== null && !isNaN(Number(v.discount))
             ? Number(v.discount)
             : undefined,
+        barcode: v.barcode ? String(v.barcode).trim() : null,
+        imageUrl: v.imageUrl ? String(v.imageUrl).trim() : undefined,
         stockQuantity: Number(v.stockQuantity) || 0,
         maxOrderLimit: Number(v.maxOrderLimit || 12),
         tieredPrices: validTieredPrices,
@@ -914,7 +916,7 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
+                      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
                         <div>
                           <label className="text-[10px] font-bold text-gray-600 block mb-0.5">
                             Pack Size *
@@ -1010,6 +1012,22 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
                         </div>
                         <div>
                           <label className="text-[10px] font-bold text-gray-600 block mb-0.5">
+                            Purchase Price (₹)
+                          </label>
+                          <input
+                            type="number"
+                            step="any"
+                            min="0"
+                            placeholder="e.g. 8.50"
+                            value={variant.purchasePrice ?? ''}
+                            onChange={(e) =>
+                              handleUpdateVariant(idx, 'purchasePrice', e.target.value)
+                            }
+                            className="w-full p-1.5 border border-gray-300 rounded-lg text-xs bg-white outline-none focus:border-[#0F2C59]"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold text-gray-600 block mb-0.5">
                             Pack Label (Optional)
                           </label>
                           <input
@@ -1020,6 +1038,20 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
                               handleUpdateVariant(idx, 'packLabel', e.target.value)
                             }
                             className="w-full p-1.5 border border-gray-300 rounded-lg text-xs bg-white outline-none focus:border-[#0F2C59]"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold text-gray-600 block mb-0.5">
+                            Variant Barcode
+                          </label>
+                          <input
+                            type="text"
+                            placeholder="Optional barcode"
+                            value={variant.barcode ?? ''}
+                            onChange={(e) =>
+                              handleUpdateVariant(idx, 'barcode', e.target.value)
+                            }
+                            className="w-full p-1.5 border border-gray-300 rounded-lg text-xs font-mono bg-white outline-none focus:border-[#0F2C59]"
                           />
                         </div>
                       </div>

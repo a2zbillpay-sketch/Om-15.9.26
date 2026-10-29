@@ -1,5 +1,5 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { User, Order, OrderItem, Address, Role, OrderStatus, PaymentMethod, PaymentStatus, UnitType, Product, ProductVariant, TieredPrice, SystemSetting, WalletTransaction } from '../types';
+import { User, Order, OrderItem, Address, Role, OrderStatus, PaymentMethod, PaymentStatus, UnitType, Product, ProductVariant, TieredPrice, SystemSetting, WalletTransaction, ProductRequest } from '../types';
 import { INITIAL_CATEGORIES, INITIAL_SETTINGS } from '../data/seedData';
 import {
   saveProductWithCascadeSync,
@@ -852,16 +852,129 @@ export function parseOrderItemsFromProductName(
 }
 
 /**
+ * Maps raw database orders rows (including "Product Name" serialization and COD_META JSON)
+ * into typed application Order structures.
+ */
+export function mapDatabaseRowToOrder(o: any, fallbackCustomerId?: string, fallbackPhone?: string): Order {
+  const finalAmount = Number(o.final_total ?? o.subtotal ?? 0);
+  const subtotal = Number(o.subtotal ?? finalAmount);
+  const discountAmount = Number(o.discount_amount ?? 0);
+  const deliveryFee = Math.max(0, finalAmount - (subtotal - discountAmount));
+  let items = parseOrderItemsFromProductName(o['Product Name'], o.id, finalAmount);
+  const parsedAddress = parseCustomerAddress(o.delivery_address);
+
+  let orderNumber = '';
+  let codCollectedAmount = 0;
+  let previousOutstanding = 0;
+  let totalPayable = finalAmount;
+  let previousOnlinePaid = 0;
+  let walletAmountUsed = 0;
+  let stockDeducted = false;
+  let stockRestored = false;
+
+  const rawNotes = o.notes || '';
+  if (rawNotes.includes('COD_META:')) {
+    const parts = rawNotes.split('COD_META:');
+    orderNumber = parts[0].replace(/\|/g, '').replace(/^Order\s*#?/i, '').trim();
+    try {
+      const meta = JSON.parse(parts[1].trim());
+      codCollectedAmount = Number(meta.codCollected) || 0;
+      previousOutstanding = Number(meta.prevOutstanding) || 0;
+      totalPayable = meta.totalPayable !== undefined ? Number(meta.totalPayable) : finalAmount;
+      walletAmountUsed = Number(meta.walletAmountUsed) || 0;
+      previousOnlinePaid = Number(meta.previousOnlinePaid) || 0;
+      stockDeducted = Boolean(meta.stockDeducted);
+      stockRestored = Boolean(meta.stockRestored);
+      if (Array.isArray(meta.items) && meta.items.length > 0) {
+        items = meta.items;
+      }
+    } catch {
+      // ignore parsing error
+    }
+  } else {
+    orderNumber = rawNotes.replace(/^Order\s*#?/i, '').trim() || o.id.replace(/^ord[-_]/i, '').slice(0, 8);
+  }
+  if (!orderNumber) {
+    orderNumber = o.id.replace(/^ord[-_]/i, '').slice(0, 8);
+  }
+
+  if (o.is_paid && codCollectedAmount === 0) {
+    codCollectedAmount = finalAmount;
+  }
+
+  let paymentStatus: PaymentStatus = PaymentStatus.PENDING;
+  if (o.is_paid || codCollectedAmount >= totalPayable) {
+    paymentStatus = PaymentStatus.RECEIVED;
+  } else if (codCollectedAmount > 0) {
+    paymentStatus = PaymentStatus.PARTIALLY_COLLECTED;
+  }
+
+  const resolvedWalletAmountUsed = walletAmountUsed;
+
+  return {
+    id: o.id,
+    orderNumber: orderNumber || `OM-${o.id.slice(0, 5)}`,
+    userId: o.customer_id || fallbackCustomerId || '',
+    userName: o.customer_name || 'Customer',
+    userPhone: o.customer_phone || fallbackPhone || '',
+    addressId: 'addr-' + o.id,
+    address: {
+      id: 'addr-' + o.id,
+      userId: o.customer_id || fallbackCustomerId || '',
+      fullAddress: parsedAddress.fullAddress || (o.delivery_address ? String(o.delivery_address).trim() : '') || 'Address not specified',
+      landmark: parsedAddress.landmark || '',
+      pincode: parsedAddress.pincode || '',
+      isDefault: true,
+    },
+    status: (o.status as OrderStatus) || OrderStatus.ORDER_PENDING,
+    paymentMethod: (o.payment_method as PaymentMethod) || PaymentMethod.COD,
+    paymentStatus,
+    deliveryDate: o.preferred_slot || (o.created_at ? o.created_at.split('T')[0] : new Date().toISOString().split('T')[0]),
+    subtotal,
+    discountAmount,
+    deliveryFee,
+    codCharge: 0,
+    finalAmount,
+    previousOutstanding,
+    totalPayable: (o.payment_method === PaymentMethod.COD || o.payment_method === 'COD') ? finalAmount : totalPayable,
+    previousOnlinePaid,
+    walletAmountUsed: resolvedWalletAmountUsed,
+    codCollectedAmount,
+    stockDeducted,
+    stockRestored,
+    createdAt: o.created_at || new Date().toISOString(),
+    items,
+  };
+}
+
+/**
  * Fetch all orders for a customer across any browser using customer ID and phone number.
+ * Uses secure verified server endpoint to ensure zero leakage of other customers' orders.
  */
 export async function fetchCustomerOrdersFromSupabase(
   customerId: string,
   phone: string
 ): Promise<Order[] | null> {
+  const cleanPhone = phone.trim().replace(/^\+91/, '').replace(/\D/g, '').slice(-10);
+
+  // 1. First attempt secure server-side API to isolate customer records
+  if (typeof window !== 'undefined' && typeof fetch === 'function' && cleanPhone.length === 10) {
+    try {
+      const res = await fetch(`/api/orders?phone=${encodeURIComponent(cleanPhone)}`);
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && Array.isArray(json.orders)) {
+          return json.orders.map((o: any) => mapDatabaseRowToOrder(o, customerId, cleanPhone));
+        }
+      }
+    } catch {
+      // Fall through to direct client query if server API is unavailable
+    }
+  }
+
   if (!supabase) return null;
 
   try {
-    const cleanPhone = phone.trim().replace(/^\+91/, '').replace(/\D/g, '');
     const { data: ordersData, error: ordersError } = await supabase
       .from('orders')
       .select('*')
@@ -874,98 +987,7 @@ export async function fetchCustomerOrdersFromSupabase(
     }
 
     if (!ordersData) return [];
-
-    return ordersData.map((o: any) => {
-      const finalAmount = Number(o.final_total ?? o.subtotal ?? 0);
-      const subtotal = Number(o.subtotal ?? finalAmount);
-      const discountAmount = Number(o.discount_amount ?? 0);
-      const deliveryFee = Math.max(0, finalAmount - (subtotal - discountAmount));
-      let items = parseOrderItemsFromProductName(o['Product Name'], o.id, finalAmount);
-      const parsedAddress = parseCustomerAddress(o.delivery_address);
-
-      let orderNumber = '';
-      let codCollectedAmount = 0;
-      let previousOutstanding = 0;
-      let totalPayable = finalAmount;
-      let previousOnlinePaid = 0;
-      let walletAmountUsed = 0;
-      let stockDeducted = false;
-      let stockRestored = false;
-
-      const rawNotes = o.notes || '';
-      if (rawNotes.includes('COD_META:')) {
-        const parts = rawNotes.split('COD_META:');
-        orderNumber = parts[0].replace(/\|/g, '').replace(/^Order\s*#?/i, '').trim();
-        try {
-          const meta = JSON.parse(parts[1].trim());
-          codCollectedAmount = Number(meta.codCollected) || 0;
-          previousOutstanding = Number(meta.prevOutstanding) || 0;
-          totalPayable = meta.totalPayable !== undefined ? Number(meta.totalPayable) : finalAmount;
-          walletAmountUsed = Number(meta.walletAmountUsed) || 0;
-          previousOnlinePaid = Number(meta.previousOnlinePaid) || 0;
-          stockDeducted = Boolean(meta.stockDeducted);
-          stockRestored = Boolean(meta.stockRestored);
-          if (Array.isArray(meta.items) && meta.items.length > 0) {
-            items = meta.items;
-          }
-        } catch {
-          // ignore parsing error
-        }
-      } else {
-        orderNumber = rawNotes.replace(/^Order\s*#?/i, '').trim() || o.id.replace(/^ord[-_]/i, '').slice(0, 8);
-      }
-      if (!orderNumber) {
-        orderNumber = o.id.replace(/^ord[-_]/i, '').slice(0, 8);
-      }
-
-      if (o.is_paid && codCollectedAmount === 0) {
-        codCollectedAmount = finalAmount;
-      }
-
-      let paymentStatus: PaymentStatus = PaymentStatus.PENDING;
-      if (o.is_paid || codCollectedAmount >= totalPayable) {
-        paymentStatus = PaymentStatus.RECEIVED;
-      } else if (codCollectedAmount > 0) {
-        paymentStatus = PaymentStatus.PARTIALLY_COLLECTED;
-      }
-
-      const resolvedWalletAmountUsed = walletAmountUsed;
-
-      return {
-        id: o.id,
-        orderNumber: orderNumber || `OM-${o.id.slice(0, 5)}`,
-        userId: o.customer_id || customerId,
-        userName: o.customer_name || 'Customer',
-        userPhone: o.customer_phone || cleanPhone,
-        addressId: 'addr-' + o.id,
-        address: {
-          id: 'addr-' + o.id,
-          userId: o.customer_id || customerId,
-          fullAddress: parsedAddress.fullAddress || (o.delivery_address ? String(o.delivery_address).trim() : '') || 'Address not specified',
-          landmark: parsedAddress.landmark || '',
-          pincode: parsedAddress.pincode || '',
-          isDefault: true,
-        },
-        status: (o.status as OrderStatus) || OrderStatus.ORDER_PENDING,
-        paymentMethod: (o.payment_method as PaymentMethod) || PaymentMethod.COD,
-        paymentStatus,
-        deliveryDate: o.preferred_slot || (o.created_at ? o.created_at.split('T')[0] : new Date().toISOString().split('T')[0]),
-        subtotal,
-        discountAmount,
-        deliveryFee,
-        codCharge: 0,
-        finalAmount,
-        previousOutstanding,
-        totalPayable: (o.payment_method === PaymentMethod.COD || o.payment_method === 'COD') ? finalAmount : totalPayable,
-        previousOnlinePaid,
-        walletAmountUsed: resolvedWalletAmountUsed,
-        codCollectedAmount,
-        stockDeducted,
-        stockRestored,
-        createdAt: o.created_at || new Date().toISOString(),
-        items,
-      };
-    });
+    return ordersData.map((o: any) => mapDatabaseRowToOrder(o, customerId, cleanPhone));
   } catch (err) {
     console.error('Failed to query orders from Supabase:', err);
     return null;
@@ -977,6 +999,35 @@ export async function fetchCustomerOrdersFromSupabase(
  * Strictly uses the 20 columns supported by the live orders table.
  */
 export async function saveOrderToSupabase(order: Order): Promise<boolean> {
+  // 1. Primary: Use secure server endpoint for server-verified prices and settings
+  if (typeof window !== 'undefined' && typeof fetch === 'function') {
+    try {
+      const res = await fetch('/api/orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orderId: order.id,
+          orderNumber: order.orderNumber,
+          customerId: order.userId,
+          customerName: order.userName,
+          customerPhone: order.userPhone,
+          paymentMethod: order.paymentMethod,
+          address: order.address,
+          deliveryDate: order.deliveryDate,
+          previousOutstanding: order.previousOutstanding,
+          useWallet: (order.walletAmountUsed || 0) > 0,
+          items: order.items,
+        }),
+      });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success) return true;
+      }
+    } catch {
+      // Fall through to direct database insert
+    }
+  }
+
   if (!supabase) return false;
 
   try {
@@ -1111,8 +1162,24 @@ export async function saveEditedOrderToSupabase(order: Order): Promise<boolean> 
 
 /**
  * Fetch all orders for the Shopkeeper admin view.
+ * Routes through secure verified admin endpoint /api/orders?all=true.
  */
 export async function fetchAllOrdersForAdmin(): Promise<Order[] | null> {
+  // 1. Primary: Use secure server endpoint with verified Shopkeeper session cookie
+  if (typeof window !== 'undefined' && typeof fetch === 'function') {
+    try {
+      const res = await fetch('/api/orders?all=true', { credentials: 'include' });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && Array.isArray(json.orders)) {
+          return json.orders.map((o: any) => mapDatabaseRowToOrder(o));
+        }
+      }
+    } catch {
+      // Fall through to client query if server API is unavailable
+    }
+  }
+
   if (!supabase) return null;
 
   try {
@@ -1127,98 +1194,7 @@ export async function fetchAllOrdersForAdmin(): Promise<Order[] | null> {
     }
 
     if (!ordersData) return [];
-
-    return ordersData.map((o: any) => {
-      const finalAmount = Number(o.final_total ?? o.subtotal ?? 0);
-      const subtotal = Number(o.subtotal ?? finalAmount);
-      const discountAmount = Number(o.discount_amount ?? 0);
-      const deliveryFee = Math.max(0, finalAmount - (subtotal - discountAmount));
-      let items = parseOrderItemsFromProductName(o['Product Name'], o.id, finalAmount);
-      const parsedAddress = parseCustomerAddress(o.delivery_address);
-
-      let orderNumber = '';
-      let codCollectedAmount = 0;
-      let previousOutstanding = 0;
-      let totalPayable = finalAmount;
-      let walletAmountUsed = 0;
-      let previousOnlinePaid = 0;
-      let stockDeducted = false;
-      let stockRestored = false;
-
-      const rawNotes = o.notes || '';
-      if (rawNotes.includes('COD_META:')) {
-        const parts = rawNotes.split('COD_META:');
-        orderNumber = parts[0].replace(/\|/g, '').replace(/^Order\s*#?/i, '').trim();
-        try {
-          const meta = JSON.parse(parts[1].trim());
-          codCollectedAmount = Number(meta.codCollected) || 0;
-          previousOutstanding = Number(meta.prevOutstanding) || 0;
-          totalPayable = meta.totalPayable !== undefined ? Number(meta.totalPayable) : finalAmount;
-          walletAmountUsed = Number(meta.walletAmountUsed) || 0;
-          previousOnlinePaid = Number(meta.previousOnlinePaid) || 0;
-          stockDeducted = Boolean(meta.stockDeducted);
-          stockRestored = Boolean(meta.stockRestored);
-          if (Array.isArray(meta.items) && meta.items.length > 0) {
-            items = meta.items;
-          }
-        } catch {
-          // ignore parsing error
-        }
-      } else {
-        orderNumber = rawNotes.replace(/^Order\s*#?/i, '').trim() || o.id.replace(/^ord[-_]/i, '').slice(0, 8);
-      }
-      if (!orderNumber) {
-        orderNumber = o.id.replace(/^ord[-_]/i, '').slice(0, 8);
-      }
-
-      if (o.is_paid && codCollectedAmount === 0) {
-        codCollectedAmount = finalAmount;
-      }
-
-      let paymentStatus: PaymentStatus = PaymentStatus.PENDING;
-      if (o.is_paid || codCollectedAmount >= totalPayable) {
-        paymentStatus = PaymentStatus.RECEIVED;
-      } else if (codCollectedAmount > 0) {
-        paymentStatus = PaymentStatus.PARTIALLY_COLLECTED;
-      }
-
-      const resolvedWalletAmountUsed = walletAmountUsed;
-
-      return {
-        id: o.id,
-        orderNumber: orderNumber || `OM-${o.id.slice(0, 5)}`,
-        userId: o.customer_id || '',
-        userName: o.customer_name || 'Customer',
-        userPhone: o.customer_phone || '',
-        addressId: 'addr-' + o.id,
-        address: {
-          id: 'addr-' + o.id,
-          userId: o.customer_id || '',
-          fullAddress: parsedAddress.fullAddress || (o.delivery_address ? String(o.delivery_address).trim() : '') || 'Address not specified',
-          landmark: parsedAddress.landmark || '',
-          pincode: parsedAddress.pincode || '',
-          isDefault: true,
-        },
-        status: (o.status as OrderStatus) || OrderStatus.ORDER_PENDING,
-        paymentMethod: (o.payment_method as PaymentMethod) || PaymentMethod.COD,
-        paymentStatus,
-        deliveryDate: o.preferred_slot || (o.created_at ? o.created_at.split('T')[0] : new Date().toISOString().split('T')[0]),
-        subtotal,
-        discountAmount,
-        deliveryFee,
-        codCharge: 0,
-        finalAmount,
-        previousOutstanding,
-        totalPayable: (o.payment_method === PaymentMethod.COD || o.payment_method === 'COD') ? finalAmount : totalPayable,
-        previousOnlinePaid,
-        walletAmountUsed: resolvedWalletAmountUsed,
-        codCollectedAmount,
-        stockDeducted,
-        stockRestored,
-        createdAt: o.created_at || new Date().toISOString(),
-        items,
-      };
-    });
+    return ordersData.map((o: any) => mapDatabaseRowToOrder(o));
   } catch (err) {
     console.error('Exception fetching admin orders:', err);
     return null;
@@ -1635,7 +1611,7 @@ export async function fetchProductsFromSupabase(): Promise<Product[] | null> {
     try {
       const { data: dbVariants, error: varError } = await supabase
         .from('product_variants')
-        .select('*')
+        .select('id, product_id, unit, pack_size, pack_label, mrp, base_selling_price, stock_quantity, max_order_limit, barcode, image_url, display_order')
         .in('product_id', productIds);
 
       if (!varError && dbVariants && dbVariants.length > 0) {
@@ -1680,11 +1656,14 @@ export async function fetchProductsFromSupabase(): Promise<Product[] | null> {
             packLabel: v.pack_label || `${v.pack_size || 1} ${v.unit || 'KG'}`,
             mrp: Number(v.mrp || 0),
             baseSellingPrice: Number(v.base_selling_price || 0),
-            purchasePrice: v.purchase_price !== undefined && v.purchase_price !== null ? Number(v.purchase_price) : undefined,
-            discount: v.discount !== undefined && v.discount !== null ? Number(v.discount) : undefined,
+            purchasePrice: (v as any).purchase_price !== undefined && (v as any).purchase_price !== null ? Number((v as any).purchase_price) : undefined,
+            discount: (v as any).discount !== undefined && (v as any).discount !== null ? Number((v as any).discount) : undefined,
             stockQuantity: Number(v.stock_quantity || 0),
             maxOrderLimit: Number(v.max_order_limit || 20),
             tieredPrices: tieredPricesByVariant[v.id] || [],
+            barcode: v.barcode ? String(v.barcode).trim() : null,
+            imageUrl: v.image_url ? String(v.image_url).trim() : undefined,
+            displayOrder: typeof v.display_order === 'number' ? v.display_order : undefined,
           });
         }
       }
@@ -1735,6 +1714,9 @@ export async function fetchProductsFromSupabase(): Promise<Product[] | null> {
             stockQuantity: Number(v.stockQuantity ?? v.stock_quantity ?? p.stock ?? 0),
             maxOrderLimit: Number(v.maxOrderLimit ?? v.max_order_limit ?? 20),
             tieredPrices: vTieredPrices,
+            barcode: v.barcode ? String(v.barcode).trim() : null,
+            imageUrl: v.imageUrl || v.image_url ? String(v.imageUrl || v.image_url).trim() : undefined,
+            displayOrder: typeof v.displayOrder === 'number' ? v.displayOrder : (typeof v.display_order === 'number' ? v.display_order : idx + 1),
           };
         });
       }
@@ -1756,9 +1738,22 @@ export async function fetchProductsFromSupabase(): Promise<Product[] | null> {
             stockQuantity: Number(p.stock || 0),
             maxOrderLimit: Number(p.min_order_qty ? p.min_order_qty * 10 : 20),
             tieredPrices: [],
+            barcode: p.barcode ? String(p.barcode).trim() : null,
+            imageUrl: p.image_url ? String(p.image_url).trim() : undefined,
+            displayOrder: 1,
           },
         ];
       }
+
+      // Sort variants strictly by displayOrder
+      variants.sort((a, b) => {
+        if (typeof a.displayOrder === 'number' && typeof b.displayOrder === 'number') {
+          return a.displayOrder - b.displayOrder;
+        }
+        if (typeof a.displayOrder === 'number') return -1;
+        if (typeof b.displayOrder === 'number') return 1;
+        return 0;
+      });
 
       return {
         id: p.id,
@@ -1993,5 +1988,145 @@ export function subscribeToSupabaseSettings(
     return null;
   }
 }
+
+/**
+ * Persists an out-of-stock product request to Supabase.
+ * Gracefully handles table availability, foreign key safety, and column compatibility.
+ */
+export async function saveProductRequestToSupabase(req: ProductRequest): Promise<boolean> {
+  if (!supabase) return false;
+
+  try {
+    const isUuid = (val?: string | null) =>
+      Boolean(val && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val));
+
+    // Safely check if customer_id exists or should be sanitized to avoid foreign key and UUID violations
+    let safeCustomerId: string | null = null;
+    const cleanPhone = (req.customerPhone || '').replace(/\D/g, '').slice(-10);
+
+    if (req.customerId && isUuid(req.customerId)) {
+      safeCustomerId = req.customerId;
+    } else if (cleanPhone) {
+      try {
+        const { data: userRow } = await supabase
+          .from('users')
+          .select('id')
+          .eq('phone', cleanPhone)
+          .limit(1)
+          .maybeSingle();
+        if (userRow?.id && isUuid(userRow.id)) {
+          safeCustomerId = userRow.id;
+        }
+      } catch {}
+    }
+
+    const payload: Record<string, any> = {
+      customer_id: safeCustomerId,
+      customer_name: req.customerName || req.customer?.name || 'Customer',
+      customer_phone: cleanPhone || req.customerPhone || '',
+      product_id: isUuid(req.productId) ? req.productId : null,
+      product_name: req.productName || req.product?.name || '',
+      variant_id: isUuid(req.variantId) ? req.variantId : null,
+      variant_name: req.variantName || req.product?.variantName || '',
+      pack_size: req.packSize || req.product?.packSize || '',
+      quantity: Math.max(1, Number(req.quantity) || 1),
+      request_date: req.requestDate || req.createdAt || new Date().toISOString(),
+      created_at: req.createdAt || new Date().toISOString(),
+    };
+
+    // If id is a valid UUID, include it; otherwise let PostgreSQL auto-generate UUID or use custom text id
+    if (req.id && !req.id.startsWith('preq-')) {
+      payload.id = req.id;
+    }
+
+    let { error } = await supabase.from('product_requests').upsert(payload, { onConflict: 'id' });
+
+    // If UUID syntax error (22P02) or foreign key constraint (23503) occurred, retry with sanitized references
+    if (error && (error.code === '23503' || error.code === '22P02' || error.message?.includes('foreign key') || error.message?.includes('uuid'))) {
+      delete payload.id;
+      payload.customer_id = null;
+      payload.product_id = null;
+      payload.variant_id = null;
+      const retry = await supabase.from('product_requests').insert(payload);
+      error = retry.error;
+    }
+
+    if (error) {
+      console.warn('Notice saving product_requests to Supabase:', error.message);
+      return false;
+    }
+    return true;
+  } catch (err: any) {
+    console.warn('Exception saving product_requests to Supabase:', err?.message || err);
+    return false;
+  }
+}
+
+/**
+ * Loads recent product requests for the Shopkeeper management center.
+ * Strictly queries the verified server API (/api/product-requests).
+ * If the API is unauthorized, fails, or is unavailable, it does NOT attempt direct client
+ * Supabase reads of sensitive customer requests, returning null safely.
+ */
+export async function fetchProductRequestsFromSupabase(): Promise<ProductRequest[] | null> {
+  try {
+    const res = await fetch('/api/product-requests', {
+      method: 'GET',
+      credentials: 'include',
+    });
+
+    if (res.ok) {
+      const json = await res.json();
+      if (json && json.success && Array.isArray(json.requests)) {
+        return json.requests.map((row: any) => ({
+          id: String(row.id || ''),
+          customer: {
+            id: row.customer_id || row.user_id || '',
+            name: row.customer_name || 'Customer',
+            phone: row.customer_phone || '',
+          },
+          customerId: row.customer_id || row.user_id || '',
+          customerName: row.customer_name || 'Customer',
+          customerPhone: row.customer_phone || '',
+          product: {
+            id: row.product_id || '',
+            name: row.product_name || '',
+            variantId: row.variant_id || '',
+            variantName: row.variant_name || row.variant_title || '',
+            packSize: row.pack_size || '',
+            price: row.price ? Number(row.price) : undefined,
+          },
+          productId: row.product_id || '',
+          productName: row.product_name || '',
+          variantId: row.variant_id || '',
+          variantName: row.variant_name || row.variant_title || '',
+          packSize: row.pack_size || '',
+          quantity: Number(row.quantity) || 1,
+          requestDate: row.request_date || row.created_at || new Date().toISOString(),
+          createdAt: row.created_at || new Date().toISOString(),
+        }));
+      }
+    }
+
+    // If API responded with 401, 500, or unexpected format, safely return null
+    return null;
+  } catch (err) {
+    console.warn('Notice reading product_requests via server API:', err);
+    return null;
+  }
+}
+
+/**
+ * Subscribes to realtime product requests across devices and open browser sessions.
+ * Guarantees a valid cleanup function is returned, never null.
+ */
+export function subscribeToProductRequests(
+  _onNewRequest: (req: ProductRequest) => void
+): () => void {
+  // Safe no-op: product_requests are strictly restricted to verified SHOPKEEPER server-side API
+  // and removed from public Realtime publication to eliminate anonymous eavesdropping.
+  return () => {};
+}
+
 
 

@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'http';
 import fs from 'fs';
 import path from 'path';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { verifyAdminSession } from './auth/_verify.js';
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
@@ -34,25 +35,22 @@ const DEFAULT_SETTINGS: SystemSetting = {
   primaryColorHex: '#0F2C59',
   secondaryColorHex: '#D4AF37',
   accentColorHex: '#FF6B00',
-  advancePaymentDiscountPct: 3.0,
-  codBaseCharge: 30.0,
-  freeShippingMinAmount: 500.0,
-  baseDeliveryFee: 40.0,
-  referralRewardAmount: 50.0,
+  advancePaymentDiscountPct: 5.0,
+  codBaseCharge: 49.0,
+  freeShippingMinAmount: 249.0,
+  baseDeliveryFee: 11.0,
+  referralRewardAmount: 0.0,
   lowStockThreshold: 10,
   updatedAt: new Date().toISOString(),
 };
 
 function getSupabaseClient(): SupabaseClient | null {
-  const url = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
-  const key =
-    process.env.SUPABASE_SERVICE_ROLE_KEY ||
-    process.env.VITE_SUPABASE_ANON_KEY ||
-    process.env.SUPABASE_ANON_KEY;
+  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-  if (url && key && url !== 'https://your-project.supabase.co' && key !== 'your-anon-key') {
+  if (url && key && url !== 'https://your-project.supabase.co' && key !== 'your-service-role-key') {
     try {
-      return createClient(url, key, { auth: { persistSession: false } });
+      return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
     } catch {
       return null;
     }
@@ -244,6 +242,18 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
   }
 
   if (req.method === 'POST' || req.method === 'PUT') {
+    const adminSession = verifyAdminSession(req);
+    if (!adminSession || adminSession.role !== 'SHOPKEEPER') {
+      res.statusCode = 401;
+      res.end(
+        JSON.stringify({
+          success: false,
+          error: 'Unauthorized: Shopkeeper credentials required to modify store settings.',
+        })
+      );
+      return;
+    }
+
     try {
       const body = await parseJsonBody(req);
       const incomingUpdates: Partial<SystemSetting> = body.settings || body;

@@ -1,12 +1,12 @@
-import React, { useEffect } from 'react';
-import { X, CheckCircle2, Package, Calendar, User, Hash } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { X, Package, Calendar, User, Hash, AlertCircle, Phone } from 'lucide-react';
 import { Product, ProductVariant } from '../types';
 import { formatVariantPack } from '../utils/variantFormatter';
 
 export interface ProductRequestModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onAccept?: () => void;
+  onAccept?: (customerInfo?: { name: string; phone: string }) => void;
   onDecline?: () => void;
   product: Product | null;
   variant: ProductVariant | null;
@@ -25,9 +25,21 @@ export const ProductRequestModal: React.FC<ProductRequestModalProps> = ({
   variant,
   quantity,
   requestDate,
-  customerName,
-  customerPhone,
+  customerName = '',
+  customerPhone = '',
 }) => {
+  const [enteredName, setEnteredName] = useState(customerName || '');
+  const [enteredPhone, setEnteredPhone] = useState(customerPhone || '');
+  const [contactError, setContactError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (isOpen) {
+      setEnteredName(customerName || '');
+      setEnteredPhone(customerPhone || '');
+      setContactError(null);
+    }
+  }, [isOpen, customerName, customerPhone]);
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -43,8 +55,20 @@ export const ProductRequestModal: React.FC<ProductRequestModalProps> = ({
   if (!isOpen || !product || !variant) return null;
 
   const handleAccept = () => {
+    setContactError(null);
+    const cleanPhone = (enteredPhone || customerPhone || '').replace(/\D/g, '');
+    const cleanName = (enteredName || customerName || '').trim();
+
+    if (!cleanPhone || cleanPhone.length < 10) {
+      setContactError('कृपया आपला १० अंकी मोबाईल नंबर प्रविष्ट करा जेणेकरून वस्तू आल्यावर संपर्क करता येईल.');
+      return;
+    }
+
     if (onAccept) {
-      onAccept();
+      onAccept({
+        name: cleanName || 'Customer',
+        phone: cleanPhone.slice(-10),
+      });
     } else {
       onClose();
     }
@@ -79,15 +103,15 @@ export const ProductRequestModal: React.FC<ProductRequestModalProps> = ({
         {/* Header */}
         <div className="bg-[#0F2C59] p-5 text-white flex justify-between items-start">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center border border-emerald-400/30">
-              <CheckCircle2 size={22} />
+            <div className="w-10 h-10 rounded-xl bg-[#D4AF37]/20 text-[#D4AF37] flex items-center justify-center border border-[#D4AF37]/30">
+              <Package size={22} />
             </div>
             <div>
               <h3 id="product-request-modal-title" className="text-base font-extrabold text-white">
-                Product Request Saved
+                वस्तू उपलब्ध करण्याची विनंती (Product Request)
               </h3>
               <p className="text-xs text-gray-300 font-medium mt-0.5">
-                We have recorded your request for this item.
+                कृपया खालील माहिती तपासून &quot;मान्य आहे&quot; वर क्लिक करा.
               </p>
             </div>
           </div>
@@ -147,16 +171,46 @@ export const ProductRequestModal: React.FC<ProductRequestModalProps> = ({
               <span className="font-bold text-gray-800">{formattedDate}</span>
             </div>
 
-            {(customerName || customerPhone) && (
+            {/* Customer Details */}
+            {customerPhone ? (
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
                   <User size={14} className="text-purple-600 shrink-0" />
                   <span className="text-gray-600 font-medium">Customer:</span>
                 </div>
                 <span className="font-bold text-gray-800">
-                  {customerName || 'Customer'}
-                  {customerPhone ? ` (${customerPhone})` : ''}
+                  {customerName || 'Customer'} ({customerPhone})
                 </span>
+              </div>
+            ) : (
+              <div className="pt-1 space-y-2">
+                <div className="flex items-center gap-1.5 text-gray-700 font-bold text-[11px]">
+                  <Phone size={13} className="text-[#FF6B00]" />
+                  <span>आपला संपर्क तपशील (Contact Details):</span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <input
+                    type="text"
+                    placeholder="आपले नाव (Name)"
+                    value={enteredName}
+                    onChange={(e) => setEnteredName(e.target.value)}
+                    className="p-2 border border-gray-300 rounded-lg text-xs bg-white text-gray-900 outline-none focus:border-[#0F2C59]"
+                  />
+                  <input
+                    type="tel"
+                    maxLength={10}
+                    placeholder="१० अंकी मोबाईल नंबर *"
+                    value={enteredPhone}
+                    onChange={(e) => setEnteredPhone(e.target.value.replace(/\D/g, ''))}
+                    className="p-2 border border-gray-300 rounded-lg text-xs bg-white text-gray-900 outline-none focus:border-[#0F2C59] font-bold"
+                  />
+                </div>
+                {contactError && (
+                  <p className="text-[11px] text-red-600 font-bold flex items-center gap-1">
+                    <AlertCircle size={12} className="shrink-0" />
+                    <span>{contactError}</span>
+                  </p>
+                )}
               </div>
             )}
           </div>
@@ -169,6 +223,7 @@ export const ProductRequestModal: React.FC<ProductRequestModalProps> = ({
           <div className="pt-2 flex flex-col sm:flex-row items-stretch sm:items-center justify-end gap-2.5">
             <button
               type="button"
+              id="product-request-accept-btn"
               onClick={handleAccept}
               className="w-full sm:w-auto px-6 py-2.5 bg-[#0F2C59] hover:bg-[#0b2245] text-white text-xs font-black rounded-xl transition cursor-pointer shadow-md text-center"
             >
@@ -176,6 +231,7 @@ export const ProductRequestModal: React.FC<ProductRequestModalProps> = ({
             </button>
             <button
               type="button"
+              id="product-request-decline-btn"
               onClick={handleDecline}
               className="w-full sm:w-auto px-6 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-bold rounded-xl transition cursor-pointer border border-gray-300 shadow-2xs text-center"
             >

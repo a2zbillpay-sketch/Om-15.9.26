@@ -16,24 +16,25 @@ export interface CategoryItem {
   id: string;
   name: string;
   imageUrl?: string;
+  display_order?: number;
 }
 
 const DEFAULT_CATEGORIES: CategoryItem[] = [
-  { id: 'cat-1', name: 'Rice & Grains', imageUrl: 'https://images.unsplash.com/photo-1586201375761-83865001e31c?auto=format&fit=crop&w=400&q=80' },
-  { id: 'cat-2', name: 'Pulses & Dal', imageUrl: 'https://images.unsplash.com/photo-1596040033229-a9821ebd058d?auto=format&fit=crop&w=400&q=80' },
-  { id: 'cat-3', name: 'Flour & Atta', imageUrl: 'https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&w=400&q=80' },
-  { id: 'cat-4', name: 'Oil & Ghee', imageUrl: 'https://images.unsplash.com/photo-1474979266404-7eaacbcd87c5?auto=format&fit=crop&w=400&q=80' },
-  { id: 'cat-5', name: 'Spices & Masala', imageUrl: 'https://images.unsplash.com/photo-1596040033229-a9821ebd058d?auto=format&fit=crop&w=400&q=80' },
-  { id: 'cat-6', name: 'Snacks & Packaged Foods', imageUrl: 'https://images.unsplash.com/photo-1621996346565-e3d5d6281699?auto=format&fit=crop&w=400&q=80' },
-  { id: 'cat-7', name: 'Fasting foods', imageUrl: 'https://images.unsplash.com/photo-1601050690597-df0568f70950?auto=format&fit=crop&w=400&q=80' },
-  { id: 'cat-8', name: 'Beverages', imageUrl: 'https://images.unsplash.com/photo-1544787219-7f47ccb76574?auto=format&fit=crop&w=400&q=80' },
-  { id: 'cat-9', name: 'Dry fruits', imageUrl: 'https://images.unsplash.com/photo-1599599810769-bcde5a160d32?auto=format&fit=crop&w=400&q=80' },
-  { id: 'cat-10', name: 'Dairy Products', imageUrl: 'https://images.unsplash.com/photo-1628088062854-d1870b4553da?auto=format&fit=crop&w=400&q=80' },
-  { id: 'cat-11', name: 'Personal Care', imageUrl: 'https://images.unsplash.com/photo-1584308666744-24d5c474f2ae?auto=format&fit=crop&w=400&q=80' },
-  { id: 'cat-12', name: 'Cleaning & Household', imageUrl: 'https://images.unsplash.com/photo-1585421514738-01798e348b17?auto=format&fit=crop&w=400&q=80' },
-  { id: 'cat-13', name: 'Pooja Needs', imageUrl: 'https://images.unsplash.com/photo-1609137144813-7d9921338f24?auto=format&fit=crop&w=400&q=80' },
-  { id: 'cat-14', name: 'Ayurvedic Products', imageUrl: 'https://images.unsplash.com/photo-1608571423902-eed4a5ad8108?auto=format&fit=crop&w=400&q=80' },
-  { id: 'cat-15', name: 'Other Grocery Items', imageUrl: 'https://images.unsplash.com/photo-1584269600464-37b1b58a9fe7?auto=format&fit=crop&w=400&q=80' },
+  { id: 'cat-1', name: 'Rice & Grains', imageUrl: 'https://images.unsplash.com/photo-1586201375761-83865001e31c?auto=format&fit=crop&w=400&q=80', display_order: 1 },
+  { id: 'cat-2', name: 'Pulses & Dal', imageUrl: 'https://images.unsplash.com/photo-1596040033229-a9821ebd058d?auto=format&fit=crop&w=400&q=80', display_order: 2 },
+  { id: 'cat-3', name: 'Flour & Atta', imageUrl: 'https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&w=400&q=80', display_order: 3 },
+  { id: 'cat-4', name: 'Oil & Ghee', imageUrl: 'https://images.unsplash.com/photo-1474979266404-7eaacbcd87c5?auto=format&fit=crop&w=400&q=80', display_order: 4 },
+  { id: 'cat-5', name: 'Spices & Masala', imageUrl: 'https://images.unsplash.com/photo-1596040033229-a9821ebd058d?auto=format&fit=crop&w=400&q=80', display_order: 5 },
+  { id: 'cat-6', name: 'Snacks & Packaged Foods', imageUrl: 'https://images.unsplash.com/photo-1621996346565-e3d5d6281699?auto=format&fit=crop&w=400&q=80', display_order: 6 },
+  { id: 'cat-7', name: 'Fasting foods', imageUrl: 'https://images.unsplash.com/photo-1601050690597-df0568f70950?auto=format&fit=crop&w=400&q=80', display_order: 7 },
+  { id: 'cat-8', name: 'Beverages', imageUrl: 'https://images.unsplash.com/photo-1544787219-7f47ccb76574?auto=format&fit=crop&w=400&q=80', display_order: 8 },
+  { id: 'cat-9', name: 'Dry fruits', imageUrl: 'https://images.unsplash.com/photo-1599599810769-bcde5a160d32?auto=format&fit=crop&w=400&q=80', display_order: 9 },
+  { id: 'cat-10', name: 'Dairy Products', imageUrl: 'https://images.unsplash.com/photo-1628088062854-d1870b4553da?auto=format&fit=crop&w=400&q=80', display_order: 10 },
+  { id: 'cat-11', name: 'Personal Care', imageUrl: 'https://images.unsplash.com/photo-1584308666744-24d5c474f2ae?auto=format&fit=crop&w=400&q=80', display_order: 11 },
+  { id: 'cat-12', name: 'Cleaning & Household', imageUrl: 'https://images.unsplash.com/photo-1585421514738-01798e348b17?auto=format&fit=crop&w=400&q=80', display_order: 12 },
+  { id: 'cat-13', name: 'Pooja Needs', imageUrl: 'https://images.unsplash.com/photo-1609137144813-7d9921338f24?auto=format&fit=crop&w=400&q=80', display_order: 13 },
+  { id: 'cat-14', name: 'Ayurvedic Products', imageUrl: 'https://images.unsplash.com/photo-1608571423902-eed4a5ad8108?auto=format&fit=crop&w=400&q=80', display_order: 14 },
+  { id: 'cat-15', name: 'Other Grocery Items', imageUrl: 'https://images.unsplash.com/photo-1584269600464-37b1b58a9fe7?auto=format&fit=crop&w=400&q=80', display_order: 15 },
 ];
 
 function getSupabaseClient(): SupabaseClient | null {
@@ -60,7 +61,12 @@ export function loadCategoriesFromFile(): CategoryItem[] {
       if (content.trim()) {
         const parsed = JSON.parse(content);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed;
+          return parsed.map((item: any, idx: number) => ({
+            id: String(item.id),
+            name: String(item.name || '').trim(),
+            imageUrl: item.imageUrl ? String(item.imageUrl).trim() : '',
+            display_order: typeof item.display_order === 'number' ? item.display_order : (typeof item.displayOrder === 'number' ? item.displayOrder : idx + 1),
+          }));
         }
       }
     }
@@ -82,10 +88,11 @@ export async function loadCategories(): Promise<CategoryItem[]> {
         .select('id, name, image_url, display_order')
         .order('display_order', { ascending: true });
       if (!error && Array.isArray(data) && data.length > 0) {
-        return data.map((row) => ({
+        return data.map((row, idx) => ({
           id: String(row.id),
           name: String(row.name || '').trim(),
           imageUrl: (row.image_url && String(row.image_url).trim()) || '',
+          display_order: typeof row.display_order === 'number' ? row.display_order : idx + 1,
         }));
       }
     } catch {
@@ -110,14 +117,15 @@ async function syncCategoryToSupabaseIfConfigured(category: CategoryItem, orderI
   if (!supabase) return;
 
   try {
+    const resolvedOrder = typeof orderIndex === 'number' ? orderIndex : (typeof category.display_order === 'number' ? category.display_order : undefined);
     const payload: Record<string, any> = {
       id: category.id,
       name: category.name.trim(),
       image_url: category.imageUrl && category.imageUrl.trim() ? category.imageUrl.trim() : null,
       updated_at: new Date().toISOString(),
     };
-    if (typeof orderIndex === 'number') {
-      payload.display_order = orderIndex;
+    if (typeof resolvedOrder === 'number') {
+      payload.display_order = resolvedOrder;
     }
     const { error } = await supabase.from('categories').upsert(payload, { onConflict: 'id' });
     if (error && !error.message?.includes('schema cache')) {
@@ -335,15 +343,16 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
 
       // Case B: Batch replace all categories
       if (Array.isArray(body.categories)) {
-        const validatedCategories: CategoryItem[] = body.categories.map((c: any) => ({
+        const validatedCategories: CategoryItem[] = body.categories.map((c: any, idx: number) => ({
           id: String(c.id || `cat-${Date.now()}`),
           name: String(c.name || '').trim(),
           imageUrl: c.imageUrl ? String(c.imageUrl).trim() : '',
+          display_order: typeof c.displayOrder === 'number' ? c.displayOrder : (typeof c.display_order === 'number' ? c.display_order : idx + 1),
         })).filter((c: CategoryItem) => c.name.length > 0);
 
         saveCategoriesToFile(validatedCategories);
         for (let i = 0; i < validatedCategories.length; i++) {
-          syncCategoryToSupabaseIfConfigured(validatedCategories[i], i + 1).catch(() => {});
+          syncCategoryToSupabaseIfConfigured(validatedCategories[i], validatedCategories[i].display_order ?? (i + 1)).catch(() => {});
         }
 
         res.statusCode = 200;
@@ -360,13 +369,21 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
       }
 
       const categoryId = catData.id || `cat-${Date.now()}`;
+      const existingIndex = current.findIndex((c) => c.id === categoryId);
+      const existingOrder = existingIndex >= 0 ? current[existingIndex].display_order : undefined;
+      const orderIndex = typeof catData.displayOrder === 'number'
+        ? catData.displayOrder
+        : (typeof catData.display_order === 'number'
+          ? catData.display_order
+          : (existingOrder ?? (existingIndex >= 0 ? existingIndex + 1 : current.length + 1)));
+
       const updatedItem: CategoryItem = {
         id: categoryId,
         name: String(catData.name).trim(),
         imageUrl: catData.imageUrl ? String(catData.imageUrl).trim() : '',
+        display_order: orderIndex,
       };
 
-      const existingIndex = current.findIndex((c) => c.id === categoryId);
       const oldImageUrl = existingIndex >= 0 ? current[existingIndex].imageUrl : undefined;
       let updatedList: CategoryItem[];
 
@@ -377,7 +394,6 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
         updatedList = [...current, updatedItem];
       }
 
-      const orderIndex = existingIndex >= 0 ? existingIndex + 1 : updatedList.length;
       saveCategoriesToFile(updatedList);
       syncCategoryToSupabaseIfConfigured(updatedItem, orderIndex).catch(() => {});
 

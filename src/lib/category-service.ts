@@ -4,12 +4,45 @@ import { INITIAL_CATEGORIES } from '../data/seedData';
 
 /**
  * Fetches all categories.
- * Primary: /api/categories (persistent server storage).
- * Secondary: Supabase public.categories table if provisioned.
+ * Primary: Supabase public.categories table (authoritative source of truth).
+ * Secondary: /api/categories server endpoint & local cache.
  * Fallback: Baseline INITIAL_CATEGORIES.
  */
 export async function fetchCategoriesFromDb(): Promise<Category[] | null> {
-  // 1. Primary: Fetch from persistent server API endpoint
+  // 1. Primary: Direct query to Supabase public.categories table
+  if (supabase) {
+    try {
+      const { data: catData, error: catError } = await supabase
+        .from('categories')
+        .select('id, name, image_url, display_order')
+        .order('display_order', { ascending: true });
+
+      if (!catError && Array.isArray(catData) && catData.length > 0) {
+        const dbCategories: Category[] = catData.map((row, idx: number) => ({
+          id: String(row.id),
+          name: String(row.name || '').trim(),
+          imageUrl: (row.image_url && String(row.image_url).trim()) || '',
+          displayOrder: typeof row.display_order === 'number' ? row.display_order : (idx + 1),
+        }));
+
+        dbCategories.sort((a, b) => (a.displayOrder || 0) - (b.displayOrder || 0));
+
+        // Sync with localStorage for instantaneous offline / PWA access
+        if (typeof window !== 'undefined' && window.localStorage) {
+          try {
+            localStorage.setItem('om_categories', JSON.stringify(dbCategories));
+          } catch {}
+        }
+
+        return dbCategories;
+      }
+    } catch (err) {
+      // Non-fatal if Supabase quota is exceeded or network transient
+      console.warn('Notice: Supabase categories query notice (falling back to server endpoint):', err);
+    }
+  }
+
+  // 2. Secondary: Fetch from persistent server API endpoint
   try {
     const res = await fetch('/api/categories', {
       method: 'GET',
@@ -23,74 +56,38 @@ export async function fetchCategoriesFromDb(): Promise<Category[] | null> {
           id: String(c.id),
           name: String(c.name || '').trim(),
           imageUrl: c.imageUrl ? String(c.imageUrl).trim() : '',
-          displayOrder: typeof c.display_order === 'number' ? c.display_order : (idx + 1),
+          displayOrder: typeof c.display_order === 'number' ? c.display_order : (typeof c.displayOrder === 'number' ? c.displayOrder : idx + 1),
         }));
 
-        // Check if client has local customizations in localStorage that should be preserved & synced to server
+        serverCats.sort((a, b) => (a.displayOrder || 0) - (b.displayOrder || 0));
+
         if (typeof window !== 'undefined' && window.localStorage) {
           try {
-            const localRaw = localStorage.getItem('om_categories');
-            if (localRaw) {
-              const localParsed: Category[] = JSON.parse(localRaw);
-              if (Array.isArray(localParsed) && localParsed.length > 0) {
-                const hasLocalCustomizations = localParsed.some((loc) => {
-                  const srv = serverCats.find((s) => s.id === loc.id);
-                  return srv && (srv.name !== loc.name || srv.imageUrl !== loc.imageUrl);
-                });
-
-                const serverHasCustomizations = serverCats.some((srv) => {
-                  const init = INITIAL_CATEGORIES.find((i) => i.id === srv.id);
-                  return !init || init.name !== srv.name || init.imageUrl !== srv.imageUrl;
-                });
-
-                if (hasLocalCustomizations && !serverHasCustomizations) {
-                  // Push local customizations to server
-                  fetch('/api/categories', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    credentials: 'include',
-                    body: JSON.stringify({ categories: localParsed }),
-                  }).catch(() => {});
-                  return localParsed;
-                }
-              }
-            }
-          } catch {
-            // ignore
-          }
+            localStorage.setItem('om_categories', JSON.stringify(serverCats));
+          } catch {}
         }
 
         return serverCats;
       }
     }
   } catch (err) {
-    console.warn('Notice: /api/categories fetch exception (trying secondary storage):', err);
+    console.warn('Notice: /api/categories fetch exception:', err);
   }
 
-  // 2. Secondary: If Supabase is configured and has public.categories table
-  if (supabase) {
+  // 3. Fallback: LocalStorage cache
+  if (typeof window !== 'undefined' && window.localStorage) {
     try {
-      const { data: catData, error: catError } = await supabase
-        .from('categories')
-        .select('id, name, image_url, display_order')
-        .order('display_order', { ascending: true });
-
-      if (!catError && Array.isArray(catData) && catData.length > 0) {
-        const dbCategories: Category[] = catData.map((row, idx: number) => ({
-          id: row.id,
-          name: row.name,
-          imageUrl: (row.image_url && String(row.image_url).trim()) || '',
-          displayOrder: typeof row.display_order === 'number' ? row.display_order : (idx + 1),
-        }));
-
-        return dbCategories;
+      const localRaw = localStorage.getItem('om_categories');
+      if (localRaw) {
+        const localParsed = JSON.parse(localRaw);
+        if (Array.isArray(localParsed) && localParsed.length > 0) {
+          return localParsed;
+        }
       }
-    } catch {
-      // Non-fatal
-    }
+    } catch {}
   }
 
-  // 3. Fallback: Baseline seed categories
+  // 4. Ultimate Fallback: Baseline seed categories
   return INITIAL_CATEGORIES;
 }
 

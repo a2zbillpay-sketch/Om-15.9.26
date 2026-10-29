@@ -2463,7 +2463,14 @@ export const AdminDashboard: React.FC = () => {
                                   )}
 
                                   <div className="flex justify-between items-center font-bold">
-                                    <span className="text-gray-900">{formatVariantPack(v)}</span>
+                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                      <span className="text-gray-900">{formatVariantPack(v)}</span>
+                                      {v.barcode && (
+                                        <span className="text-[9.5px] font-mono text-gray-500 bg-gray-200/80 px-1.5 py-0.2 rounded border border-gray-300" title={`Barcode: ${v.barcode}`}>
+                                          🏷️ {v.barcode}
+                                        </span>
+                                      )}
+                                    </div>
                                     <div className="flex items-center gap-1.5 flex-wrap justify-end">
                                       {v.purchasePrice !== undefined && v.purchasePrice > 0 && (
                                         <span className="text-[10px] font-semibold text-amber-900 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200" title="Purchase Price (Cost)">
@@ -2508,8 +2515,13 @@ export const AdminDashboard: React.FC = () => {
                           {p.isDiscountExcluded ? 'Price Regulated' : 'Full Discount Eligible'}
                         </span>
                         <button
-                          onClick={() => deleteProduct(p.id)}
-                          className="text-gray-400 hover:text-red-600 transition cursor-pointer"
+                          type="button"
+                          onClick={() => {
+                            if (window.confirm(`खरोखर हे प्रॉडक्ट हटवायचे आहे का? (${p.name})\nAre you sure you want to delete "${p.name}"? This action cannot be undone.`)) {
+                              deleteProduct(p.id);
+                            }
+                          }}
+                          className="text-gray-400 hover:text-red-600 transition cursor-pointer p-1 rounded-md hover:bg-red-50"
                           title="Delete Product"
                         >
                           <Trash2 size={15} />

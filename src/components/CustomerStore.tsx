@@ -61,9 +61,17 @@ export const CustomerStore: React.FC<CustomerStoreProps> = ({
   // Filter products by category and search
   const filteredProducts = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
+    const selectedCategory = categories.find((c) => c.id === selectedCategoryId);
+
     return products.filter((p) => {
       const matchesCategory =
-        selectedCategoryId === 'ALL' || p.categoryId === selectedCategoryId;
+        selectedCategoryId === 'ALL' ||
+        p.categoryId === selectedCategoryId ||
+        (selectedCategory && (
+          (p.categoryId && p.categoryId.toLowerCase() === selectedCategory.name.toLowerCase()) ||
+          (p.categoryId && p.categoryId.toLowerCase() === selectedCategory.id.toLowerCase())
+        ));
+
       const matchesKeywords =
         Boolean(p.searchKeywords) &&
         (p.searchKeywords!.toLowerCase().includes(query) ||
@@ -74,15 +82,17 @@ export const CustomerStore: React.FC<CustomerStoreProps> = ({
               const trimmedKw = kw.trim();
               return trimmedKw.length > 0 && (trimmedKw.includes(query) || query.includes(trimmedKw));
             }));
+
       const matchesSearch =
         !query ||
         p.name.toLowerCase().includes(query) ||
         (p.brand && p.brand.toLowerCase().includes(query)) ||
         p.description.toLowerCase().includes(query) ||
         matchesKeywords;
+
       return matchesCategory && matchesSearch;
     });
-  }, [products, selectedCategoryId, searchQuery]);
+  }, [products, categories, selectedCategoryId, searchQuery]);
 
   const totalCartCount = cart.reduce((acc, i) => acc + i.quantity, 0);
 
@@ -286,38 +296,48 @@ export const CustomerStore: React.FC<CustomerStoreProps> = ({
             </span>
           </button>
 
-          {categories.map((cat) => {
-            const count = products.filter((p) => p.categoryId === cat.id).length;
-            const isSelected = selectedCategoryId === cat.id;
+          {[...categories]
+            .sort((a, b) => (a.displayOrder || 0) - (b.displayOrder || 0))
+            .map((cat) => {
+              const count = products.filter(
+                (p) =>
+                  p.categoryId === cat.id ||
+                  (p.categoryId && p.categoryId.toLowerCase() === cat.name.toLowerCase()) ||
+                  (p.categoryId && p.categoryId.toLowerCase() === cat.id.toLowerCase())
+              ).length;
+              const isSelected = selectedCategoryId === cat.id;
 
-            return (
-              <button
-                key={cat.id}
-                onClick={() => setSelectedCategoryId(cat.id)}
-                className={`px-3.5 py-2 rounded-xl text-xs font-bold shrink-0 transition flex items-center gap-2 border ${
-                  isSelected
-                    ? 'bg-[#0F2C59] text-[#D4AF37] border-[#0F2C59] shadow-sm'
-                    : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
-                }`}
-              >
-                {cat.imageUrl && (
-                  <img
-                    src={cat.imageUrl}
-                    alt={cat.name}
-                    className="w-4 h-4 rounded-full object-cover shrink-0"
-                  />
-                )}
-                <span>{cat.name}</span>
-                {count > 0 && (
-                  <span className={`text-[10px] px-1.5 py-0.2 rounded font-mono ${
-                    isSelected ? 'bg-white/20 text-white' : 'bg-gray-100 text-gray-600'
-                  }`}>
-                    {count}
-                  </span>
-                )}
-              </button>
-            );
-          })}
+              return (
+                <button
+                  key={cat.id}
+                  onClick={() => setSelectedCategoryId(cat.id)}
+                  className={`px-3.5 py-2 rounded-xl text-xs font-bold shrink-0 transition flex items-center gap-2 border ${
+                    isSelected
+                      ? 'bg-[#0F2C59] text-[#D4AF37] border-[#0F2C59] shadow-sm'
+                      : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
+                  }`}
+                >
+                  {cat.imageUrl && (
+                    <img
+                      src={cat.imageUrl}
+                      alt={cat.name}
+                      onError={(e) => {
+                        (e.currentTarget as HTMLElement).style.display = 'none';
+                      }}
+                      className="w-4 h-4 rounded-full object-cover shrink-0"
+                    />
+                  )}
+                  <span>{cat.name}</span>
+                  {count > 0 && (
+                    <span className={`text-[10px] px-1.5 py-0.2 rounded font-mono ${
+                      isSelected ? 'bg-white/20 text-white' : 'bg-gray-100 text-gray-600'
+                    }`}>
+                      {count}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
         </div>
       </section>
 

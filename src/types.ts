@@ -104,6 +104,7 @@ export interface ProductVariant {
   imageUrl?: string;
   lowStockThreshold?: number;
   displayOrder?: number;
+  barcode?: string | null;
 }
 
 export interface Product {

@@ -60,13 +60,6 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
 
   const handleRequestProduct = () => {
     if (requestedQty <= 0) return;
-    const req = requestProduct({
-      product,
-      variant: currentVariant,
-      quantity: requestedQty,
-    });
-    setHasRequested(true);
-    setLastRequestDate(req.requestDate);
     setIsRequestModalOpen(true);
   };
 
@@ -397,12 +390,18 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
       <ProductRequestModal
         isOpen={isRequestModalOpen}
         onClose={() => setIsRequestModalOpen(false)}
-        onAccept={() => {
+        onAccept={(contact) => {
+          const req = requestProduct({
+            product,
+            variant: currentVariant,
+            quantity: requestedQty,
+            customerOverride: contact,
+          });
           setHasRequested(true);
+          setLastRequestDate(req.requestDate);
           setIsRequestModalOpen(false);
         }}
         onDecline={() => {
-          setHasRequested(false);
           setIsRequestModalOpen(false);
         }}
         product={product}

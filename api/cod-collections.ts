@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { verifyAdminSession } from './auth/_verify.js';
 
 interface CodTransactionAllocation {
   orderId: string;
@@ -49,15 +50,12 @@ function normalizePhone(rawPhone?: string | null): string {
 }
 
 function getSupabaseClient(): SupabaseClient | null {
-  const url = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
-  const key =
-    process.env.SUPABASE_SERVICE_ROLE_KEY ||
-    process.env.VITE_SUPABASE_ANON_KEY ||
-    process.env.SUPABASE_ANON_KEY;
+  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-  if (url && key && url !== 'https://your-project.supabase.co' && key !== 'your-anon-key') {
+  if (url && key && url !== 'https://your-project.supabase.co' && key !== 'your-service-role-key') {
     try {
-      return createClient(url, key, { auth: { persistSession: false } });
+      return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
     } catch {
       return null;
     }
@@ -157,19 +155,29 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
     return;
   }
 
-  const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
-  const supabase = getSupabaseClient();
+  // 1. Verify Shopkeeper authorization
+  const adminSession = verifyAdminSession(req);
+  if (!adminSession || adminSession.role !== 'SHOPKEEPER') {
+    return sendJson(res, 401, {
+      success: false,
+      error: 'Unauthorized: Shopkeeper session required to access COD collection operations.',
+    });
+  }
 
+  // 2. Require SUPABASE_SERVICE_ROLE_KEY
+  const supabase = getSupabaseClient();
   if (!supabase) {
     return sendJson(res, 500, {
       success: false,
-      error: 'Supabase client is not available',
+      error: 'Server configuration error: SUPABASE_SERVICE_ROLE_KEY is required for COD collection operations',
       transactions: [],
       ordersMap: {},
       customerBalances: {},
       customerOutstanding: {},
     });
   }
+
+  const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
 
   // GET: Fetch persistent COD transactions, order states, and customer balances directly from Supabase
   if (req.method === 'GET') {
