@@ -2,7 +2,7 @@ import { IncomingMessage, ServerResponse } from 'http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createClient } from '@supabase/supabase-js';
-import { verifyAdminSession } from './auth/_verify';
+import { verifyAdminSession } from './auth/_verify.js';
 import {
   normalizeAndValidateProduct,
   saveProductWithCascadeSync,

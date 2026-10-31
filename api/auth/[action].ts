@@ -302,8 +302,8 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
     }
   }
 
-  // 5. VERIFY-RESET (POST)
-  if (action === 'verify-reset') {
+  // 5. VERIFY-RESET / VERIFY-CODE (POST)
+  if (action === 'verify-reset' || action === 'verify-code') {
     if (method !== 'POST') {
       res.setHeader('Allow', 'POST');
       return sendJson(res, 405, { error: 'Method Not Allowed' });

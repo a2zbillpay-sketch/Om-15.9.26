@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef } from 'react';
 import { X, Save, Layers, Check, Trash2, AlertCircle, Scan, Loader2, Plus, Copy, Sparkles } from 'lucide-react';
 import { Product, ProductVariant, TieredPrice, UnitType } from '../types';
 import { useApp } from '../context/AppContext';
-import { INITIAL_CATEGORIES } from '../data/seedData';
 import { formatVariantPack } from '../utils/variantFormatter';
 import { BarcodeScannerModal } from './BarcodeScannerModal';
 import { ProductImageUploader } from './ProductImageUploader';
@@ -44,7 +43,7 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
   initialAddVariant = false,
 }) => {
   const { categories, settings } = useApp();
-  const availableCategories = categories && categories.length > 0 ? categories : INITIAL_CATEGORIES;
+  const availableCategories = categories && categories.length > 0 ? categories : [];
   const [name, setName] = useState('');
   const [brand, setBrand] = useState('');
   const [categoryId, setCategoryId] = useState('');
@@ -150,7 +149,7 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
     if (product && isOpen) {
       setName(product.name || '');
       setBrand(product.brand || '');
-      setCategoryId(product.categoryId || 'cat-1');
+      setCategoryId(product.categoryId || '');
       setImageUrl(product.imageUrl || '');
       setBarcode(product.barcode || '');
       setBarcodeError(null);
@@ -635,21 +634,26 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
               />
             </div>
 
-            <div>
-              <label className="font-bold text-gray-700 block mb-1">Category</label>
-              <select
-                id="edit-product-category-select"
-                value={categoryId}
-                onChange={(e) => setCategoryId(e.target.value)}
-                className="w-full p-2.5 border border-gray-300 rounded-xl text-gray-900 focus:border-[#0F2C59] focus:ring-1 focus:ring-[#0F2C59] outline-none bg-white"
-              >
-                {availableCategories.map((cat) => (
-                  <option key={cat.id} value={cat.id}>
-                    {cat.name}
-                  </option>
-                ))}
-              </select>
-            </div>
+            {availableCategories.length > 0 && (
+              <div>
+                <label className="font-bold text-gray-700 block mb-1">
+                  Category <span className="text-xs text-gray-400 font-normal">(Optional)</span>
+                </label>
+                <select
+                  id="edit-product-category-select"
+                  value={categoryId}
+                  onChange={(e) => setCategoryId(e.target.value)}
+                  className="w-full p-2.5 border border-gray-300 rounded-xl text-gray-900 focus:border-[#0F2C59] focus:ring-1 focus:ring-[#0F2C59] outline-none bg-white"
+                >
+                  <option value="">-- Select Category (Optional) --</option>
+                  {availableCategories.map((cat) => (
+                    <option key={cat.id} value={cat.id}>
+                      {cat.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
 
             <div>
               <div className="flex items-center justify-between mb-1">

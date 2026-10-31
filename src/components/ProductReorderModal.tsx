@@ -29,9 +29,8 @@ export const ProductReorderModal: React.FC<ProductReorderModalProps> = ({
   isOpen,
   onClose,
 }) => {
-  const { products, categories, reorderProducts } = useApp();
+  const { products, reorderProducts } = useApp();
   const [orderedProducts, setOrderedProducts] = useState<Product[]>([]);
-  const [selectedCategory, setSelectedCategory] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState('');
   const [draggedIdx, setDraggedIdx] = useState<number | null>(null);
   const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
@@ -57,29 +56,17 @@ export const ProductReorderModal: React.FC<ProductReorderModalProps> = ({
 
   if (!isOpen) return null;
 
-  const categoryMap = new Map<string, string>();
-  categories.forEach((c) => {
-    categoryMap.set(c.id, c.name);
-    categoryMap.set(c.name.toLowerCase(), c.name);
-  });
-
-  // Filtered view for searching or category filtering
+  // Filtered view for searching across all products
   const visibleProducts = orderedProducts.filter((p) => {
-    const matchesCategory =
-      selectedCategory === 'ALL' ||
-      p.categoryId === selectedCategory ||
-      (p.categoryId && p.categoryId.toLowerCase() === selectedCategory.toLowerCase());
-
     const q = searchQuery.trim().toLowerCase();
-    const matchesSearch =
+    return (
       !q ||
       p.name.toLowerCase().includes(q) ||
-      (p.brand && p.brand.toLowerCase().includes(q));
-
-    return matchesCategory && matchesSearch;
+      (p.brand && p.brand.toLowerCase().includes(q))
+    );
   });
 
-  const isFiltering = selectedCategory !== 'ALL' || searchQuery.trim().length > 0;
+  const isFiltering = searchQuery.trim().length > 0;
 
   // Move product in master list
   const moveProductInMaster = (fromIndex: number, toIndex: number) => {
@@ -249,20 +236,7 @@ export const ProductReorderModal: React.FC<ProductReorderModalProps> = ({
               />
             </div>
 
-            <div className="relative w-44">
-              <select
-                value={selectedCategory}
-                onChange={(e) => setSelectedCategory(e.target.value)}
-                className="w-full py-1.5 px-2.5 text-xs border border-gray-300 rounded-lg outline-none bg-white font-medium text-gray-700"
-              >
-                <option value="ALL">All Categories ({categories.length})</option>
-                {categories.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-            </div>
+
           </div>
 
           <div className="flex items-center gap-2">
@@ -340,12 +314,11 @@ export const ProductReorderModal: React.FC<ProductReorderModalProps> = ({
             <button
               type="button"
               onClick={() => {
-                setSelectedCategory('ALL');
                 setSearchQuery('');
               }}
               className="text-[#0F2C59] font-bold hover:underline"
             >
-              Clear filters to view all
+              Clear search query
             </button>
           </div>
         )}
@@ -355,13 +328,12 @@ export const ProductReorderModal: React.FC<ProductReorderModalProps> = ({
           {visibleProducts.length === 0 ? (
             <div className="py-12 text-center text-gray-500">
               <Package size={36} className="mx-auto text-gray-300 mb-2" />
-              <p className="text-sm font-bold text-gray-700">No products match your filter.</p>
-              <p className="text-xs text-gray-400 mt-1">Try clearing your search term or category selection.</p>
+              <p className="text-sm font-bold text-gray-700">No products match your search.</p>
+              <p className="text-xs text-gray-400 mt-1">Try clearing your search query.</p>
             </div>
           ) : (
             visibleProducts.map((product, idx) => {
               const masterIndex = orderedProducts.findIndex((p) => p.id === product.id);
-              const categoryName = categoryMap.get(product.categoryId) || 'General';
               const variantCount = Array.isArray(product.variants) ? product.variants.length : 0;
               const defaultVariant = product.variants && product.variants[0];
 
@@ -418,9 +390,6 @@ export const ProductReorderModal: React.FC<ProductReorderModalProps> = ({
                             {product.brand}
                           </span>
                         )}
-                        <span className="text-[10px] text-blue-700 bg-blue-50 border border-blue-200 px-1.5 py-0.2 rounded font-semibold">
-                          {categoryName}
-                        </span>
                       </div>
 
                       <div className="flex items-center gap-3 text-[11px] text-gray-500 mt-0.5">

@@ -577,7 +577,7 @@ export const BulkProductUploadModal: React.FC<BulkProductUploadModalProps> = ({
       });
 
       // Default category fallback
-      const defaultCategoryId = safeCategories[0]?.id || 'cat-general';
+      const defaultCategoryId = safeCategories[0]?.id || '';
 
       // 2. Transform valid rows to Product objects
       const productsToCreate: Omit<Product, 'id' | 'createdAt'>[] = [];
@@ -591,17 +591,8 @@ export const BulkProductUploadModal: React.FC<BulkProductUploadModalProps> = ({
           const matchedId = categoryMap.get(row.categoryName.trim().toLowerCase());
           if (matchedId) {
             categoryId = matchedId;
-          } else if (onAddCategory) {
-            // Automatically add new category if handler exists
-            try {
-              const newCat = await onAddCategory(row.categoryName.trim());
-              if (newCat) {
-                categoryId = newCat.id;
-                categoryMap.set(newCat.name.trim().toLowerCase(), newCat.id);
-              }
-            } catch {
-              categoryId = defaultCategoryId;
-            }
+          } else {
+            categoryId = row.categoryName.trim();
           }
         }
 

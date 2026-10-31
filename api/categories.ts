@@ -1,16 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'http';
-import fs from 'fs';
-import path from 'path';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { verifyAdminSession } from './auth/_verify.js';
-
-const DATA_DIR = path.resolve(process.cwd(), 'data');
-const CATEGORIES_FILE = path.join(DATA_DIR, 'categories.json');
-
-// Ensure data directory exists
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-}
 
 export interface CategoryItem {
   id: string;
@@ -19,32 +9,11 @@ export interface CategoryItem {
   display_order?: number;
 }
 
-const DEFAULT_CATEGORIES: CategoryItem[] = [
-  { id: 'cat-1', name: 'Rice & Grains', imageUrl: 'https://images.unsplash.com/photo-1586201375761-83865001e31c?auto=format&fit=crop&w=400&q=80', display_order: 1 },
-  { id: 'cat-2', name: 'Pulses & Dal', imageUrl: 'https://images.unsplash.com/photo-1596040033229-a9821ebd058d?auto=format&fit=crop&w=400&q=80', display_order: 2 },
-  { id: 'cat-3', name: 'Flour & Atta', imageUrl: 'https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&w=400&q=80', display_order: 3 },
-  { id: 'cat-4', name: 'Oil & Ghee', imageUrl: 'https://images.unsplash.com/photo-1474979266404-7eaacbcd87c5?auto=format&fit=crop&w=400&q=80', display_order: 4 },
-  { id: 'cat-5', name: 'Spices & Masala', imageUrl: 'https://images.unsplash.com/photo-1596040033229-a9821ebd058d?auto=format&fit=crop&w=400&q=80', display_order: 5 },
-  { id: 'cat-6', name: 'Snacks & Packaged Foods', imageUrl: 'https://images.unsplash.com/photo-1621996346565-e3d5d6281699?auto=format&fit=crop&w=400&q=80', display_order: 6 },
-  { id: 'cat-7', name: 'Fasting foods', imageUrl: 'https://images.unsplash.com/photo-1601050690597-df0568f70950?auto=format&fit=crop&w=400&q=80', display_order: 7 },
-  { id: 'cat-8', name: 'Beverages', imageUrl: 'https://images.unsplash.com/photo-1544787219-7f47ccb76574?auto=format&fit=crop&w=400&q=80', display_order: 8 },
-  { id: 'cat-9', name: 'Dry fruits', imageUrl: 'https://images.unsplash.com/photo-1599599810769-bcde5a160d32?auto=format&fit=crop&w=400&q=80', display_order: 9 },
-  { id: 'cat-10', name: 'Dairy Products', imageUrl: 'https://images.unsplash.com/photo-1628088062854-d1870b4553da?auto=format&fit=crop&w=400&q=80', display_order: 10 },
-  { id: 'cat-11', name: 'Personal Care', imageUrl: 'https://images.unsplash.com/photo-1584308666744-24d5c474f2ae?auto=format&fit=crop&w=400&q=80', display_order: 11 },
-  { id: 'cat-12', name: 'Cleaning & Household', imageUrl: 'https://images.unsplash.com/photo-1585421514738-01798e348b17?auto=format&fit=crop&w=400&q=80', display_order: 12 },
-  { id: 'cat-13', name: 'Pooja Needs', imageUrl: 'https://images.unsplash.com/photo-1609137144813-7d9921338f24?auto=format&fit=crop&w=400&q=80', display_order: 13 },
-  { id: 'cat-14', name: 'Ayurvedic Products', imageUrl: 'https://images.unsplash.com/photo-1608571423902-eed4a5ad8108?auto=format&fit=crop&w=400&q=80', display_order: 14 },
-  { id: 'cat-15', name: 'Other Grocery Items', imageUrl: 'https://images.unsplash.com/photo-1584269600464-37b1b58a9fe7?auto=format&fit=crop&w=400&q=80', display_order: 15 },
-];
-
 function getSupabaseClient(): SupabaseClient | null {
   const url = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
-  const key =
-    process.env.SUPABASE_SERVICE_ROLE_KEY ||
-    process.env.VITE_SUPABASE_ANON_KEY ||
-    process.env.SUPABASE_ANON_KEY;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-  if (url && key && url !== 'https://your-project.supabase.co' && key !== 'your-anon-key') {
+  if (url && key && url !== 'https://your-project.supabase.co' && key !== 'your-service-role-key') {
     try {
       return createClient(url, key, { auth: { persistSession: false } });
     } catch {
@@ -52,31 +21,6 @@ function getSupabaseClient(): SupabaseClient | null {
     }
   }
   return null;
-}
-
-export function loadCategoriesFromFile(): CategoryItem[] {
-  try {
-    if (fs.existsSync(CATEGORIES_FILE)) {
-      const content = fs.readFileSync(CATEGORIES_FILE, 'utf8');
-      if (content.trim()) {
-        const parsed = JSON.parse(content);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed.map((item: any, idx: number) => ({
-            id: String(item.id),
-            name: String(item.name || '').trim(),
-            imageUrl: item.imageUrl ? String(item.imageUrl).trim() : '',
-            display_order: typeof item.display_order === 'number' ? item.display_order : (typeof item.displayOrder === 'number' ? item.displayOrder : idx + 1),
-          }));
-        }
-      }
-    }
-  } catch (err) {
-    console.error('Failed to read categories.json:', err);
-  }
-
-  // If no file exists yet, seed with defaults
-  saveCategoriesToFile(DEFAULT_CATEGORIES);
-  return DEFAULT_CATEGORIES;
 }
 
 export async function loadCategories(): Promise<CategoryItem[]> {
@@ -99,25 +43,21 @@ export async function loadCategories(): Promise<CategoryItem[]> {
       // Non-fatal if categories table is not provisioned
     }
   }
-  return loadCategoriesFromFile();
+  return [];
 }
 
-export function saveCategoriesToFile(categories: CategoryItem[]): void {
-  try {
-    const tempFile = `${CATEGORIES_FILE}.tmp.${Date.now()}`;
-    fs.writeFileSync(tempFile, JSON.stringify(categories, null, 2), 'utf8');
-    fs.renameSync(tempFile, CATEGORIES_FILE);
-  } catch (err) {
-    console.error('Failed to write categories.json:', err);
-  }
-}
-
-async function syncCategoryToSupabaseIfConfigured(category: CategoryItem, orderIndex?: number): Promise<void> {
+async function syncCategoryToSupabaseIfConfigured(
+  category: CategoryItem,
+  orderIndex?: number
+): Promise<{ success: boolean; error?: string }> {
   const supabase = getSupabaseClient();
-  if (!supabase) return;
+  if (!supabase) return { success: false, error: 'SUPABASE_SERVICE_ROLE_KEY not configured' };
 
   try {
-    const resolvedOrder = typeof orderIndex === 'number' ? orderIndex : (typeof category.display_order === 'number' ? category.display_order : undefined);
+    const resolvedOrder = typeof orderIndex === 'number'
+      ? orderIndex
+      : (typeof category.display_order === 'number' ? category.display_order : undefined);
+
     const payload: Record<string, any> = {
       id: category.id,
       name: category.name.trim(),
@@ -130,20 +70,27 @@ async function syncCategoryToSupabaseIfConfigured(category: CategoryItem, orderI
     const { error } = await supabase.from('categories').upsert(payload, { onConflict: 'id' });
     if (error && !error.message?.includes('schema cache')) {
       console.warn('Supabase categories table upsert note:', error.message);
+      return { success: false, error: error.message };
     }
-  } catch {
-    // Non-fatal if table is not provisioned
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Database error' };
   }
 }
 
-async function deleteCategoryFromSupabaseIfConfigured(id: string): Promise<void> {
+async function deleteCategoryFromSupabaseIfConfigured(id: string): Promise<{ success: boolean; error?: string }> {
   const supabase = getSupabaseClient();
-  if (!supabase) return;
+  if (!supabase) return { success: false, error: 'SUPABASE_SERVICE_ROLE_KEY not configured' };
 
   try {
-    await supabase.from('categories').delete().eq('id', id);
-  } catch {
-    // Non-fatal
+    const { error } = await supabase.from('categories').delete().eq('id', id);
+    if (error) {
+      console.warn('Supabase categories delete note:', error.message);
+      return { success: false, error: error.message };
+    }
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Database error' };
   }
 }
 
@@ -183,6 +130,11 @@ async function safelyDeleteOldStorageImage(
 
   const storagePath = decodeURIComponent(oldUrl.substring(markerIndex + bucketMarker.length).split('?')[0]);
   if (!storagePath) return;
+
+  // CRITICAL RULE 8: Only allowed within 'categories/' folder. Never delete product photos, logos, or PWA icons!
+  if (!storagePath.startsWith('categories/')) {
+    return;
+  }
 
   const supabase = getSupabaseClient();
   if (!supabase) return;
@@ -263,7 +215,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
   if (method === 'PUT' || method === 'POST') {
     try {
       const body = await parseJsonBody(req);
-      const current = loadCategoriesFromFile();
+      const current = await loadCategories();
 
       // Case A: Image upload action (Admin only -> direct to Supabase Storage 'product-images' bucket)
       if (body.action === 'upload' || (body.dataUrl && !body.category && !body.categories)) {
@@ -350,9 +302,8 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
           display_order: typeof c.displayOrder === 'number' ? c.displayOrder : (typeof c.display_order === 'number' ? c.display_order : idx + 1),
         })).filter((c: CategoryItem) => c.name.length > 0);
 
-        saveCategoriesToFile(validatedCategories);
         for (let i = 0; i < validatedCategories.length; i++) {
-          syncCategoryToSupabaseIfConfigured(validatedCategories[i], validatedCategories[i].display_order ?? (i + 1)).catch(() => {});
+          await syncCategoryToSupabaseIfConfigured(validatedCategories[i], validatedCategories[i].display_order ?? (i + 1));
         }
 
         res.statusCode = 200;
@@ -394,13 +345,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
         updatedList = [...current, updatedItem];
       }
 
-      saveCategoriesToFile(updatedList);
-      syncCategoryToSupabaseIfConfigured(updatedItem, orderIndex).catch(() => {});
-
-      // Safe cleanup of replaced photo ONLY after successful category save
-      if (oldImageUrl && oldImageUrl !== updatedItem.imageUrl) {
-        safelyDeleteOldStorageImage(oldImageUrl, updatedItem.imageUrl, updatedList, categoryId).catch(() => {});
-      }
+      await syncCategoryToSupabaseIfConfigured(updatedItem, orderIndex);
 
       res.statusCode = 200;
       res.end(
@@ -431,16 +376,9 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
         return;
       }
 
-      const current = loadCategoriesFromFile();
-      const target = current.find((c) => c.id === id);
+      const current = await loadCategories();
       const updatedList = current.filter((c) => c.id !== id);
-      saveCategoriesToFile(updatedList);
-      deleteCategoryFromSupabaseIfConfigured(id).catch(() => {});
-
-      // Safely cleanup old storage image if target category had one
-      if (target?.imageUrl) {
-        safelyDeleteOldStorageImage(target.imageUrl, undefined, updatedList, id).catch(() => {});
-      }
+      await deleteCategoryFromSupabaseIfConfigured(id);
 
       res.statusCode = 200;
       res.end(JSON.stringify({ success: true, categories: updatedList }));

@@ -22,7 +22,6 @@ import {
 } from '../types';
 import {
   INITIAL_SETTINGS,
-  INITIAL_CATEGORIES,
   INITIAL_PRODUCTS,
   INITIAL_USERS,
 } from '../data/seedData';
@@ -281,26 +280,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
 
   const [categories, setCategories] = useState<Category[]>(() => {
-    const saved = localStorage.getItem('om_categories');
-    if (!saved) return INITIAL_CATEGORIES;
     try {
-      const parsed: Category[] = JSON.parse(saved);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed;
-      }
-      return INITIAL_CATEGORIES;
-    } catch {
-      return INITIAL_CATEGORIES;
-    }
+      localStorage.removeItem('om_categories');
+    } catch {}
+    return [];
   });
 
   useEffect(() => {
     try {
-      localStorage.setItem('om_categories', JSON.stringify(categories));
-    } catch (e) {
-      console.warn('Failed to persist categories to localStorage', e);
-    }
-  }, [categories]);
+      localStorage.removeItem('om_categories');
+    } catch {}
+    fetchCategoriesFromDb()
+      .then((cats) => {
+        if (Array.isArray(cats) && cats.length > 0) {
+          setCategories(cats);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   const [products, setProducts] = useState<Product[]>(() => {
     const saved = localStorage.getItem('om_products');
@@ -921,18 +918,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Synchronize categories with persistent backend storage and Supabase
   const refreshCategories = async () => {
     try {
-      const dbCategories = await fetchCategoriesFromDb();
-      if (dbCategories !== null && dbCategories.length > 0) {
-        setCategories(dbCategories);
-        try {
-          localStorage.setItem('om_categories', JSON.stringify(dbCategories));
-        } catch {
-          // ignore
-        }
-      }
+      const fetched = await fetchCategoriesFromDb();
+      setCategories(Array.isArray(fetched) ? fetched : []);
     } catch (err) {
       console.warn('Error refreshing categories:', err);
     }
@@ -1258,44 +1247,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setProducts((prev) => prev.filter((p) => p.id !== id));
   };
 
-  // Category management operations
+  // Category management operations (Phase 2B: Dynamic Category System)
   const addCategory = async (categoryData: {
     name: string;
     imageUrl?: string;
   }): Promise<{ success: boolean; error?: string; category?: Category }> => {
-    const trimmedName = categoryData.name ? categoryData.name.trim() : '';
-    if (!trimmedName) {
-      return { success: false, error: 'Category name is required and cannot be empty.' };
+    const trimmed = categoryData.name.trim();
+    if (!trimmed) {
+      return { success: false, error: 'Category name is required' };
     }
-
-    // Case-insensitive duplicate check
-    const isDuplicate = categories.some(
-      (c) => c.name.trim().toLowerCase() === trimmedName.toLowerCase()
-    );
-    if (isDuplicate) {
-      return { success: false, error: `A category named "${trimmedName}" already exists.` };
-    }
-
     const newCategory: Category = {
-      id: `cat-${Date.now()}`,
-      name: trimmedName,
+      id: `cat_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      name: trimmed,
       imageUrl: categoryData.imageUrl ? categoryData.imageUrl.trim() : '',
+      displayOrder: categories.length + 1,
     };
-
-    const dbResult = await saveCategoryToDb(newCategory);
-    if (!dbResult.success) {
-      console.warn('Failed to sync new category:', dbResult.error);
-      return { success: false, error: dbResult.error || 'Failed to save category.' };
+    const res = await saveCategoryToDb(newCategory);
+    if (res.success) {
+      const savedCategory = res.category || newCategory;
+      setCategories((prev) => [...prev, savedCategory]);
+      return { success: true, category: savedCategory };
     }
-
-    setCategories((prev) => {
-      const updated = [...prev, newCategory];
-      try {
-        localStorage.setItem('om_categories', JSON.stringify(updated));
-      } catch {}
-      return updated;
-    });
-    return { success: true, category: newCategory };
+    return res;
   };
 
   const updateCategory = async (
@@ -1304,88 +1277,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   ): Promise<{ success: boolean; error?: string; category?: Category }> => {
     const existing = categories.find((c) => c.id === id);
     if (!existing) {
-      return { success: false, error: 'Category not found.' };
+      return { success: false, error: 'Category not found' };
     }
-
-    const trimmedName = updates.name !== undefined ? updates.name.trim() : undefined;
-    if (trimmedName !== undefined && !trimmedName) {
-      return { success: false, error: 'Category name is required and cannot be empty.' };
-    }
-
-    // Case-insensitive duplicate check among other categories
-    if (trimmedName !== undefined) {
-      const isDuplicate = categories.some(
-        (c) => c.id !== id && c.name.trim().toLowerCase() === trimmedName.toLowerCase()
-      );
-      if (isDuplicate) {
-        return { success: false, error: `A category named "${trimmedName}" already exists.` };
-      }
-    }
-
-    const updatedCategory: Category = {
+    const updated: Category = {
       ...existing,
-      name: trimmedName !== undefined ? trimmedName : existing.name,
+      name: updates.name !== undefined ? updates.name.trim() : existing.name,
       imageUrl: updates.imageUrl !== undefined ? updates.imageUrl.trim() : existing.imageUrl,
     };
-
-    const dbResult = await saveCategoryToDb(updatedCategory);
-    if (!dbResult.success) {
-      console.warn('Failed to sync category update:', dbResult.error);
-      return { success: false, error: dbResult.error || 'Failed to update category.' };
+    const res = await saveCategoryToDb(updated);
+    if (res.success) {
+      const savedCategory = res.category || updated;
+      setCategories((prev) => prev.map((c) => (c.id === id ? savedCategory : c)));
+      return { success: true, category: savedCategory };
     }
-
-    setCategories((prev) => {
-      const updated = prev.map((c) => (c.id === id ? updatedCategory! : c));
-      try {
-        localStorage.setItem('om_categories', JSON.stringify(updated));
-      } catch {}
-      return updated;
-    });
-    return { success: true, category: updatedCategory };
+    return res;
   };
 
   const deleteCategory = async (id: string): Promise<{ success: boolean; error?: string }> => {
-    const target = categories.find((c) => c.id === id);
-    if (!target) {
-      return { success: false, error: 'Category not found.' };
+    const res = await deleteCategoryFromDb(id);
+    if (res.success) {
+      setCategories((prev) => prev.filter((c) => c.id !== id));
+      return { success: true };
     }
-
-    // Check if products are currently assigned to this category
-    const assignedProducts = products.filter((p) => p.categoryId === id);
-    if (assignedProducts.length > 0) {
-      return {
-        success: false,
-        error: `Cannot delete "${target.name}". There are currently ${assignedProducts.length} product(s) assigned to this category. Please reassign or delete these products first.`,
-      };
-    }
-
-    const dbResult = await deleteCategoryFromDb(id);
-    if (!dbResult.success) {
-      console.warn('Failed to delete category:', dbResult.error);
-      return { success: false, error: dbResult.error || 'Failed to delete category.' };
-    }
-
-    setCategories((prev) => {
-      const updated = prev.filter((c) => c.id !== id);
-      try {
-        localStorage.setItem('om_categories', JSON.stringify(updated));
-      } catch {}
-      return updated;
-    });
-    return { success: true };
+    return res;
   };
 
   const reorderCategories = async (
     newCategories: Category[]
   ): Promise<{ success: boolean; error?: string }> => {
-    // 1. Optimistically update local state & localStorage
-    setCategories(newCategories);
-    try {
-      localStorage.setItem('om_categories', JSON.stringify(newCategories));
-    } catch {}
-
-    // 2. Persist to server and Supabase
-    const res = await reorderCategoriesInDb(newCategories);
+    const updatedList = newCategories.map((c, idx) => ({
+      ...c,
+      displayOrder: idx + 1,
+    }));
+    setCategories(updatedList);
+    const res = await reorderCategoriesInDb(updatedList);
     if (!res.success) {
       console.warn('Reorder categories sync note:', res.error);
     }

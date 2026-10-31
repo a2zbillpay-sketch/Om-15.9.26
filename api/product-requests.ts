@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 import { createClient } from '@supabase/supabase-js';
-import { verifyAdminSession } from './auth/_verify';
+import { verifyAdminSession } from './auth/_verify.js';
 
 function getServerSupabaseClient() {
   const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;

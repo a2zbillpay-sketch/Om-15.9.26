@@ -43,11 +43,12 @@ import {
   Volume2,
   Bell,
   GripVertical,
+  FolderTree,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { useApp } from '../context/AppContext';
 import { playNotificationSound } from '../utils/notificationSound';
-import { INITIAL_PRODUCTS, INITIAL_CATEGORIES } from '../data/seedData';
+import { INITIAL_PRODUCTS } from '../data/seedData';
 import { Order, OrderStatus, PaymentMethod, PaymentStatus, Product, ProductVariant, TieredPrice, UnitType, Role } from '../types';
 import { AdminSettingsControl } from './AdminSettingsControl';
 import { CategoryManagement } from './CategoryManagement';
@@ -168,21 +169,7 @@ export const AdminDashboard: React.FC = () => {
               return INITIAL_PRODUCTS;
             })();
 
-      const effectiveCategories =
-        Array.isArray(categories) && categories.length > 0
-          ? categories
-          : (() => {
-              try {
-                const savedCat = localStorage.getItem('om_categories');
-                if (savedCat) {
-                  const parsedCat = JSON.parse(savedCat);
-                  if (Array.isArray(parsedCat) && parsedCat.length > 0) return parsedCat;
-                }
-              } catch (e) {
-                // ignore
-              }
-              return INITIAL_CATEGORIES;
-            })();
+      const effectiveCategories = Array.isArray(categories) ? categories : [];
 
       const categoryMap = new Map<string, string>();
       effectiveCategories.forEach((c) => {
@@ -1125,11 +1112,6 @@ export const AdminDashboard: React.FC = () => {
 
     const trimmedBrand = newProductData.brand ? newProductData.brand.trim() : '';
 
-    if (!newProductData.categoryId) {
-      setFormValidationError('Please select a category.');
-      return;
-    }
-
     let validatedBarcode: string | undefined = undefined;
     if (newProductData.barcode.trim()) {
       const barcodeValidation = normalizeAndValidateBarcode(newProductData.barcode);
@@ -1380,16 +1362,18 @@ export const AdminDashboard: React.FC = () => {
                 <Layers size={14} />
                 <span>Inventory</span>
               </button>
+
               <button
-                id="tab-categories-btn"
+                id="btn-admin-tab-categories"
                 onClick={() => setActiveTab('CATEGORIES')}
                 className={`px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition ${
                   activeTab === 'CATEGORIES' ? 'bg-[#FF6B00] text-white shadow' : 'text-gray-300 hover:text-white'
                 }`}
               >
-                <Tag size={14} />
+                <FolderTree size={14} />
                 <span>Categories ({categories.length})</span>
               </button>
+
               <button
                 onClick={() => setActiveTab('CUSTOMERS')}
                 className={`px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition ${
@@ -1450,7 +1434,7 @@ export const AdminDashboard: React.FC = () => {
           <div className="bg-white p-3 rounded-xl border border-gray-200 shadow-xs min-w-0 overflow-hidden">
             <div className="text-[10px] font-bold text-gray-500 uppercase truncate">Catalog Products</div>
             <div className="text-lg sm:text-xl font-black text-purple-700 mt-1 truncate">{products.length}</div>
-            <div className="text-[9px] text-gray-500 mt-1 truncate">Across {categories.length} categories</div>
+            <div className="text-[9px] text-gray-500 mt-1 truncate">Active catalog items</div>
           </div>
 
           <div className="bg-white p-3 rounded-xl border border-gray-200 shadow-xs min-w-0 overflow-hidden">
@@ -1986,16 +1970,7 @@ export const AdminDashboard: React.FC = () => {
 
               {/* Action Buttons: Categories, Bulk Upload, Add Product */}
               <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto min-w-0">
-                <button
-                  type="button"
-                  id="btn-inventory-manage-categories"
-                  onClick={() => setActiveTab('CATEGORIES')}
-                  className="bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition border border-gray-200 cursor-pointer flex-1 sm:flex-none"
-                  title="Manage product categories"
-                >
-                  <Tag size={13} className="text-[#FF6B00]" />
-                  <span>Categories</span>
-                </button>
+
 
                 {/* Shopkeeper-only Export Products to Excel */}
                 {isShopkeeper && (
@@ -2010,6 +1985,17 @@ export const AdminDashboard: React.FC = () => {
                     <span>Export Products to Excel</span>
                   </button>
                 )}
+
+                <button
+                  type="button"
+                  id="btn-inventory-open-categories"
+                  onClick={() => setActiveTab('CATEGORIES')}
+                  className="bg-indigo-700 hover:bg-indigo-800 text-white px-3 py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shadow-2xs transition active:scale-95 cursor-pointer flex-1 sm:flex-none"
+                  title="Manage product categories, photos, and display order"
+                >
+                  <FolderTree size={13} className="text-indigo-200" />
+                  <span>Categories ({categories.length})</span>
+                </button>
 
                 <button
                   type="button"
@@ -2535,7 +2521,9 @@ export const AdminDashboard: React.FC = () => {
           </div>
         )}
 
-        {/* TAB: CATEGORY MANAGEMENT */}
+
+
+        {/* TAB 2.5: CATEGORY MANAGEMENT */}
         {activeTab === 'CATEGORIES' && (
           <CategoryManagement />
         )}
@@ -2712,22 +2700,26 @@ export const AdminDashboard: React.FC = () => {
                     />
                   </div>
 
-                  <div>
-                    <label className="font-bold text-gray-700 block mb-1">Category</label>
-                    <select
-                      id="new-product-category-select"
-                      value={newProductData.categoryId}
-                      onChange={(e) => setNewProductData({ ...newProductData, categoryId: e.target.value })}
-                      className="w-full p-2.5 border border-gray-300 rounded-xl outline-none focus:border-[#0F2C59] focus:ring-1 focus:ring-[#0F2C59] font-medium text-gray-900 bg-white"
-                    >
-                      <option value="">-- Select Category --</option>
-                      {categories.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                  {categories.length > 0 && (
+                    <div>
+                      <label className="font-bold text-gray-700 block mb-1">
+                        Category <span className="text-xs text-gray-400 font-normal">(Optional)</span>
+                      </label>
+                      <select
+                        id="new-product-category-select"
+                        value={newProductData.categoryId}
+                        onChange={(e) => setNewProductData({ ...newProductData, categoryId: e.target.value })}
+                        className="w-full p-2.5 border border-gray-300 rounded-xl outline-none focus:border-[#0F2C59] focus:ring-1 focus:ring-[#0F2C59] font-medium text-gray-900 bg-white"
+                      >
+                        <option value="">-- Select Category (Optional) --</option>
+                        {categories.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
 
                   <div>
                     <div className="flex items-center justify-between mb-1">

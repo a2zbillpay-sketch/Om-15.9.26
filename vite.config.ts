@@ -90,6 +90,16 @@ function apiServerPlugin(): Plugin {
           if (!fs.existsSync(targetPath)) {
             targetPath = path.resolve(__dirname, 'api', relativePath, 'index.ts');
           }
+          if (!fs.existsSync(targetPath)) {
+            const parts = relativePath.split('/');
+            if (parts.length > 1) {
+              const parentDir = parts.slice(0, -1).join('/');
+              const actionFile = path.resolve(__dirname, 'api', parentDir, '[action].ts');
+              if (fs.existsSync(actionFile)) {
+                targetPath = actionFile;
+              }
+            }
+          }
           if (fs.existsSync(targetPath)) {
             try {
               const mod = await server.ssrLoadModule(targetPath);

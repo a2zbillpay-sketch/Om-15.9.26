@@ -1,5 +1,4 @@
 import { Product, ProductVariant, TieredPrice, UnitType } from '../types.ts';
-import { INITIAL_CATEGORIES } from '../data/seedData.ts';
 import { formatVariantPack } from '../utils/variantFormatter.ts';
 
 export interface ProductValidationResult {
@@ -435,9 +434,13 @@ export async function saveProductWithCascadeSync(
   }
 
   try {
-    // 1. Resolve category name for public.products (categories are stored directly on products.category)
-    const matchedCategory = INITIAL_CATEGORIES.find((c) => c.id === product.categoryId);
-    const categoryName = matchedCategory ? matchedCategory.name : (product.categoryId || 'Other Grocery Items');
+    // 1. Resolve category name for public.products (preserve existing category name or categoryId)
+    let categoryName = (product as any).category && typeof (product as any).category === 'string'
+      ? String((product as any).category).trim()
+      : '';
+    if (!categoryName) {
+      categoryName = product.categoryId || '';
+    }
     const primaryVariant = product.variants?.[0];
     const basePrice = primaryVariant ? Number(primaryVariant.baseSellingPrice || 0) : 0;
     const mrp = primaryVariant ? Number(primaryVariant.mrp || 0) : 0;

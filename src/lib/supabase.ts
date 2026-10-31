@@ -1,6 +1,6 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { User, Order, OrderItem, Address, Role, OrderStatus, PaymentMethod, PaymentStatus, UnitType, Product, ProductVariant, TieredPrice, SystemSetting, WalletTransaction, ProductRequest } from '../types';
-import { INITIAL_CATEGORIES, INITIAL_SETTINGS } from '../data/seedData';
+import { INITIAL_SETTINGS } from '../data/seedData';
 import {
   saveProductWithCascadeSync,
   deleteProductWithCascade,
@@ -1673,14 +1673,8 @@ export async function fetchProductsFromSupabase(): Promise<Product[] | null> {
 
     // Assemble final Product list
     const assembledProducts: Product[] = dbProducts.map((p) => {
-      // Match categoryId from INITIAL_CATEGORIES or fallback gracefully
-      const matchedCategory = INITIAL_CATEGORIES.find(
-        (c) =>
-          c.name.toLowerCase() === (p.category || '').toLowerCase() ||
-          c.id === p.category_id ||
-          c.id === p.category
-      );
-      const categoryId = matchedCategory ? matchedCategory.id : (p.category_id || p.category || 'cat-15');
+      // Prioritize explicit category_id or category from database
+      const categoryId = p.category_id || p.category || '';
 
       // 1. Use relational variants if resolved
       let variants: ProductVariant[] = variantsByProduct[p.id] || [];
