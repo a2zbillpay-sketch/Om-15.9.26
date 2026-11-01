@@ -43,7 +43,6 @@ import {
   Volume2,
   Bell,
   GripVertical,
-  FolderTree,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { useApp } from '../context/AppContext';
@@ -51,7 +50,6 @@ import { playNotificationSound } from '../utils/notificationSound';
 import { INITIAL_PRODUCTS } from '../data/seedData';
 import { Order, OrderStatus, PaymentMethod, PaymentStatus, Product, ProductVariant, TieredPrice, UnitType, Role } from '../types';
 import { AdminSettingsControl } from './AdminSettingsControl';
-import { CategoryManagement } from './CategoryManagement';
 import { LogoUploadModal } from './LogoUploadModal';
 import { EditProductModal } from './EditProductModal';
 import { InlineVariantStockEditor } from './InlineVariantStockEditor';
@@ -124,7 +122,6 @@ export const AdminDashboard: React.FC = () => {
   const {
     orders,
     products,
-    categories,
     updateOrderStatus,
     addProduct,
     updateProduct,
@@ -141,7 +138,6 @@ export const AdminDashboard: React.FC = () => {
     markAllNotificationsAsRead,
     productRequests,
     bulkAddProducts,
-    addCategory,
     activeRole,
     currentUser,
   } = useApp();
@@ -168,16 +164,6 @@ export const AdminDashboard: React.FC = () => {
               }
               return INITIAL_PRODUCTS;
             })();
-
-      const effectiveCategories = Array.isArray(categories) ? categories : [];
-
-      const categoryMap = new Map<string, string>();
-      effectiveCategories.forEach((c) => {
-        if (c && c.id) {
-          categoryMap.set(c.id, c.name);
-          categoryMap.set(c.id.toLowerCase(), c.name);
-        }
-      });
 
       // Helper for robust wholesale slab summary formatting
       const formatSlabsSummary = (tpList: any): string => {
@@ -225,11 +211,7 @@ export const AdminDashboard: React.FC = () => {
 
       effectiveProducts.forEach((p) => {
         if (!p) return;
-        const categoryName =
-          categoryMap.get(p.categoryId) ||
-          categoryMap.get((p.categoryId || '').toLowerCase()) ||
-          p.categoryId ||
-          'General';
+        const categoryName = '';
 
         const variantList = Array.isArray(p.variants) ? p.variants : [];
 
@@ -572,7 +554,7 @@ export const AdminDashboard: React.FC = () => {
     }
   };
 
-  const [activeTab, setActiveTab] = useState<'ORDERS' | 'INVENTORY' | 'CATEGORIES' | 'SETTINGS' | 'CUSTOMERS'>('ORDERS');
+  const [activeTab, setActiveTab] = useState<'ORDERS' | 'INVENTORY' | 'SETTINGS' | 'CUSTOMERS'>('ORDERS');
   const [orderFilter, setOrderFilter] = useState<string>('ALL');
   const [inventorySearch, setInventorySearch] = useState<string>('');
   const [inventoryStockFilter, setInventoryStockFilter] = useState<'ALL' | 'LOW_STOCK' | 'OUT_OF_STOCK' | 'IN_STOCK'>('ALL');
@@ -1363,16 +1345,6 @@ export const AdminDashboard: React.FC = () => {
                 <span>Inventory</span>
               </button>
 
-              <button
-                id="btn-admin-tab-categories"
-                onClick={() => setActiveTab('CATEGORIES')}
-                className={`px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition ${
-                  activeTab === 'CATEGORIES' ? 'bg-[#FF6B00] text-white shadow' : 'text-gray-300 hover:text-white'
-                }`}
-              >
-                <FolderTree size={14} />
-                <span>Categories ({categories.length})</span>
-              </button>
 
               <button
                 onClick={() => setActiveTab('CUSTOMERS')}
@@ -1986,16 +1958,6 @@ export const AdminDashboard: React.FC = () => {
                   </button>
                 )}
 
-                <button
-                  type="button"
-                  id="btn-inventory-open-categories"
-                  onClick={() => setActiveTab('CATEGORIES')}
-                  className="bg-indigo-700 hover:bg-indigo-800 text-white px-3 py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shadow-2xs transition active:scale-95 cursor-pointer flex-1 sm:flex-none"
-                  title="Manage product categories, photos, and display order"
-                >
-                  <FolderTree size={13} className="text-indigo-200" />
-                  <span>Categories ({categories.length})</span>
-                </button>
 
                 <button
                   type="button"
@@ -2523,10 +2485,7 @@ export const AdminDashboard: React.FC = () => {
 
 
 
-        {/* TAB 2.5: CATEGORY MANAGEMENT */}
-        {activeTab === 'CATEGORIES' && (
-          <CategoryManagement />
-        )}
+
 
         {/* TAB 3: ENGINE SETTINGS */}
         {activeTab === 'SETTINGS' && (
@@ -2700,26 +2659,6 @@ export const AdminDashboard: React.FC = () => {
                     />
                   </div>
 
-                  {categories.length > 0 && (
-                    <div>
-                      <label className="font-bold text-gray-700 block mb-1">
-                        Category <span className="text-xs text-gray-400 font-normal">(Optional)</span>
-                      </label>
-                      <select
-                        id="new-product-category-select"
-                        value={newProductData.categoryId}
-                        onChange={(e) => setNewProductData({ ...newProductData, categoryId: e.target.value })}
-                        className="w-full p-2.5 border border-gray-300 rounded-xl outline-none focus:border-[#0F2C59] focus:ring-1 focus:ring-[#0F2C59] font-medium text-gray-900 bg-white"
-                      >
-                        <option value="">-- Select Category (Optional) --</option>
-                        {categories.map((c) => (
-                          <option key={c.id} value={c.id}>
-                            {c.name}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
 
                   <div>
                     <div className="flex items-center justify-between mb-1">
@@ -3323,17 +3262,10 @@ export const AdminDashboard: React.FC = () => {
         <BulkProductUploadModal
           isOpen={isBulkUploadModalOpen}
           onClose={() => setIsBulkUploadModalOpen(false)}
-          categories={categories || []}
+          categories={[]}
           existingProducts={products || []}
           onProductsImported={async (newProducts) => {
             return await bulkAddProducts(newProducts);
-          }}
-          onAddCategory={async (catName) => {
-            if (addCategory) {
-              const res = await addCategory({ name: catName });
-              return res.category || null;
-            }
-            return null;
           }}
         />
       )}

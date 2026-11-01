@@ -7,7 +7,7 @@ import {
   normalizeAndValidateProduct,
   saveProductWithCascadeSync,
   deleteProductWithCascade,
-} from '../src/lib/product-service';
+} from '../src/lib/product-service.js';
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const PRODUCTS_FILE = path.resolve(DATA_DIR, 'products.json');

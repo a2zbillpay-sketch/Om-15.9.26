@@ -54,12 +54,7 @@ import {
   fetchProductRequestsFromSupabase,
   subscribeToProductRequests,
 } from '../lib/supabase';
-import {
-  fetchCategoriesFromDb,
-  saveCategoryToDb,
-  deleteCategoryFromDb,
-  reorderCategoriesInDb,
-} from '../lib/category-service';
+
 import { reorderProductsInDb } from '../lib/product-service';
 import {
   calculateCustomerOutstanding,
@@ -279,25 +274,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return INITIAL_SETTINGS;
   });
 
-  const [categories, setCategories] = useState<Category[]>(() => {
-    try {
-      localStorage.removeItem('om_categories');
-    } catch {}
-    return [];
-  });
-
-  useEffect(() => {
-    try {
-      localStorage.removeItem('om_categories');
-    } catch {}
-    fetchCategoriesFromDb()
-      .then((cats) => {
-        if (Array.isArray(cats) && cats.length > 0) {
-          setCategories(cats);
-        }
-      })
-      .catch(() => {});
-  }, []);
+  const [categories, setCategories] = useState<Category[]>([]);
 
   const [products, setProducts] = useState<Product[]>(() => {
     const saved = localStorage.getItem('om_products');
@@ -918,14 +895,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  const refreshCategories = async () => {
-    try {
-      const fetched = await fetchCategoriesFromDb();
-      setCategories(Array.isArray(fetched) ? fetched : []);
-    } catch (err) {
-      console.warn('Error refreshing categories:', err);
-    }
-  };
 
   useEffect(() => {
     if (isSupabaseConfigured) {
@@ -989,7 +958,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [currentUser.phone, activeRole, refreshCustomerWallet]);
 
   useEffect(() => {
-    refreshCategories();
     if (isSupabaseConfigured) {
       refreshProducts();
     }
@@ -1247,7 +1215,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setProducts((prev) => prev.filter((p) => p.id !== id));
   };
 
-  // Category management operations (Phase 2B: Dynamic Category System)
+  // Category operations: safe local handlers (no category-service or DB dependencies)
   const addCategory = async (categoryData: {
     name: string;
     imageUrl?: string;
@@ -1262,13 +1230,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       imageUrl: categoryData.imageUrl ? categoryData.imageUrl.trim() : '',
       displayOrder: categories.length + 1,
     };
-    const res = await saveCategoryToDb(newCategory);
-    if (res.success) {
-      const savedCategory = res.category || newCategory;
-      setCategories((prev) => [...prev, savedCategory]);
-      return { success: true, category: savedCategory };
-    }
-    return res;
+    setCategories((prev) => [...prev, newCategory]);
+    return { success: true, category: newCategory };
   };
 
   const updateCategory = async (
@@ -1284,22 +1247,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       name: updates.name !== undefined ? updates.name.trim() : existing.name,
       imageUrl: updates.imageUrl !== undefined ? updates.imageUrl.trim() : existing.imageUrl,
     };
-    const res = await saveCategoryToDb(updated);
-    if (res.success) {
-      const savedCategory = res.category || updated;
-      setCategories((prev) => prev.map((c) => (c.id === id ? savedCategory : c)));
-      return { success: true, category: savedCategory };
-    }
-    return res;
+    setCategories((prev) => prev.map((c) => (c.id === id ? updated : c)));
+    return { success: true, category: updated };
   };
 
   const deleteCategory = async (id: string): Promise<{ success: boolean; error?: string }> => {
-    const res = await deleteCategoryFromDb(id);
-    if (res.success) {
-      setCategories((prev) => prev.filter((c) => c.id !== id));
-      return { success: true };
-    }
-    return res;
+    setCategories((prev) => prev.filter((c) => c.id !== id));
+    return { success: true };
   };
 
   const reorderCategories = async (
@@ -1310,11 +1264,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       displayOrder: idx + 1,
     }));
     setCategories(updatedList);
-    const res = await reorderCategoriesInDb(updatedList);
-    if (!res.success) {
-      console.warn('Reorder categories sync note:', res.error);
-    }
-    return res;
+    return { success: true };
   };
 
   const reorderProducts = async (
