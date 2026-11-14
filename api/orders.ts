@@ -260,8 +260,8 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
           .maybeSingle();
 
         if (storeSettings) {
-          if (storeSettings.advance_payment_discount_pct !== undefined) {
-            advanceDiscountPct = Number(storeSettings.advance_payment_discount_pct);
+          if (storeSettings.advance_discount_percentage !== undefined) {
+            advanceDiscountPct = Number(storeSettings.advance_discount_percentage);
           }
           if (storeSettings.cod_base_charge !== undefined) {
             codBaseCharge = Number(storeSettings.cod_base_charge);

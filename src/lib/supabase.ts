@@ -1901,9 +1901,7 @@ export function mapSupabaseRowToSettings(
     advancePaymentDiscountPct:
       row.advance_discount_percentage !== undefined && !isNaN(Number(row.advance_discount_percentage))
         ? Number(row.advance_discount_percentage)
-        : (row.advance_payment_discount_pct !== undefined && !isNaN(Number(row.advance_payment_discount_pct))
-          ? Number(row.advance_payment_discount_pct)
-          : (base.advancePaymentDiscountPct ?? 3.0)),
+        : (base.advancePaymentDiscountPct ?? 3.0),
     codBaseCharge:
       row.cod_base_charge !== undefined && !isNaN(Number(row.cod_base_charge))
         ? Number(row.cod_base_charge)

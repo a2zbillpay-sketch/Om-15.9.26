@@ -185,9 +185,7 @@ async function syncWithSupabaseIfConfigured(
           advancePaymentDiscountPct:
             data.advance_discount_percentage !== undefined
               ? Number(data.advance_discount_percentage)
-              : (data.advance_payment_discount_pct !== undefined
-                ? Number(data.advance_payment_discount_pct)
-                : settings.advancePaymentDiscountPct),
+              : settings.advancePaymentDiscountPct,
           codBaseCharge:
             data.cod_base_charge !== undefined
               ? Number(data.cod_base_charge)
