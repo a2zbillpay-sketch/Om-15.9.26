@@ -1885,7 +1885,18 @@ export function mapSupabaseRowToSettings(
   fallbackSettings?: SystemSetting
 ): SystemSetting {
   const base = fallbackSettings || INITIAL_SETTINGS;
-  if (!row || typeof row !== 'object') return base;
+  if (!row || typeof row !== 'object') {
+    return {
+      ...base,
+      advancePaymentDiscountPct: 0.0,
+    };
+  }
+
+  const rawDiscount = row.advance_discount_percentage;
+  const resolvedDiscount =
+    rawDiscount !== undefined && rawDiscount !== null && !isNaN(Number(rawDiscount))
+      ? Math.max(0, Math.round(Number(rawDiscount) * 100) / 100)
+      : 0.0;
 
   return {
     ...base,
@@ -1898,10 +1909,7 @@ export function mapSupabaseRowToSettings(
       row.logo_url !== undefined && row.logo_url !== null && String(row.logo_url).trim()
         ? String(row.logo_url)
         : (row['logo url'] || row.logoUrl || base.logoUrl || '/logo.jpg'),
-    advancePaymentDiscountPct:
-      row.advance_discount_percentage !== undefined && !isNaN(Number(row.advance_discount_percentage))
-        ? Number(row.advance_discount_percentage)
-        : (base.advancePaymentDiscountPct ?? 3.0),
+    advancePaymentDiscountPct: resolvedDiscount,
     codBaseCharge:
       row.cod_base_charge !== undefined && !isNaN(Number(row.cod_base_charge))
         ? Number(row.cod_base_charge)

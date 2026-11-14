@@ -29,8 +29,7 @@ export function hasCustomSettings(s: SystemSetting): boolean {
     s.codBaseCharge !== INITIAL_SETTINGS.codBaseCharge ||
     s.freeShippingMinAmount !== INITIAL_SETTINGS.freeShippingMinAmount ||
     s.baseDeliveryFee !== INITIAL_SETTINGS.baseDeliveryFee ||
-    s.appName !== INITIAL_SETTINGS.appName ||
-    s.advancePaymentDiscountPct !== INITIAL_SETTINGS.advancePaymentDiscountPct
+    s.appName !== INITIAL_SETTINGS.appName
   );
 }
 
@@ -46,6 +45,7 @@ export function loadCachedLocalSettings(): SystemSetting {
       return {
         ...INITIAL_SETTINGS,
         ...parsed,
+        advancePaymentDiscountPct: 0.0,
         lowStockThreshold:
           parsed.lowStockThreshold !== undefined && !isNaN(Number(parsed.lowStockThreshold))
             ? Number(parsed.lowStockThreshold)
@@ -92,9 +92,16 @@ export async function fetchRemoteSettings(): Promise<SystemSetting | null> {
     const data = await res.json();
     if (data && data.success && data.settings) {
       const s = data.settings;
+      const rawDiscount = s.advancePaymentDiscountPct;
+      const resolvedDiscount =
+        rawDiscount !== undefined && rawDiscount !== null && !isNaN(Number(rawDiscount))
+          ? Math.max(0, Math.round(Number(rawDiscount) * 100) / 100)
+          : 0.0;
+
       return {
         ...INITIAL_SETTINGS,
         ...s,
+        advancePaymentDiscountPct: resolvedDiscount,
         lowStockThreshold:
           s.lowStockThreshold !== undefined && !isNaN(Number(s.lowStockThreshold))
             ? Number(s.lowStockThreshold)
@@ -121,26 +128,30 @@ export async function fetchUnifiedSettings(
   try {
     const dbSettings = await fetchSettingsFromSupabase(local);
     if (dbSettings) {
-      // If dbSettings has valid timestamp or content, check if we need to migrate local customizations
+      // If dbSettings has valid timestamp or content, check if other non-discount local customizations need migration
       if (
         hasCustomSettings(local) &&
         !hasCustomSettings(dbSettings) &&
         local.updatedAt &&
         (!dbSettings.updatedAt || local.updatedAt > dbSettings.updatedAt)
       ) {
-        // Migrate existing local customizations up to Supabase
-        saveSettingsToSupabase(local).catch((e) =>
+        // Never allow stale local settings to overwrite Supabase store_settings.advance_discount_percentage
+        const safeMerged: SystemSetting = {
+          ...local,
+          advancePaymentDiscountPct: dbSettings.advancePaymentDiscountPct,
+        };
+        saveSettingsToSupabase(safeMerged).catch((e) =>
           console.warn('Auto-migration to Supabase notice:', e)
         );
-        saveCachedLocalSettings(local);
-        return local;
+        saveCachedLocalSettings(safeMerged);
+        return safeMerged;
       }
 
       saveCachedLocalSettings(dbSettings);
       return dbSettings;
     } else if (hasCustomSettings(local)) {
-      // Supabase table returned null/empty but we have custom settings -> seed Supabase
-      saveSettingsToSupabase(local).catch(() => {});
+      // Supabase table returned null/empty but we have other custom settings -> never seed stale local discount
+      saveSettingsToSupabase({ ...local, advancePaymentDiscountPct: 0.0 }).catch(() => {});
     }
   } catch (err) {
     console.warn('Supabase settings query notice (falling back to server endpoint):', err);
@@ -153,8 +164,11 @@ export async function fetchUnifiedSettings(
     return serverSettings;
   }
 
-  // 3. Fallback safely to current local settings without overriding with defaults
-  return local;
+  // 3. Fallback safely when Supabase & server are unavailable (advance discount strictly 0.00)
+  return {
+    ...local,
+    advancePaymentDiscountPct: 0.0,
+  };
 }
 
 /**

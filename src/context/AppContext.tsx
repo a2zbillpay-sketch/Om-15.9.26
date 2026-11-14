@@ -272,6 +272,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (parsed.lowStockThreshold === undefined || parsed.lowStockThreshold === null || isNaN(Number(parsed.lowStockThreshold))) {
           parsed.lowStockThreshold = INITIAL_SETTINGS.lowStockThreshold ?? 10;
         }
+        parsed.advancePaymentDiscountPct = 0.0;
         return parsed;
       } catch {
         return INITIAL_SETTINGS;
@@ -772,20 +773,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Synchronize settings with Supabase store_settings table, server, and cross-context channels
   useEffect(() => {
-    // 1. Initial fetch from Supabase (preserving existing local customizations)
+    // 1. Initial fetch from Supabase (store_settings is authoritative for discount & settings)
     fetchUnifiedSettings(settings).then((unified) => {
       if (unified) {
-        setSettings((prev) => {
-          if (!prev.updatedAt || !unified.updatedAt || unified.updatedAt >= prev.updatedAt) {
-            try {
-              localStorage.setItem('om_settings', JSON.stringify(unified));
-            } catch {
-              // ignore
-            }
-            return unified;
-          }
-          return prev;
-        });
+        try {
+          localStorage.setItem('om_settings', JSON.stringify(unified));
+        } catch {
+          // ignore
+        }
+        setSettings(unified);
       }
     });
 
