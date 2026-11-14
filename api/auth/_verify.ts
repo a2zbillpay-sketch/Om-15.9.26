@@ -176,3 +176,123 @@ export function clearAdminSessionCookie(res: ServerResponse): void {
   const cookieStr = `${SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=None; Secure; Partitioned; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT`;
   res.setHeader('Set-Cookie', cookieStr);
 }
+
+export interface CustomerSession {
+  role: 'CUSTOMER';
+  customerId: string;
+  phone: string;
+  issuedAt: number;
+  expiresAt: number;
+}
+
+export const CUSTOMER_SESSION_COOKIE_NAME = 'om_customer_session';
+
+function getCustomerSessionSecret(): string | null {
+  const customerSecret = process.env.CUSTOMER_SESSION_SECRET;
+  if (customerSecret && typeof customerSecret === 'string' && customerSecret.trim().length >= 32) {
+    return customerSecret.trim();
+  }
+  return getSessionSecret();
+}
+
+/**
+ * Creates a cryptographically signed HMAC-SHA256 customer session token.
+ * Returns null if the server session secret is not configured.
+ */
+export function createCustomerSessionToken(payload: CustomerSession): string | null {
+  const secret = getCustomerSessionSecret();
+  if (!secret) return null;
+
+  try {
+    const encodedPayload = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+    const signature = crypto
+      .createHmac('sha256', secret)
+      .update(encodedPayload)
+      .digest('base64url');
+    return `${encodedPayload}.${signature}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Cryptographically verifies a signed customer session token.
+ * Rejects invalid signatures, expired tokens, non-CUSTOMER roles, or malformed phone/customerId.
+ */
+export function verifyCustomerSessionToken(token: string): CustomerSession | null {
+  const secret = getCustomerSessionSecret();
+  if (!secret) return null;
+
+  try {
+    if (!token || typeof token !== 'string') return null;
+    const parts = token.split('.');
+    if (parts.length !== 2) return null;
+
+    const [encodedPayload, signature] = parts;
+    if (!encodedPayload || !signature) return null;
+
+    const expectedSignature = crypto
+      .createHmac('sha256', secret)
+      .update(encodedPayload)
+      .digest('base64url');
+
+    const sigBuffer = Buffer.from(signature, 'utf8');
+    const expectedBuffer = Buffer.from(expectedSignature, 'utf8');
+
+    if (sigBuffer.length !== expectedBuffer.length) {
+      return null;
+    }
+
+    if (!crypto.timingSafeEqual(sigBuffer, expectedBuffer)) {
+      return null;
+    }
+
+    const payloadJson = Buffer.from(encodedPayload, 'base64url').toString('utf8');
+    const payload = JSON.parse(payloadJson);
+
+    if (!payload || typeof payload !== 'object') {
+      return null;
+    }
+
+    if (payload.role !== 'CUSTOMER') {
+      return null;
+    }
+
+    if (typeof payload.expiresAt !== 'number' || Date.now() > payload.expiresAt) {
+      return null;
+    }
+
+    const cleanPhone = String(payload.phone || '').replace(/\D/g, '').slice(-10);
+    if (cleanPhone.length !== 10) {
+      return null;
+    }
+
+    const customerId = String(payload.customerId || '').trim();
+    if (!customerId) {
+      return null;
+    }
+
+    return {
+      role: 'CUSTOMER',
+      customerId,
+      phone: cleanPhone,
+      issuedAt: Number(payload.issuedAt) || 0,
+      expiresAt: payload.expiresAt,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Reads and verifies the Customer session strictly from the HttpOnly request cookie.
+ * NEVER trusts URL query params, request bodies, or unsigned headers.
+ */
+export function verifyCustomerSession(req: IncomingMessage): CustomerSession | null {
+  const cookies = parseCookies(req);
+  const token = cookies[CUSTOMER_SESSION_COOKIE_NAME];
+  if (!token) return null;
+
+  return verifyCustomerSessionToken(token);
+}
+

@@ -1405,24 +1405,53 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Cart operations (scoped to active customer)
   const addToCart = (product: Product, variant?: ProductVariant | null, quantity = 1) => {
+    const cleanRequestedQty = Math.floor(Number(quantity));
+    if (!Number.isFinite(cleanRequestedQty) || cleanRequestedQty <= 0) {
+      return;
+    }
+
     setCart((prev) => {
       const existingIndex = prev.findIndex((item) =>
         variant ? item.variantId === variant.id : !item.variantId && item.productId === product.id
       );
-      const maxLimit = variant ? variant.maxOrderLimit : (product.maxOrderLimit || 20);
-      const stock = variant ? variant.stockQuantity : Number(product.stockQuantity ?? product.stock ?? 0);
+      const rawMaxLimit = variant ? variant.maxOrderLimit : product.maxOrderLimit;
+      const hasMaxLimit =
+        rawMaxLimit !== undefined &&
+        rawMaxLimit !== null &&
+        Number.isFinite(Number(rawMaxLimit)) &&
+        Number(rawMaxLimit) > 0;
+      const rawStock = variant
+        ? variant.stockQuantity
+        : Number(product.stockQuantity ?? product.stock ?? 0);
+      const stock = Number.isFinite(Number(rawStock)) ? Math.max(0, Math.floor(Number(rawStock))) : 0;
+
+      if (stock <= 0) {
+        if (existingIndex > -1) {
+          const updated = prev.filter((_, idx) => idx !== existingIndex);
+          if (currentUser?.phone) {
+            saveCustomerCart(currentUser.phone, updated);
+          }
+          return updated;
+        }
+        return prev;
+      }
+
+      const effectiveCap = hasMaxLimit ? Math.min(Number(rawMaxLimit), stock) : stock;
+      if (effectiveCap <= 0) {
+        return prev;
+      }
 
       let updated: CartItem[];
       if (existingIndex > -1) {
         const existing = prev[existingIndex];
-        const newQty = Math.min(
-          maxLimit,
-          Math.min(stock, existing.quantity + quantity)
-        );
+        const newQty = Math.min(effectiveCap, existing.quantity + cleanRequestedQty);
         updated = [...prev];
         updated[existingIndex] = { ...existing, quantity: newQty };
       } else {
-        const initialQty = Math.min(maxLimit, Math.min(stock, quantity));
+        const initialQty = Math.min(effectiveCap, cleanRequestedQty);
+        if (initialQty <= 0) {
+          return prev;
+        }
         updated = [
           ...prev,
           {
@@ -1430,7 +1459,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             product,
             variantId: variant?.id || null,
             variant: variant || null,
-            quantity: Math.max(1, initialQty),
+            quantity: initialQty,
           },
         ];
       }
@@ -1442,21 +1471,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const updateCartQty = (itemKey: string, quantity: number) => {
-    if (quantity <= 0) {
+    const cleanQty = Math.floor(Number(quantity));
+    if (!Number.isFinite(cleanQty) || cleanQty <= 0) {
       removeFromCart(itemKey);
       return;
     }
     setCart((prev) => {
-      const updated = prev.map((item) => {
-        const isMatch = item.variantId === itemKey || (!item.variantId && item.productId === itemKey);
-        if (isMatch) {
-          const maxLimit = item.variant ? item.variant.maxOrderLimit : (item.product.maxOrderLimit || 20);
-          const stock = item.variant ? item.variant.stockQuantity : Number(item.product.stockQuantity ?? item.product.stock ?? 0);
-          const clamped = Math.min(maxLimit, Math.min(stock, quantity));
-          return { ...item, quantity: clamped };
-        }
-        return item;
-      });
+      const updated = prev
+        .map((item) => {
+          const isMatch = item.variantId === itemKey || (!item.variantId && item.productId === itemKey);
+          if (isMatch) {
+            const rawMaxLimit = item.variant ? item.variant.maxOrderLimit : item.product.maxOrderLimit;
+            const hasMaxLimit =
+              rawMaxLimit !== undefined &&
+              rawMaxLimit !== null &&
+              Number.isFinite(Number(rawMaxLimit)) &&
+              Number(rawMaxLimit) > 0;
+            const rawStock = item.variant
+              ? item.variant.stockQuantity
+              : Number(item.product.stockQuantity ?? item.product.stock ?? 0);
+            const stock = Number.isFinite(Number(rawStock)) ? Math.max(0, Math.floor(Number(rawStock))) : 0;
+            const effectiveCap = hasMaxLimit ? Math.min(Number(rawMaxLimit), stock) : stock;
+            const clamped = Math.min(effectiveCap, cleanQty);
+            return { ...item, quantity: clamped };
+          }
+          return item;
+        })
+        .filter((item) => item.quantity > 0);
       if (currentUser?.phone) {
         saveCustomerCart(currentUser.phone, updated);
       }
