@@ -350,70 +350,11 @@ ALTER TABLE public.store_settings
 ALTER TABLE public.store_settings
   DROP COLUMN IF EXISTS referral_reward_amount;
 
--- 2.12 Legacy System Settings Mirror Table (for backward compatibility)
-CREATE TABLE IF NOT EXISTS public.system_settings (
-  id TEXT PRIMARY KEY DEFAULT 'global_settings',
-  app_name TEXT NOT NULL DEFAULT 'Om Distributors',
-  logo_url TEXT DEFAULT '/logo.jpg',
-  primary_color_hex TEXT DEFAULT '#0F2C59',
-  secondary_color_hex TEXT DEFAULT '#D4AF37',
-  accent_color_hex TEXT DEFAULT '#FF6B00',
-  advance_payment_discount_pct NUMERIC(5, 2) NOT NULL DEFAULT 5.00,
-  cod_base_charge NUMERIC(10, 2) NOT NULL DEFAULT 0.00,
-  free_shipping_min_amount NUMERIC(10, 2) NOT NULL DEFAULT 249.00,
-  base_delivery_fee NUMERIC(10, 2) NOT NULL DEFAULT 11.00,
-  low_stock_threshold NUMERIC(10, 2) NOT NULL DEFAULT 10.00,
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-ALTER TABLE public.system_settings
-  ADD COLUMN IF NOT EXISTS app_name TEXT DEFAULT 'Om Distributors',
-  ADD COLUMN IF NOT EXISTS logo_url TEXT DEFAULT '/logo.jpg',
-  ADD COLUMN IF NOT EXISTS primary_color_hex TEXT DEFAULT '#0F2C59',
-  ADD COLUMN IF NOT EXISTS secondary_color_hex TEXT DEFAULT '#D4AF37',
-  ADD COLUMN IF NOT EXISTS accent_color_hex TEXT DEFAULT '#FF6B00',
-  ADD COLUMN IF NOT EXISTS advance_payment_discount_pct NUMERIC(5, 2) DEFAULT 5.00,
-  ADD COLUMN IF NOT EXISTS cod_base_charge NUMERIC(10, 2) DEFAULT 0.00,
-  ADD COLUMN IF NOT EXISTS free_shipping_min_amount NUMERIC(10, 2) DEFAULT 249.00,
-  ADD COLUMN IF NOT EXISTS base_delivery_fee NUMERIC(10, 2) DEFAULT 11.00,
-  ADD COLUMN IF NOT EXISTS low_stock_threshold NUMERIC(10, 2) DEFAULT 10.00,
-  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now();
-
--- Drop legacy referral_reward_amount column if present on legacy table
-ALTER TABLE public.system_settings
-  DROP COLUMN IF EXISTS referral_reward_amount;
-
 -- ==============================================================================
 -- 3. Default Store Settings Seeding (DO NOT OVERWRITE EXISTING SETTINGS)
 -- ==============================================================================
 
 INSERT INTO public.store_settings (
-  id,
-  app_name,
-  logo_url,
-  primary_color_hex,
-  secondary_color_hex,
-  accent_color_hex,
-  advance_payment_discount_pct,
-  cod_base_charge,
-  free_shipping_min_amount,
-  base_delivery_fee,
-  low_stock_threshold
-) VALUES (
-  'global_settings',
-  'Om Distributors',
-  '/logo.jpg',
-  '#0F2C59',
-  '#D4AF37',
-  '#FF6B00',
-  5.00,
-  0.00,
-  249.00,
-  11.00,
-  10.00
-) ON CONFLICT (id) DO NOTHING;
-
-INSERT INTO public.system_settings (
   id,
   app_name,
   logo_url,
@@ -475,7 +416,6 @@ ALTER TABLE public.order_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.ledger ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.product_requests ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.store_settings ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.system_settings ENABLE ROW LEVEL SECURITY;
 
 -- ------------------------------------------------------------------------------
 -- 5.1 Public Storefront Catalog: Categories, Products, Variants, Tiers & Settings
@@ -517,21 +457,13 @@ DROP POLICY IF EXISTS "Service Role Manage Tiered Prices" ON public.tiered_price
 CREATE POLICY "Service Role Manage Tiered Prices" ON public.tiered_prices
   FOR ALL TO service_role USING (true) WITH CHECK (true);
 
--- Store Settings & System Settings: Public read for storefront discounts & checkout fees
+-- Store Settings: Public read for storefront discounts & checkout fees
 DROP POLICY IF EXISTS "Public Read Store Settings" ON public.store_settings;
 CREATE POLICY "Public Read Store Settings" ON public.store_settings
   FOR SELECT USING (true);
 
 DROP POLICY IF EXISTS "Service Role Manage Store Settings" ON public.store_settings;
 CREATE POLICY "Service Role Manage Store Settings" ON public.store_settings
-  FOR ALL TO service_role USING (true) WITH CHECK (true);
-
-DROP POLICY IF EXISTS "Public Read System Settings" ON public.system_settings;
-CREATE POLICY "Public Read System Settings" ON public.system_settings
-  FOR SELECT USING (true);
-
-DROP POLICY IF EXISTS "Service Role Manage System Settings" ON public.system_settings;
-CREATE POLICY "Service Role Manage System Settings" ON public.system_settings
   FOR ALL TO service_role USING (true) WITH CHECK (true);
 
 -- ------------------------------------------------------------------------------

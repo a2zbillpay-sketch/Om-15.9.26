@@ -770,7 +770,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [settings]);
 
-  // Synchronize settings with Supabase system_settings table, server, and cross-context channels
+  // Synchronize settings with Supabase store_settings table, server, and cross-context channels
   useEffect(() => {
     // 1. Initial fetch from Supabase (preserving existing local customizations)
     fetchUnifiedSettings(settings).then((unified) => {
@@ -1103,7 +1103,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // 3. Broadcast across tabs and windows
     broadcastSettingsChange(updated);
 
-    // 4. Persist to Supabase system_settings table and server persistence
+    // 4. Persist to Supabase store_settings table and server persistence
     saveUnifiedSettings(updated).catch((err) => {
       console.warn('Background settings save error:', err);
     });

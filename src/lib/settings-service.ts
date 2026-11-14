@@ -108,7 +108,7 @@ export async function fetchRemoteSettings(): Promise<SystemSetting | null> {
 }
 
 /**
- * Unified fetch that queries Supabase system_settings table first,
+ * Unified fetch that queries Supabase store_settings table first,
  * migrates existing local customizations to Supabase if the database is unseeded,
  * and falls back to /api/settings or local cached state safely without losing data.
  */
@@ -117,7 +117,7 @@ export async function fetchUnifiedSettings(
 ): Promise<SystemSetting> {
   const local = currentLocal || loadCachedLocalSettings();
 
-  // 1. Try Supabase system_settings directly
+  // 1. Try Supabase store_settings directly
   try {
     const dbSettings = await fetchSettingsFromSupabase(local);
     if (dbSettings) {
@@ -191,7 +191,7 @@ export async function saveRemoteSettings(
 }
 
 /**
- * Unified save that persists to Supabase system_settings table,
+ * Unified save that persists to Supabase store_settings table,
  * /api/settings (server disk), localStorage, and cross-tab BroadcastChannel.
  */
 export async function saveUnifiedSettings(
