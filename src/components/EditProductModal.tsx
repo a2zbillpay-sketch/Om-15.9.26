@@ -1058,6 +1058,20 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
                             className="w-full p-1.5 border border-gray-300 rounded-lg text-xs font-mono bg-white outline-none focus:border-[#0F2C59]"
                           />
                         </div>
+                        <div className="col-span-2">
+                          <label className="text-[10px] font-bold text-gray-600 block mb-0.5">
+                            Variant Photo / GIF URL (Optional)
+                          </label>
+                          <input
+                            type="url"
+                            placeholder="https://... (uses main product photo if blank)"
+                            value={variant.imageUrl ?? ''}
+                            onChange={(e) =>
+                              handleUpdateVariant(idx, 'imageUrl', e.target.value)
+                            }
+                            className="w-full p-1.5 border border-gray-300 rounded-lg text-xs bg-white outline-none focus:border-[#0F2C59]"
+                          />
+                        </div>
                       </div>
 
                   {/* Wholesale Bulk Discount Slab (Optional) for EACH product variant */}

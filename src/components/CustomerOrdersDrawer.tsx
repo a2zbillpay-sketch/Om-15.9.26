@@ -215,7 +215,11 @@ export const CustomerOrdersDrawer: React.FC<CustomerOrdersDrawerProps> = ({
                           Wallet: -₹{order.walletAmountUsed}
                         </span>
                       )}
-                      {order.status !== OrderStatus.CANCELLED &&
+                      {order.paymentStatus === PaymentStatus.REFUNDED ? (
+                        <span className="ml-1 text-[10px] font-black text-blue-800 bg-blue-100/80 px-1.5 py-0.5 rounded">
+                          REFUNDED
+                        </span>
+                      ) : order.status !== OrderStatus.CANCELLED &&
                       (order.paymentStatus === PaymentStatus.RECEIVED ||
                         (order.paymentStatus as any) === 'PAID') ? (
                         <span className="ml-1 text-[10px] font-black text-emerald-800 bg-emerald-100/70 px-1.5 py-0.5 rounded">

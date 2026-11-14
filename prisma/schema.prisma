@@ -163,7 +163,7 @@ model SystemSetting {
   secondaryColorHex         String   @default("#D4AF37")
   accentColorHex            String   @default("#FF6B00")
   advancePaymentDiscountPct Decimal  @default(3.0)
-  codBaseCharge             Decimal  @default(30.0)
+  codBaseCharge             Decimal  @default(0.0)
   freeShippingMinAmount     Decimal  @default(500.0)
   baseDeliveryFee           Decimal  @default(40.0)
   referralRewardAmount      Decimal  @default(50.0)

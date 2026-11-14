@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import {
   ShieldCheck,
   Truck,
@@ -29,6 +29,7 @@ export const CustomerStore: React.FC<CustomerStoreProps> = ({
 }) => {
   const {
     products,
+    categories,
     settings,
     cart,
     checkoutBreakdown,
@@ -39,6 +40,8 @@ export const CustomerStore: React.FC<CustomerStoreProps> = ({
     repeatOrderNotice,
     setRepeatOrderNotice,
   } = useApp();
+
+  const [selectedCategoryId, setSelectedCategoryId] = useState<string>('ALL');
 
   // Customer past orders to detect most recent order
   const customerOrders = useMemo(() => {
@@ -56,11 +59,65 @@ export const CustomerStore: React.FC<CustomerStoreProps> = ({
     )[0];
   }, [customerOrders]);
 
-  // Filter products by search query
+  // Strictly display only Admin-saved categories sorted by displayOrder
+  const displayCategories = useMemo(() => {
+    if (!Array.isArray(categories)) return [];
+    return [...categories].sort((a, b) => (a.displayOrder || 0) - (b.displayOrder || 0));
+  }, [categories]);
+
+  // Robust Product-Category matching helper
+  const isProductInCategory = useCallback(
+    (product: (typeof products)[0], catId: string): boolean => {
+      if (!catId || catId === 'ALL') return true;
+      if (!product) return false;
+
+      const pCat = (product.categoryId || '').trim().toLowerCase();
+      const targetId = catId.trim().toLowerCase();
+
+      // 1. Direct ID match
+      if (pCat === targetId) return true;
+
+      // 2. Match by category name
+      const targetCategory = displayCategories.find((c) => c.id.toLowerCase() === targetId);
+      if (targetCategory) {
+        const catName = targetCategory.name.toLowerCase().trim();
+        if (pCat === catName) return true;
+      }
+
+      // 3. Numeric ID match (e.g., '1' vs 'cat-1')
+      const targetDigits = targetId.replace(/\D/g, '');
+      const pCatDigits = pCat.replace(/\D/g, '');
+      if (targetDigits && pCatDigits && targetDigits === pCatDigits) {
+        return true;
+      }
+
+      return false;
+    },
+    [displayCategories]
+  );
+
+  // Toggle or select category (clicking active category again deselects it and returns to ALL)
+  const handleCategoryClick = (catId: string) => {
+    if (selectedCategoryId === catId) {
+      setSelectedCategoryId('ALL');
+    } else {
+      setSelectedCategoryId(catId);
+    }
+  };
+
+  // Filter products by active category and search query
   const filteredProducts = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
 
     return products.filter((p) => {
+      // 1. Category filter
+      if (selectedCategoryId !== 'ALL') {
+        if (!isProductInCategory(p, selectedCategoryId)) {
+          return false;
+        }
+      }
+
+      // 2. Search query matching
       const matchesKeywords =
         Boolean(p.searchKeywords) &&
         (p.searchKeywords!.toLowerCase().includes(query) ||
@@ -81,7 +138,12 @@ export const CustomerStore: React.FC<CustomerStoreProps> = ({
 
       return matchesSearch;
     });
-  }, [products, searchQuery]);
+  }, [products, searchQuery, selectedCategoryId, isProductInCategory]);
+
+  const activeCategory = useMemo(() => {
+    if (selectedCategoryId === 'ALL') return null;
+    return displayCategories.find((c) => c.id === selectedCategoryId) || null;
+  }, [selectedCategoryId, displayCategories]);
 
   const totalCartCount = cart.reduce((acc, i) => acc + i.quantity, 0);
 
@@ -134,13 +196,6 @@ export const CustomerStore: React.FC<CustomerStoreProps> = ({
             </div>
             <div className="space-y-2">
               <PWAInstallButton variant="prominent" />
-              <button
-                type="button"
-                onClick={onOpenWallet}
-                className="w-full text-xs font-black text-[#FFE600] hover:text-yellow-300 underline py-1 tracking-wide transition-colors"
-              >
-                Earn ₹21 by referring friends →
-              </button>
             </div>
           </div>
         </div>
@@ -270,18 +325,106 @@ export const CustomerStore: React.FC<CustomerStoreProps> = ({
 
       {/* Main Catalog Product Grid */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
-        <div className="flex justify-between items-center mb-4">
+        {/* Dynamic Category Navigation Bar */}
+        {displayCategories.length > 0 && (
+          <div className="mb-6 overflow-x-auto scrollbar-none pb-2 -mx-4 px-4 sm:mx-0 sm:px-0">
+            <div className="flex items-center gap-2 min-w-max">
+              {/* All Products Tab */}
+              <button
+                type="button"
+                id="category-pill-all"
+                onClick={() => setSelectedCategoryId('ALL')}
+                className={`px-3.5 py-2 rounded-xl text-xs font-black transition flex items-center gap-2 cursor-pointer shadow-xs ${
+                  selectedCategoryId === 'ALL'
+                    ? 'bg-[#0F2C59] text-[#D4AF37] ring-2 ring-[#D4AF37]/70 shadow-sm'
+                    : 'bg-white text-gray-700 hover:bg-gray-100 border border-gray-200'
+                }`}
+                title="सर्व किराणा उत्पादने दाखवा (Show All Products)"
+              >
+                <span>सर्व (All)</span>
+                <span
+                  className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
+                    selectedCategoryId === 'ALL'
+                      ? 'bg-[#D4AF37]/20 text-[#D4AF37]'
+                      : 'bg-gray-100 text-gray-500'
+                  }`}
+                >
+                  {products.length}
+                </span>
+              </button>
+
+              {/* Individual Category Tabs */}
+              {displayCategories.map((cat) => {
+                const isSelected = selectedCategoryId === cat.id;
+                const count = products.filter((p) => isProductInCategory(p, cat.id)).length;
+
+                return (
+                  <button
+                    key={cat.id}
+                    id={`category-pill-${cat.id}`}
+                    onClick={() => handleCategoryClick(cat.id)}
+                    className={`px-3.5 py-2 rounded-xl text-xs font-black transition flex items-center gap-2 cursor-pointer shadow-xs ${
+                      isSelected
+                        ? 'bg-[#0F2C59] text-white ring-2 ring-[#D4AF37] shadow-sm'
+                        : 'bg-white text-gray-700 hover:bg-gray-100 border border-gray-200'
+                    }`}
+                    title={isSelected ? 'क्लिक करून सर्व उत्पादने दाखवा' : `${cat.name} मधील उत्पादने दाखवा`}
+                  >
+                    {cat.imageUrl && (
+                      <img
+                        src={cat.imageUrl}
+                        alt=""
+                        className="w-4 h-4 rounded-md object-cover shrink-0"
+                        referrerPolicy="no-referrer"
+                        onError={(e) => {
+                          (e.target as HTMLElement).style.display = 'none';
+                        }}
+                      />
+                    )}
+                    <span>{cat.name}</span>
+                    <span
+                      className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${
+                        isSelected
+                          ? 'bg-[#D4AF37] text-[#0F2C59]'
+                          : 'bg-gray-100 text-gray-500'
+                      }`}
+                    >
+                      {count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
           <div>
-            <h2 className="text-lg font-black text-[#0F2C59]">
-              All Wholesale & Retail Necessities
-            </h2>
-            <p className="text-xs text-gray-500">
-              Showing {filteredProducts.length} verified products • Live mandi rates
+            <div className="flex items-center gap-2 flex-wrap">
+              <h2 className="text-lg font-black text-[#0F2C59]">
+                {activeCategory ? activeCategory.name : 'All Wholesale & Retail Necessities'}
+              </h2>
+              {selectedCategoryId !== 'ALL' && (
+                <button
+                  type="button"
+                  id="btn-clear-category-filter"
+                  onClick={() => setSelectedCategoryId('ALL')}
+                  className="inline-flex items-center gap-1 text-[11px] font-extrabold text-[#FF6B00] hover:text-[#d45500] bg-orange-50 hover:bg-orange-100 px-2.5 py-1 rounded-lg border border-orange-200 transition cursor-pointer"
+                  title="सर्व प्रॉडक्ट्स दाखवण्यासाठी क्लिक करा"
+                >
+                  <X size={12} />
+                  <span>सर्व दाखवा (View All)</span>
+                </button>
+              )}
+            </div>
+            <p className="text-xs text-gray-500 mt-0.5">
+              Showing {filteredProducts.length} verified products
+              {activeCategory ? ` in ${activeCategory.name}` : ' • Live mandi rates'}
             </p>
           </div>
 
           {searchQuery && (
-            <div className="text-xs text-gray-500">
+            <div className="text-xs text-gray-500 bg-gray-100 px-2.5 py-1 rounded-lg">
               Search results for "{searchQuery}"
             </div>
           )}
@@ -292,8 +435,20 @@ export const CustomerStore: React.FC<CustomerStoreProps> = ({
             <div className="text-4xl mb-2">🔍</div>
             <h3 className="font-extrabold text-sm text-gray-800">No Grocery Items Found</h3>
             <p className="text-xs text-gray-500 mt-1">
-              Try searching for different terms like "Rice", "Atta", "Ghee" or check your search keywords.
+              {selectedCategoryId !== 'ALL'
+                ? `"${activeCategory?.name || 'या कॅटेगरी'}" मध्ये सध्या उत्पादने उपलब्ध नाहीत.`
+                : 'Try searching for different terms like "Rice", "Atta", "Ghee" or check your search keywords.'}
             </p>
+            {selectedCategoryId !== 'ALL' && (
+              <button
+                type="button"
+                id="btn-empty-view-all"
+                onClick={() => setSelectedCategoryId('ALL')}
+                className="mt-3.5 px-4 py-2 bg-[#0F2C59] text-[#D4AF37] hover:bg-[#163a6e] font-extrabold text-xs rounded-xl shadow-xs transition cursor-pointer"
+              >
+                सर्व प्रॉडक्ट्स दाखवा (View All Products)
+              </button>
+            )}
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5">

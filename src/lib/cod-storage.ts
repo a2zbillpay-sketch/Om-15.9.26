@@ -213,6 +213,7 @@ export function allocateCodCollection(
     codCollectedAmount: updatedCurrentCollected,
     paymentStatus: nextPaymentStatus,
     status: markAsDelivered ? OrderStatus.DELIVERED : currentOrder.status,
+    deliveredAt: markAsDelivered ? (currentOrder.deliveredAt || new Date().toISOString()) : currentOrder.deliveredAt,
   });
 
   const updatedOrders = orders.map((o) => {

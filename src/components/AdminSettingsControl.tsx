@@ -387,7 +387,7 @@ export const AdminSettingsControl: React.FC = () => {
               }`}
             />
             <span className="text-[10px] text-gray-500 mt-0.5 block">
-              First 3 COD orders are always free for any customer.
+              Initial COD fee defaults to ₹0. Next-day unpaid COD rules remain active.
             </span>
           </div>
 
@@ -436,30 +436,6 @@ export const AdminSettingsControl: React.FC = () => {
                 }`}
               />
             </div>
-          </div>
-
-          <div>
-            <label className="text-xs font-bold text-gray-700 block mb-1">Referral Reward Credit (₹)</label>
-            <input
-              type="number"
-              min="0"
-              disabled={!isEditingPricing}
-              value={formData.referralRewardAmount}
-              onChange={(e) =>
-                setFormData({
-                  ...formData,
-                  referralRewardAmount: parseFloat(e.target.value) || 0,
-                })
-              }
-              className={`w-full p-2.5 text-xs border rounded-lg transition ${
-                !isEditingPricing
-                  ? 'bg-gray-100/80 text-gray-700 border-gray-200 cursor-not-allowed select-none'
-                  : 'bg-white text-gray-900 border-gray-300 focus:ring-2 focus:ring-[#0F2C59] outline-none shadow-sm'
-              }`}
-            />
-            <span className="text-[10px] text-gray-500 mt-0.5 block">
-              Credited directly to customer wallet upon referred friend’s first completed order.
-            </span>
           </div>
 
           <div className="pt-2 border-t border-gray-150">

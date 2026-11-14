@@ -79,5 +79,11 @@
       "source": "/((?!api/|.*\\..*).*)",
       "destination": "/index.html"
     }
+  ],
+  "crons": [
+    {
+      "path": "/api/cod-late-fee-cron",
+      "schedule": "35 18 * * *"
+    }
   ]
 }

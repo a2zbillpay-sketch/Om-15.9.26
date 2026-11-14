@@ -19,7 +19,7 @@ export const INITIAL_SETTINGS: SystemSetting = {
   secondaryColorHex: '#D4AF37',
   accentColorHex: '#FF6B00',
   advancePaymentDiscountPct: 3.0,
-  codBaseCharge: 50.0,
+  codBaseCharge: 0.0,
   freeShippingMinAmount: 249.0,
   baseDeliveryFee: 11.0,
   referralRewardAmount: 0.0,
@@ -574,7 +574,6 @@ export const INITIAL_USERS: User[] = [
     name: 'Om Prakash Sharma (Proprietor)',
     phone: '9876543210',
     role: Role.SHOPKEEPER,
-    referralCode: 'OMOWNER1',
     walletBalance: 2500,
     codOrderCount: 12,
     addresses: [

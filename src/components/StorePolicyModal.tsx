@@ -51,8 +51,8 @@ export const StorePolicyModal: React.FC<StorePolicyModalProps> = ({ policyType, 
                 <p>Bulk volume pricing applies automatically when adding commercial kattas (25 KG / 30 KG / 50 KG) to your cart.</p>
               </div>
               <div>
-                <h4 className="font-extrabold text-gray-900 mb-1">3. Cash on Delivery (COD) Privilege</h4>
-                <p>First 3 COD grocery orders incur ₹0 extra handling fee. Subsequent COD orders carry a nominal ₹30 handling charge.</p>
+                <h4 className="font-extrabold text-gray-900 mb-1">3. Cash on Delivery (COD) Policy</h4>
+                <p>COD orders incur ₹0 initial service fee when paid on the day of delivery. If COD payment is not received on the delivery day, a ₹49 COD fee applies once from the next calendar day.</p>
               </div>
             </>
           )}

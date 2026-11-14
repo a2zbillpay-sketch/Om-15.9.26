@@ -1,5 +1,5 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { User, Order, OrderItem, Address, Role, OrderStatus, PaymentMethod, PaymentStatus, UnitType, Product, ProductVariant, TieredPrice, SystemSetting, WalletTransaction, ProductRequest } from '../types';
+import { User, Order, OrderItem, Address, Role, OrderStatus, PaymentMethod, PaymentStatus, UnitType, Product, ProductVariant, TieredPrice, SystemSetting, WalletTransaction, ProductRequest, Category } from '../types';
 import { INITIAL_SETTINGS } from '../data/seedData';
 import {
   saveProductWithCascadeSync,
@@ -348,7 +348,6 @@ export async function getOrCreateCustomerByPhone(
         name: existingUser.name || name || '',
         phone: existingUser.phone,
         role: (existingUser.role as Role) || role,
-        referralCode: existingUser.referral_code || `OM${cleanPhone.slice(-4)}`,
         walletBalance: dbCredits,
         outstandingBalance: dbOutstanding,
         codOrderCount: Number(existingUser.cod_order_count || 0),
@@ -358,7 +357,6 @@ export async function getOrCreateCustomerByPhone(
     }
 
     // 2. User does not exist, create deterministic customer record in Supabase users table
-    const referralCode = `OM${Math.floor(1000 + Math.random() * 9000)}`;
     const newCustomerPayload = {
       id: `usr_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`,
       phone: cleanPhone,
@@ -395,7 +393,6 @@ export async function getOrCreateCustomerByPhone(
           name: u.name || '',
           phone: u.phone,
           role: u.role as Role,
-          referralCode,
           walletBalance: Number(u.wallet_balance || 0),
           codOrderCount: 0,
           addresses: fullAddress ? [{ id: `addr-${u.id}`, userId: u.id, fullAddress, landmark, pincode, isDefault: true }] : [],
@@ -411,7 +408,6 @@ export async function getOrCreateCustomerByPhone(
       name: insertedUser.name || '',
       phone: insertedUser.phone,
       role: insertedUser.role as Role,
-      referralCode,
       walletBalance: 0,
       codOrderCount: 0,
       addresses: [],
@@ -556,7 +552,7 @@ export async function saveCustomerProfileToSupabase(
       }
     }
 
-    // Do NOT insert or update non-existent addresses table
+    // Best-effort insert into public.addresses (permitted by RLS FOR INSERT policy)
     const finalAddressObj: Address = {
       id: `addr-${targetUser?.id || userId}`,
       userId: targetUser?.id || userId,
@@ -565,6 +561,8 @@ export async function saveCustomerProfileToSupabase(
       pincode: pincode.trim(),
       isDefault: true,
     };
+
+    saveAddressToSupabase(finalAddressObj).catch(() => {});
 
     const dbOutstanding = Number(targetUser?.outstanding_balance || 0);
     const ledgerCredits = await getCustomerWalletBalanceFromLedger(targetUser?.id || userId, cleanPhone);
@@ -575,7 +573,6 @@ export async function saveCustomerProfileToSupabase(
       name: targetUser?.name || name.trim(),
       phone: cleanPhone,
       role: Role.CUSTOMER,
-      referralCode: `OM${cleanPhone.slice(-4)}`,
       walletBalance: dbCredits,
       outstandingBalance: dbOutstanding,
       codOrderCount: 0,
@@ -586,6 +583,36 @@ export async function saveCustomerProfileToSupabase(
   } catch (err) {
     console.error('Error saving customer profile to Supabase:', err);
     return null;
+  }
+}
+
+/**
+ * Inserts a newly added delivery address row into public.addresses (matches RLS INSERT policy).
+ */
+export async function saveAddressToSupabase(address: Address): Promise<boolean> {
+  if (!supabase) return false;
+  if (!address.userId || !address.fullAddress || !address.fullAddress.trim()) return false;
+
+  try {
+    const { error } = await supabase.from('addresses').insert({
+      id: address.id || `addr-${Date.now()}`,
+      user_id: address.userId,
+      full_address: address.fullAddress.trim(),
+      landmark: address.landmark?.trim() || null,
+      pincode: address.pincode?.trim() || '422001',
+      is_default: Boolean(address.isDefault),
+      google_location: address.googleLocation || null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+
+    if (error) {
+      // Duplicate primary key or RLS notice handled non-destructively
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -671,7 +698,6 @@ export async function fetchCustomerProfileFromSupabase(phone: string): Promise<U
       name: dbUser.name || '',
       phone: dbUser.phone,
       role: Role.CUSTOMER,
-      referralCode: dbUser.referral_code || `OM${cleanPhone.slice(-4)}`,
       walletBalance: dbCredits,
       outstandingBalance: dbOutstanding,
       codOrderCount: Number(dbUser.cod_order_count || 0),
@@ -859,23 +885,49 @@ export function mapDatabaseRowToOrder(o: any, fallbackCustomerId?: string, fallb
   const finalAmount = Number(o.final_total ?? o.subtotal ?? 0);
   const subtotal = Number(o.subtotal ?? finalAmount);
   const discountAmount = Number(o.discount_amount ?? 0);
-  const deliveryFee = Math.max(0, finalAmount - (subtotal - discountAmount));
-  let items = parseOrderItemsFromProductName(o['Product Name'], o.id, finalAmount);
+
+  // Prefer relational order_items returned by /api/orders when present
+  let items: OrderItem[] =
+    Array.isArray(o.items) && o.items.length > 0
+      ? o.items.map((it: any, idx: number) => ({
+          id: it.id || `item-${o.id}-${idx + 1}`,
+          orderId: it.orderId || o.id,
+          productId: it.productId || it.product_id || undefined,
+          variantId: it.variantId ?? it.product_variant_id ?? null,
+          productName: it.productName || it.product_name || 'Grocery Item',
+          variantName: it.variantName || it.variant_name || undefined,
+          brand: it.brand || undefined,
+          unit: it.unit || undefined,
+          packSize: it.packSize !== undefined ? Number(it.packSize) : (it.pack_size !== undefined ? Number(it.pack_size) : undefined),
+          quantity: Math.max(1, Number(it.quantity) || 1),
+          unitPrice: Number(it.unitPrice ?? it.unit_price ?? 0),
+          price: Number(it.price ?? it.total_price ?? 0),
+          isDiscountExcluded: Boolean(it.isDiscountExcluded ?? it.is_discount_excluded),
+        }))
+      : parseOrderItemsFromProductName(o['Product Name'], o.id, finalAmount);
+
   const parsedAddress = parseCustomerAddress(o.delivery_address);
 
-  let orderNumber = '';
+  let orderNumber = o.order_number ? String(o.order_number).trim() : '';
   let codCollectedAmount = 0;
   let previousOutstanding = 0;
   let totalPayable = finalAmount;
   let previousOnlinePaid = 0;
   let walletAmountUsed = 0;
+  let codCharge = Number(o.cod_charge ?? 0) || 0;
+  let deliveredAt: string | undefined = o.delivered_at || undefined;
+  let codLateFeeApplied = Boolean(o.cod_late_fee_applied);
+  let codLateFeeAmount = 0;
+  let codLateFeeAppliedAt: string | undefined = o.cod_late_fee_applied_at || undefined;
   let stockDeducted = false;
   let stockRestored = false;
 
   const rawNotes = o.notes || '';
   if (rawNotes.includes('COD_META:')) {
     const parts = rawNotes.split('COD_META:');
-    orderNumber = parts[0].replace(/\|/g, '').replace(/^Order\s*#?/i, '').trim();
+    if (!orderNumber) {
+      orderNumber = parts[0].replace(/\|/g, '').replace(/^Order\s*#?/i, '').trim();
+    }
     try {
       const meta = JSON.parse(parts[1].trim());
       codCollectedAmount = Number(meta.codCollected) || 0;
@@ -883,15 +935,30 @@ export function mapDatabaseRowToOrder(o: any, fallbackCustomerId?: string, fallb
       totalPayable = meta.totalPayable !== undefined ? Number(meta.totalPayable) : finalAmount;
       walletAmountUsed = Number(meta.walletAmountUsed) || 0;
       previousOnlinePaid = Number(meta.previousOnlinePaid) || 0;
+      if (meta.codCharge !== undefined && !isNaN(Number(meta.codCharge))) {
+        codCharge = Number(meta.codCharge);
+      }
+      if (meta.deliveredAt) {
+        deliveredAt = String(meta.deliveredAt);
+      }
+      if (meta.codLateFeeApplied !== undefined) {
+        codLateFeeApplied = Boolean(meta.codLateFeeApplied);
+      }
+      if (meta.codLateFeeAmount !== undefined && !isNaN(Number(meta.codLateFeeAmount))) {
+        codLateFeeAmount = Number(meta.codLateFeeAmount);
+      }
+      if (meta.codLateFeeAppliedAt) {
+        codLateFeeAppliedAt = String(meta.codLateFeeAppliedAt);
+      }
       stockDeducted = Boolean(meta.stockDeducted);
       stockRestored = Boolean(meta.stockRestored);
-      if (Array.isArray(meta.items) && meta.items.length > 0) {
+      if ((!Array.isArray(o.items) || o.items.length === 0) && Array.isArray(meta.items) && meta.items.length > 0) {
         items = meta.items;
       }
     } catch {
       // ignore parsing error
     }
-  } else {
+  } else if (!orderNumber) {
     orderNumber = rawNotes.replace(/^Order\s*#?/i, '').trim() || o.id.replace(/^ord[-_]/i, '').slice(0, 8);
   }
   if (!orderNumber) {
@@ -902,14 +969,22 @@ export function mapDatabaseRowToOrder(o: any, fallbackCustomerId?: string, fallb
     codCollectedAmount = finalAmount;
   }
 
+  // Respect explicit database payment_status (REFUNDED, FAILED, PARTIALLY_COLLECTED, RECEIVED, PENDING)
   let paymentStatus: PaymentStatus = PaymentStatus.PENDING;
-  if (o.is_paid || codCollectedAmount >= totalPayable) {
+  const dbPaymentStatus = String(o.payment_status || '').toUpperCase();
+  if (dbPaymentStatus === 'REFUNDED') {
+    paymentStatus = PaymentStatus.REFUNDED;
+  } else if (dbPaymentStatus === 'FAILED') {
+    paymentStatus = PaymentStatus.FAILED;
+  } else if (dbPaymentStatus === 'RECEIVED' || dbPaymentStatus === 'PAID' || o.is_paid || (totalPayable > 0 && codCollectedAmount >= totalPayable)) {
     paymentStatus = PaymentStatus.RECEIVED;
-  } else if (codCollectedAmount > 0) {
+  } else if (dbPaymentStatus === 'PARTIALLY_COLLECTED' || codCollectedAmount > 0) {
     paymentStatus = PaymentStatus.PARTIALLY_COLLECTED;
   }
 
   const resolvedWalletAmountUsed = walletAmountUsed;
+
+  const deliveryFee = Math.max(0, finalAmount - (subtotal + codCharge - discountAmount));
 
   return {
     id: o.id,
@@ -933,13 +1008,17 @@ export function mapDatabaseRowToOrder(o: any, fallbackCustomerId?: string, fallb
     subtotal,
     discountAmount,
     deliveryFee,
-    codCharge: 0,
+    codCharge,
     finalAmount,
     previousOutstanding,
     totalPayable: (o.payment_method === PaymentMethod.COD || o.payment_method === 'COD') ? finalAmount : totalPayable,
     previousOnlinePaid,
     walletAmountUsed: resolvedWalletAmountUsed,
     codCollectedAmount,
+    deliveredAt,
+    codLateFeeApplied,
+    codLateFeeAmount,
+    codLateFeeAppliedAt,
     stockDeducted,
     stockRestored,
     createdAt: o.created_at || new Date().toISOString(),
@@ -948,149 +1027,115 @@ export function mapDatabaseRowToOrder(o: any, fallbackCustomerId?: string, fallb
 }
 
 /**
- * Fetch all orders for a customer across any browser using customer ID and phone number.
- * Uses secure verified server endpoint to ensure zero leakage of other customers' orders.
+ * Fetch all orders for a customer across any browser using phone number.
+ * Strictly uses verified server endpoint (/api/orders?phone=...) to ensure customer data isolation under RLS.
  */
 export async function fetchCustomerOrdersFromSupabase(
   customerId: string,
   phone: string
 ): Promise<Order[] | null> {
   const cleanPhone = phone.trim().replace(/^\+91/, '').replace(/\D/g, '').slice(-10);
+  if (cleanPhone.length !== 10) return null;
 
-  // 1. First attempt secure server-side API to isolate customer records
-  if (typeof window !== 'undefined' && typeof fetch === 'function' && cleanPhone.length === 10) {
+  if (typeof window !== 'undefined' && typeof fetch === 'function') {
     try {
-      const res = await fetch(`/api/orders?phone=${encodeURIComponent(cleanPhone)}`);
+      const res = await fetch(`/api/orders?phone=${encodeURIComponent(cleanPhone)}`, {
+        credentials: 'include',
+      });
       if (res.ok) {
         const json = await res.json();
         if (json.success && Array.isArray(json.orders)) {
           return json.orders.map((o: any) => mapDatabaseRowToOrder(o, customerId, cleanPhone));
         }
       }
-    } catch {
-      // Fall through to direct client query if server API is unavailable
-    }
-  }
-
-  if (!supabase) return null;
-
-  try {
-    const { data: ordersData, error: ordersError } = await supabase
-      .from('orders')
-      .select('*')
-      .or(`customer_id.eq.${customerId},customer_phone.eq.${cleanPhone}`)
-      .order('created_at', { ascending: false });
-
-    if (ordersError) {
-      console.warn('Error fetching orders from Supabase:', ordersError.message);
+      return null;
+    } catch (err) {
+      console.warn('Error fetching customer orders via /api/orders:', err);
       return null;
     }
-
-    if (!ordersData) return [];
-    return ordersData.map((o: any) => mapDatabaseRowToOrder(o, customerId, cleanPhone));
-  } catch (err) {
-    console.error('Failed to query orders from Supabase:', err);
-    return null;
   }
+
+  return null;
+}
+export interface SaveOrderResult {
+  success: boolean;
+  order?: {
+    id: string;
+    orderNumber: string;
+    customerPhone?: string;
+    subtotal?: number;
+    deliveryFee?: number;
+    codCharge?: number;
+    discountAmount?: number;
+    finalAmount: number;
+    walletAmountUsed?: number;
+    totalPayable?: number;
+    paymentMethod?: string;
+    items?: any[];
+  };
+  error?: string;
 }
 
 /**
- * Saves a new order centrally to Supabase.
- * Strictly uses the 20 columns supported by the live orders table.
+ * Saves a new order centrally to Supabase via the authoritative /api/orders server endpoint.
+ * Returns authoritative server-verified order data or error message.
+ * Never performs direct unverified browser inserts.
  */
-export async function saveOrderToSupabase(order: Order): Promise<boolean> {
-  // 1. Primary: Use secure server endpoint for server-verified prices and settings
-  if (typeof window !== 'undefined' && typeof fetch === 'function') {
-    try {
-      const res = await fetch('/api/orders', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          orderId: order.id,
-          orderNumber: order.orderNumber,
-          customerId: order.userId,
-          customerName: order.userName,
-          customerPhone: order.userPhone,
-          paymentMethod: order.paymentMethod,
-          address: order.address,
-          deliveryDate: order.deliveryDate,
-          previousOutstanding: order.previousOutstanding,
-          useWallet: (order.walletAmountUsed || 0) > 0,
-          items: order.items,
-        }),
-      });
-      if (res.ok) {
-        const json = await res.json();
-        if (json.success) return true;
-      }
-    } catch {
-      // Fall through to direct database insert
-    }
+export async function saveOrderToSupabase(order: Order): Promise<SaveOrderResult> {
+  if (typeof window === 'undefined' || typeof fetch !== 'function') {
+    return { success: false, error: 'Network service is unavailable in this environment' };
   }
 
-  if (!supabase) return false;
-
   try {
-    const metaPayload = JSON.stringify({
-      codCollected: order.codCollectedAmount || 0,
-      prevOutstanding: order.previousOutstanding || 0,
-      totalPayable: order.paymentMethod === PaymentMethod.COD ? order.finalAmount : (order.totalPayable !== undefined ? order.totalPayable : order.finalAmount),
-      walletAmountUsed: order.walletAmountUsed || 0,
-      previousOnlinePaid: order.previousOnlinePaid || 0,
-      stockDeducted: order.stockDeducted ?? false,
-      stockRestored: order.stockRestored ?? false,
-      items: order.items?.map((it) => ({
-        id: it.id,
-        orderId: it.orderId || order.id,
-        productId: it.productId,
-        variantId: it.variantId,
-        variantName: it.variantName,
-        productName: it.productName,
-        brand: it.brand,
-        unit: it.unit,
-        packSize: it.packSize,
-        quantity: it.quantity,
-        unitPrice: it.unitPrice,
-        price: it.price,
-        isDiscountExcluded: it.isDiscountExcluded,
-      })),
+    const res = await fetch('/api/orders', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        orderId: order.id,
+        orderNumber: order.orderNumber,
+        customerId: order.userId,
+        customerName: order.userName,
+        customerPhone: order.userPhone,
+        shopName: order.userName,
+        paymentMethod: order.paymentMethod,
+        address: order.address,
+        deliveryDate: order.deliveryDate,
+        previousOutstanding: order.previousOutstanding,
+        useWallet: (order.walletAmountUsed || 0) > 0,
+        items: order.items,
+        weightKg: (order as any).weightKg || null,
+        razorpayOrderId: order.razorpayOrderId || null,
+        razorpayPaymentId: order.razorpayPaymentId || null,
+      }),
     });
-    const orderNotes = `Order #${order.orderNumber} | COD_META:${metaPayload}`;
 
-    const orderPayload = {
-      id: order.id,
-      customer_id: order.userId,
-      customer_name: order.userName || 'Customer',
-      customer_phone: order.userPhone || '',
-      shop_name: order.userName || 'Customer',
-      'Product Name': serializeOrderItemsToProductName(order.items),
-      subtotal: order.subtotal,
-      discount_amount: order.discountAmount,
-      final_total: order.finalAmount,
-      status: order.status,
-      payment_method: order.paymentMethod,
-      is_paid: order.paymentStatus === PaymentStatus.RECEIVED,
-      delivery_address:
-        typeof order.address === 'string'
-          ? order.address
-          : order.address?.fullAddress || '',
-      preferred_slot: order.deliveryDate || order.createdAt?.split('T')[0] || '',
-      notes: orderNotes,
-      weight_kg: (order as any).weightKg || null,
-      created_at: order.createdAt || new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    };
-
-    const { error: orderError } = await supabase.from('orders').insert(orderPayload);
-    if (orderError) {
-      console.error('Failed to save order to Supabase:', orderError);
-      return false;
+    let json: any = null;
+    try {
+      json = await res.json();
+    } catch {
+      return {
+        success: false,
+        error: `Server returned an invalid response (HTTP ${res.status})`,
+      };
     }
 
-    return true;
-  } catch (err) {
+    if (!res.ok || !json?.success) {
+      return {
+        success: false,
+        error: json?.error || `Order creation failed with server status ${res.status}`,
+      };
+    }
+
+    return {
+      success: true,
+      order: json.order,
+    };
+  } catch (err: any) {
     console.error('Exception in saveOrderToSupabase:', err);
-    return false;
+    return {
+      success: false,
+      error: err?.message || 'Network error while placing order. Please check your connection.',
+    };
   }
 }
 
@@ -1099,12 +1144,23 @@ export async function saveOrderToSupabase(order: Order): Promise<boolean> {
  * Preserves the existing order ID, number, status, customer, address, payment method and timestamps,
  * while updating items, subtotal, discount, final_total, and COD_META.
  */
+/**
+ * Updates an edited order centrally via the authoritative /api/orders server endpoint.
+ * Note: PUT /api/orders requires a verified Shopkeeper session cookie.
+ */
 export async function saveEditedOrderToSupabase(order: Order): Promise<boolean> {
-  if (!supabase) return false;
+  if (typeof window === 'undefined' || typeof fetch !== 'function') return false;
 
   try {
     const metaPayload = JSON.stringify({
       codCollected: order.codCollectedAmount || 0,
+      codCharge: order.codCharge || 0,
+      ...(order.deliveredAt ? { deliveredAt: order.deliveredAt } : {}),
+      ...(order.codLateFeeApplied ? {
+        codLateFeeApplied: true,
+        codLateFeeAmount: Number(order.codLateFeeAmount) || 0,
+        codLateFeeAppliedAt: order.codLateFeeAppliedAt,
+      } : {}),
       prevOutstanding: order.previousOutstanding || 0,
       totalPayable: order.paymentMethod === PaymentMethod.COD ? order.finalAmount : (order.totalPayable !== undefined ? order.totalPayable : order.finalAmount),
       walletAmountUsed: order.walletAmountUsed || 0,
@@ -1115,7 +1171,7 @@ export async function saveEditedOrderToSupabase(order: Order): Promise<boolean> 
         id: it.id,
         orderId: it.orderId || order.id,
         productId: it.productId,
-        variantId: it.variantId,
+        variantId: it.variantId ?? null,
         variantName: it.variantName,
         productName: it.productName,
         brand: it.brand,
@@ -1129,31 +1185,32 @@ export async function saveEditedOrderToSupabase(order: Order): Promise<boolean> 
     });
     const orderNotes = `Order #${order.orderNumber} | COD_META:${metaPayload}`;
 
-    const updatePayload = {
-      'Product Name': serializeOrderItemsToProductName(order.items),
-      subtotal: order.subtotal,
-      discount_amount: order.discountAmount,
-      final_total: order.finalAmount,
-      notes: orderNotes,
-      is_paid: order.paymentStatus === PaymentStatus.RECEIVED,
-      payment_status: order.paymentStatus,
-      updated_at: new Date().toISOString(),
-    };
+    const res = await fetch('/api/orders', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        id: order.id,
+        orderId: order.id,
+        status: order.status,
+        paymentStatus: order.paymentStatus,
+        isPaid: order.paymentStatus === PaymentStatus.RECEIVED,
+        subtotal: order.subtotal,
+        discountAmount: order.discountAmount,
+        finalAmount: order.finalAmount,
+        productNameSerialized: serializeOrderItemsToProductName(order.items),
+        notes: orderNotes,
+        items: order.items,
+      }),
+    });
 
-    let query = supabase.from('orders').update(updatePayload);
-    if (order.id.startsWith('OM-')) {
-      query = query.ilike('notes', `%${order.id}%`);
-    } else {
-      query = query.eq('id', order.id);
-    }
-
-    const { error } = await query;
-    if (error) {
-      console.error('Failed to update edited order in Supabase:', error);
+    if (!res.ok) {
+      console.warn('saveEditedOrderToSupabase rejected by server API:', res.status);
       return false;
     }
 
-    return true;
+    const json = await res.json().catch(() => null);
+    return Boolean(json?.success);
   } catch (err) {
     console.error('Exception in saveEditedOrderToSupabase:', err);
     return false;
@@ -1162,10 +1219,9 @@ export async function saveEditedOrderToSupabase(order: Order): Promise<boolean> 
 
 /**
  * Fetch all orders for the Shopkeeper admin view.
- * Routes through secure verified admin endpoint /api/orders?all=true.
+ * Strictly routes through verified admin endpoint /api/orders?all=true.
  */
 export async function fetchAllOrdersForAdmin(): Promise<Order[] | null> {
-  // 1. Primary: Use secure server endpoint with verified Shopkeeper session cookie
   if (typeof window !== 'undefined' && typeof fetch === 'function') {
     try {
       const res = await fetch('/api/orders?all=true', { credentials: 'include' });
@@ -1175,34 +1231,18 @@ export async function fetchAllOrdersForAdmin(): Promise<Order[] | null> {
           return json.orders.map((o: any) => mapDatabaseRowToOrder(o));
         }
       }
-    } catch {
-      // Fall through to client query if server API is unavailable
-    }
-  }
-
-  if (!supabase) return null;
-
-  try {
-    const { data: ordersData, error: ordersError } = await supabase
-      .from('orders')
-      .select('*')
-      .order('created_at', { ascending: false });
-
-    if (ordersError) {
-      console.warn('Error fetching all orders for admin:', ordersError.message);
+      return null;
+    } catch (err) {
+      console.warn('Error fetching admin orders via /api/orders:', err);
       return null;
     }
-
-    if (!ordersData) return [];
-    return ordersData.map((o: any) => mapDatabaseRowToOrder(o));
-  } catch (err) {
-    console.error('Exception fetching admin orders:', err);
-    return null;
   }
+
+  return null;
 }
 
 /**
- * Updates order status in Supabase.
+ * Updates order status (and optional cancellation wallet refund) via verified /api/orders PUT endpoint.
  */
 export async function updateOrderStatusInSupabase(
   orderId: string,
@@ -1210,6 +1250,11 @@ export async function updateOrderStatusInSupabase(
   isPaid?: boolean,
   meta?: {
     codCollected?: number;
+    codCharge?: number;
+    deliveredAt?: string;
+    codLateFeeApplied?: boolean;
+    codLateFeeAmount?: number;
+    codLateFeeAppliedAt?: string;
     prevOutstanding?: number;
     totalPayable?: number;
     orderNumber?: string;
@@ -1217,24 +1262,44 @@ export async function updateOrderStatusInSupabase(
     stockDeducted?: boolean;
     stockRestored?: boolean;
     items?: OrderItem[];
+    paymentStatus?: PaymentStatus | string;
+    refundAmount?: number;
+    refundDescription?: string;
+    customerId?: string;
+    customerPhone?: string;
+    customerName?: string;
   }
 ): Promise<boolean> {
-  if (!supabase) return false;
+  if (typeof window === 'undefined' || typeof fetch !== 'function') return false;
 
   try {
-    const updatePayload: Record<string, any> = {
+    const payload: Record<string, any> = {
+      id: orderId,
+      orderId,
       status: newStatus,
-      updated_at: new Date().toISOString(),
     };
 
     if (typeof isPaid === 'boolean') {
-      updatePayload.is_paid = isPaid;
+      payload.isPaid = isPaid;
+    }
+    if (meta?.paymentStatus) {
+      payload.paymentStatus = meta.paymentStatus;
+    }
+    if (meta?.deliveredAt) {
+      payload.deliveredAt = meta.deliveredAt;
     }
 
     if (meta) {
       const orderNum = meta.orderNumber || orderId.slice(0, 8);
       const metaString = JSON.stringify({
         codCollected: meta.codCollected || 0,
+        ...(meta.codCharge !== undefined ? { codCharge: meta.codCharge } : {}),
+        ...(meta.deliveredAt ? { deliveredAt: meta.deliveredAt } : {}),
+        ...(meta.codLateFeeApplied ? {
+          codLateFeeApplied: true,
+          codLateFeeAmount: Number(meta.codLateFeeAmount) || 0,
+          codLateFeeAppliedAt: meta.codLateFeeAppliedAt,
+        } : {}),
         prevOutstanding: meta.prevOutstanding || 0,
         totalPayable: meta.totalPayable || 0,
         walletAmountUsed: meta.walletAmountUsed || 0,
@@ -1242,23 +1307,31 @@ export async function updateOrderStatusInSupabase(
         stockRestored: meta.stockRestored ?? false,
         ...(meta.items && meta.items.length > 0 ? { items: meta.items } : {}),
       });
-      updatePayload.notes = `Order #${orderNum} | COD_META:${metaString}`;
+      payload.notes = `Order #${orderNum} | COD_META:${metaString}`;
+
+      if (meta.refundAmount && meta.refundAmount > 0) {
+        payload.refundAmount = meta.refundAmount;
+        payload.refundDescription = meta.refundDescription;
+        payload.customerId = meta.customerId;
+        payload.customerPhone = meta.customerPhone;
+        payload.customerName = meta.customerName;
+      }
     }
 
-    let orderQuery = supabase.from('orders').update(updatePayload);
-    if (orderId.startsWith('OM-')) {
-      orderQuery = orderQuery.ilike('notes', `%${orderId}%`);
-    } else {
-      orderQuery = orderQuery.eq('id', orderId);
-    }
+    const res = await fetch('/api/orders', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify(payload),
+    });
 
-    const { error } = await orderQuery;
-
-    if (error) {
-      console.error('Failed to update order status in Supabase:', error);
+    if (!res.ok) {
+      console.warn('updateOrderStatusInSupabase rejected by /api/orders:', res.status);
       return false;
     }
-    return true;
+
+    const json = await res.json().catch(() => null);
+    return Boolean(json?.success);
   } catch (err) {
     console.error('Exception in updateOrderStatusInSupabase:', err);
     return false;
@@ -1266,34 +1339,31 @@ export async function updateOrderStatusInSupabase(
 }
 
 /**
- * Directly updates product stock and wholesale variant definitions in Supabase.
+ * Updates product stock securely via the verified /api/products PUT endpoint.
  */
 export async function updateProductStockInSupabase(
   productId: string,
-  variants: ProductVariant[]
+  _variants: ProductVariant[],
+  fullProduct?: Product
 ): Promise<boolean> {
-  if (!supabase) return false;
+  if (!fullProduct || typeof window === 'undefined' || typeof fetch !== 'function') {
+    return false;
+  }
 
   try {
-    const totalStock = (variants || []).reduce(
-      (sum, v) => sum + (Number(v.stockQuantity) || 0),
-      0
-    );
+    const res = await fetch('/api/products', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify(fullProduct),
+    });
 
-    const { error } = await supabase
-      .from('products')
-      .update({
-        stock: totalStock,
-        wholesale_tier_discount: variants || [],
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', productId);
-
-    if (error) {
-      console.warn('Failed to update product stock directly in Supabase:', error.message);
+    if (!res.ok) {
+      console.warn('updateProductStockInSupabase rejected by /api/products:', res.status);
       return false;
     }
-    return true;
+    const json = await res.json().catch(() => null);
+    return Boolean(json?.success);
   } catch (err) {
     console.error('Exception in updateProductStockInSupabase:', err);
     return false;
@@ -1332,6 +1402,7 @@ export async function recordCodCollectionInSupabase(tx: {
 
     if (ledgerError) {
       console.warn('Error inserting to Supabase ledger:', ledgerError.message);
+      return false;
     }
 
     // 2. Update Supabase 'users.outstanding_balance'
@@ -1424,6 +1495,7 @@ export async function creditCustomerWalletInSupabase(tx: {
     const { error: ledgerError } = await supabase.from('ledger').insert(ledgerPayload);
     if (ledgerError) {
       console.warn('Error inserting wallet credit to Supabase ledger:', ledgerError.message);
+      return false;
     }
 
     // 3. Safely attempt updating Supabase 'users.wallet_balance' if column exists
@@ -1520,6 +1592,7 @@ export async function debitCustomerWalletInSupabase(tx: {
     const { error: ledgerError } = await supabase.from('ledger').insert(ledgerPayload);
     if (ledgerError) {
       console.warn('Error inserting wallet debit to Supabase ledger:', ledgerError.message);
+      return false;
     }
 
     // 3. Safely attempt updating Supabase 'users.wallet_balance' if column exists
@@ -1606,6 +1679,7 @@ export async function fetchProductsFromSupabase(): Promise<Product[] | null> {
 
     const productIds = dbProducts.map((p) => p.id);
     const variantsByProduct: Record<string, ProductVariant[]> = {};
+    const tieredPricesByVariant: Record<string, TieredPrice[]> = {};
 
     // 1. Check if separate relational product_variants table exists
     try {
@@ -1614,36 +1688,36 @@ export async function fetchProductsFromSupabase(): Promise<Product[] | null> {
         .select('id, product_id, unit, pack_size, pack_label, mrp, base_selling_price, stock_quantity, max_order_limit, barcode, image_url, display_order')
         .in('product_id', productIds);
 
-      if (!varError && dbVariants && dbVariants.length > 0) {
-        const variantIds = dbVariants.map((v) => v.id);
-        let dbTieredPrices: any[] = [];
+      const variantIds = (!varError && dbVariants) ? dbVariants.map((v) => v.id) : [];
+      const allTargetIds = [...variantIds, ...productIds];
+
+      if (allTargetIds.length > 0) {
         try {
           const { data: tpData, error: tpError } = await supabase
             .from('tiered_prices')
             .select('*')
-            .in('variant_id', variantIds);
+            .in('variant_id', allTargetIds);
 
           if (!tpError && tpData) {
-            dbTieredPrices = tpData;
+            for (const tp of tpData) {
+              if (!tieredPricesByVariant[tp.variant_id]) {
+                tieredPricesByVariant[tp.variant_id] = [];
+              }
+              tieredPricesByVariant[tp.variant_id].push({
+                id: tp.id,
+                variantId: tp.variant_id,
+                minQty: Number(tp.min_qty),
+                maxQty: Number(tp.max_qty),
+                unitPrice: Number(tp.unit_price),
+              });
+            }
           }
         } catch {
           // Relational tiered prices table not present
         }
+      }
 
-        const tieredPricesByVariant: Record<string, TieredPrice[]> = {};
-        for (const tp of dbTieredPrices) {
-          if (!tieredPricesByVariant[tp.variant_id]) {
-            tieredPricesByVariant[tp.variant_id] = [];
-          }
-          tieredPricesByVariant[tp.variant_id].push({
-            id: tp.id,
-            variantId: tp.variant_id,
-            minQty: Number(tp.min_qty),
-            maxQty: Number(tp.max_qty),
-            unitPrice: Number(tp.unit_price),
-          });
-        }
-
+      if (!varError && dbVariants && dbVariants.length > 0) {
         for (const v of dbVariants) {
           if (!variantsByProduct[v.product_id]) {
             variantsByProduct[v.product_id] = [];
@@ -1679,75 +1753,70 @@ export async function fetchProductsFromSupabase(): Promise<Product[] | null> {
       // 1. Use relational variants if resolved
       let variants: ProductVariant[] = variantsByProduct[p.id] || [];
 
-      // 2. Otherwise extract from embedded wholesale_tier_discount (JSONB)
+      // 2. Otherwise extract from embedded wholesale_tier_discount (JSONB) if it contains variant objects
       if (variants.length === 0 && Array.isArray(p.wholesale_tier_discount) && p.wholesale_tier_discount.length > 0) {
-        variants = p.wholesale_tier_discount.map((v: any, idx: number) => {
-          const vUnit = (v.unit as UnitType) || UnitType.KG;
-          const vPackSize = Number(v.packSize ?? v.pack_size ?? 1);
-          const vPackLabel = v.packLabel || v.pack_label || `${vPackSize} ${vUnit}`;
-          const vTieredPrices: TieredPrice[] = Array.isArray(v.tieredPrices)
-            ? v.tieredPrices.map((tp: any, tpIdx: number) => ({
-                id: tp.id || `tp_${v.id || idx}_${tpIdx}`,
-                variantId: tp.variantId || tp.variant_id || v.id || `var_${p.id}_${idx}`,
-                minQty: Number(tp.minQty ?? tp.min_qty ?? 1),
-                maxQty: Number(tp.maxQty ?? tp.max_qty ?? 999),
-                unitPrice: Number(tp.unitPrice ?? tp.unit_price ?? v.baseSellingPrice ?? v.base_selling_price ?? p.price ?? 0),
-              }))
-            : [];
+        // Only treat as variants if elements have packSize, packLabel, or variant IDs
+        const hasVariantShape = p.wholesale_tier_discount.some((item: any) => item && (item.packSize || item.pack_size || item.packLabel || item.pack_label || item.unit));
+        if (hasVariantShape) {
+          variants = p.wholesale_tier_discount.map((v: any, idx: number) => {
+            const vUnit = (v.unit as UnitType) || UnitType.KG;
+            const vPackSize = Number(v.packSize ?? v.pack_size ?? 1);
+            const vPackLabel = v.packLabel || v.pack_label || `${vPackSize} ${vUnit}`;
+            const vTieredPrices: TieredPrice[] = Array.isArray(v.tieredPrices)
+              ? v.tieredPrices.map((tp: any, tpIdx: number) => ({
+                  id: tp.id || `tp_${v.id || idx}_${tpIdx}`,
+                  variantId: tp.variantId || tp.variant_id || v.id || `var_${p.id}_${idx}`,
+                  minQty: Number(tp.minQty ?? tp.min_qty ?? 1),
+                  maxQty: Number(tp.maxQty ?? tp.max_qty ?? 999),
+                  unitPrice: Number(tp.unitPrice ?? tp.unit_price ?? v.baseSellingPrice ?? v.base_selling_price ?? p.price ?? 0),
+                }))
+              : [];
 
-          return {
-            id: v.id || `var_${p.id}_${idx + 1}`,
-            productId: p.id,
-            unit: vUnit,
-            packSize: vPackSize,
-            packLabel: vPackLabel,
-            mrp: Number(v.mrp || p.mrp || 0),
-            baseSellingPrice: Number(v.baseSellingPrice ?? v.base_selling_price ?? p.price ?? 0),
-            purchasePrice: v.purchasePrice !== undefined && v.purchasePrice !== null ? Number(v.purchasePrice) : (v.purchase_price !== undefined ? Number(v.purchase_price) : undefined),
-            discount: v.discount !== undefined && v.discount !== null ? Number(v.discount) : undefined,
-            stockQuantity: Number(v.stockQuantity ?? v.stock_quantity ?? p.stock ?? 0),
-            maxOrderLimit: Number(v.maxOrderLimit ?? v.max_order_limit ?? 20),
-            tieredPrices: vTieredPrices,
-            barcode: v.barcode ? String(v.barcode).trim() : null,
-            imageUrl: v.imageUrl || v.image_url ? String(v.imageUrl || v.image_url).trim() : undefined,
-            displayOrder: typeof v.displayOrder === 'number' ? v.displayOrder : (typeof v.display_order === 'number' ? v.display_order : idx + 1),
-          };
-        });
-      }
-
-      // 3. Fallback: create primary variant from base product columns if variants array is empty
-      if (variants.length === 0) {
-        const defaultPack = p.unit ? String(p.unit) : '1 KG';
-        variants = [
-          {
-            id: `var_${p.id}_1`,
-            productId: p.id,
-            unit: UnitType.KG,
-            packSize: Number(p.weight_per_unit_kg || 1),
-            packLabel: defaultPack,
-            mrp: Number(p.mrp || p.price || 0),
-            baseSellingPrice: Number(p.price || p.mrp || 0),
-            purchasePrice: p.purchase_price !== undefined ? Number(p.purchase_price) : undefined,
-            discount: p.discount !== undefined ? Number(p.discount) : undefined,
-            stockQuantity: Number(p.stock || 0),
-            maxOrderLimit: Number(p.min_order_qty ? p.min_order_qty * 10 : 20),
-            tieredPrices: [],
-            barcode: p.barcode ? String(p.barcode).trim() : null,
-            imageUrl: p.image_url ? String(p.image_url).trim() : undefined,
-            displayOrder: 1,
-          },
-        ];
+            return {
+              id: v.id || `var_${p.id}_${idx + 1}`,
+              productId: p.id,
+              unit: vUnit,
+              packSize: vPackSize,
+              packLabel: vPackLabel,
+              mrp: Number(v.mrp || p.mrp || 0),
+              baseSellingPrice: Number(v.baseSellingPrice ?? v.base_selling_price ?? p.price ?? 0),
+              purchasePrice: v.purchasePrice !== undefined && v.purchasePrice !== null ? Number(v.purchasePrice) : (v.purchase_price !== undefined ? Number(v.purchase_price) : undefined),
+              discount: v.discount !== undefined && v.discount !== null ? Number(v.discount) : undefined,
+              stockQuantity: Number(v.stockQuantity ?? v.stock_quantity ?? p.stock ?? 0),
+              maxOrderLimit: Number(v.maxOrderLimit ?? v.max_order_limit ?? 20),
+              tieredPrices: vTieredPrices,
+              barcode: v.barcode ? String(v.barcode).trim() : null,
+              imageUrl: v.imageUrl || v.image_url ? String(v.imageUrl || v.image_url).trim() : undefined,
+              displayOrder: typeof v.displayOrder === 'number' ? v.displayOrder : (typeof v.display_order === 'number' ? v.display_order : idx + 1),
+            };
+          });
+        }
       }
 
       // Sort variants strictly by displayOrder
-      variants.sort((a, b) => {
-        if (typeof a.displayOrder === 'number' && typeof b.displayOrder === 'number') {
-          return a.displayOrder - b.displayOrder;
-        }
-        if (typeof a.displayOrder === 'number') return -1;
-        if (typeof b.displayOrder === 'number') return 1;
-        return 0;
-      });
+      if (variants.length > 0) {
+        variants.sort((a, b) => {
+          if (typeof a.displayOrder === 'number' && typeof b.displayOrder === 'number') {
+            return a.displayOrder - b.displayOrder;
+          }
+          if (typeof a.displayOrder === 'number') return -1;
+          if (typeof b.displayOrder === 'number') return 1;
+          return 0;
+        });
+      }
+
+      // Product-level tiered prices (for variant-less products or product-level wholesale slabs)
+      const prodTieredPrices: TieredPrice[] = tieredPricesByVariant[p.id] || (
+        Array.isArray(p.tiered_prices)
+          ? p.tiered_prices.map((tp: any, tpIdx: number) => ({
+              id: tp.id || `tp_${p.id}_${tpIdx}`,
+              variantId: tp.variantId || tp.variant_id || p.id,
+              minQty: Number(tp.minQty ?? tp.min_qty ?? 1),
+              maxQty: Number(tp.maxQty ?? tp.max_qty ?? 999),
+              unitPrice: Number(tp.unitPrice ?? tp.unit_price ?? p.price ?? 0),
+            }))
+          : []
+      );
 
       return {
         id: p.id,
@@ -1762,6 +1831,20 @@ export async function fetchProductsFromSupabase(): Promise<Product[] | null> {
         purchasePrice: p.purchase_price !== undefined ? Number(p.purchase_price) : (variants[0]?.purchasePrice || undefined),
         discount: p.discount !== undefined ? Number(p.discount) : (variants[0]?.discount || undefined),
         displayOrder: typeof p.display_order === 'number' ? p.display_order : undefined,
+        price: p.price !== undefined ? Number(p.price) : (variants[0]?.baseSellingPrice || 0),
+        mrp: p.mrp !== undefined ? Number(p.mrp) : (variants[0]?.mrp || 0),
+        baseSellingPrice: p.price !== undefined ? Number(p.price) : (variants[0]?.baseSellingPrice || 0),
+        stock: variants.length > 0
+          ? variants.reduce((sum, v) => sum + (Number(v.stockQuantity) || 0), 0)
+          : Number(p.stock || p.stock_quantity || 0),
+        stockQuantity: variants.length > 0
+          ? variants.reduce((sum, v) => sum + (Number(v.stockQuantity) || 0), 0)
+          : Number(p.stock || p.stock_quantity || 0),
+        unit: p.unit || (variants[0]?.unit ?? UnitType.NOS),
+        packSize: p.pack_size !== undefined ? Number(p.pack_size) : (p.weight_per_unit_kg !== undefined ? Number(p.weight_per_unit_kg) : 1),
+        packLabel: p.pack_label || (p.unit ? String(p.unit) : undefined),
+        maxOrderLimit: Number(p.max_order_limit ?? (p.min_order_qty ? p.min_order_qty * 10 : 20)),
+        tieredPrices: prodTieredPrices,
         variants,
         createdAt: p.created_at || p.updated_at || new Date().toISOString(),
       };
@@ -1795,7 +1878,7 @@ export async function deleteProductFromSupabase(productId: string): Promise<bool
 /**
  * Normalizes a Supabase store_settings database row into a frontend SystemSetting object.
  * Maps actual database columns (app_name, advance_discount_percentage, etc.)
- * and preserves requested default values: COD ₹50, Free Delivery above ₹249, Delivery Fee ₹11, Referral Credit ₹0.
+ * and preserves requested default values: COD ₹0, Free Delivery above ₹249, Delivery Fee ₹11, Referral Credit ₹0.
  */
 export function mapSupabaseRowToSettings(
   row: any,
@@ -1824,7 +1907,7 @@ export function mapSupabaseRowToSettings(
     codBaseCharge:
       row.cod_base_charge !== undefined && !isNaN(Number(row.cod_base_charge))
         ? Number(row.cod_base_charge)
-        : (base.codBaseCharge ?? 50.0),
+        : (base.codBaseCharge ?? 0.0),
     freeShippingMinAmount:
       row.free_shipping_min_amount !== undefined && !isNaN(Number(row.free_shipping_min_amount))
         ? Number(row.free_shipping_min_amount)
@@ -1833,10 +1916,7 @@ export function mapSupabaseRowToSettings(
       row.base_delivery_fee !== undefined && !isNaN(Number(row.base_delivery_fee))
         ? Number(row.base_delivery_fee)
         : (base.baseDeliveryFee ?? 11.0),
-    referralRewardAmount:
-      row.referral_reward_amount !== undefined && !isNaN(Number(row.referral_reward_amount))
-        ? Number(row.referral_reward_amount)
-        : (base.referralRewardAmount ?? 0.0),
+    referralRewardAmount: 0.0,
     lowStockThreshold:
       row.low_stock_threshold !== undefined && !isNaN(Number(row.low_stock_threshold))
         ? Math.max(1, Number(row.low_stock_threshold))
@@ -1901,7 +1981,6 @@ export async function saveSettingsToSupabase(
       cod_base_charge: settings.codBaseCharge,
       free_shipping_min_amount: settings.freeShippingMinAmount,
       base_delivery_fee: settings.baseDeliveryFee,
-      referral_reward_amount: settings.referralRewardAmount,
       updated_at: timestamp,
     };
 
@@ -1991,59 +2070,30 @@ export async function saveProductRequestToSupabase(req: ProductRequest): Promise
   if (!supabase) return false;
 
   try {
-    const isUuid = (val?: string | null) =>
-      Boolean(val && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val));
-
-    // Safely check if customer_id exists or should be sanitized to avoid foreign key and UUID violations
-    let safeCustomerId: string | null = null;
     const cleanPhone = (req.customerPhone || '').replace(/\D/g, '').slice(-10);
+    if (!cleanPhone || cleanPhone.length < 10) return false;
 
-    if (req.customerId && isUuid(req.customerId)) {
-      safeCustomerId = req.customerId;
-    } else if (cleanPhone) {
-      try {
-        const { data: userRow } = await supabase
-          .from('users')
-          .select('id')
-          .eq('phone', cleanPhone)
-          .limit(1)
-          .maybeSingle();
-        if (userRow?.id && isUuid(userRow.id)) {
-          safeCustomerId = userRow.id;
-        }
-      } catch {}
-    }
+    const requestId =
+      req.id && req.id.trim()
+        ? req.id.trim()
+        : `preq-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
 
     const payload: Record<string, any> = {
-      customer_id: safeCustomerId,
-      customer_name: req.customerName || req.customer?.name || 'Customer',
-      customer_phone: cleanPhone || req.customerPhone || '',
-      product_id: isUuid(req.productId) ? req.productId : null,
-      product_name: req.productName || req.product?.name || '',
-      variant_id: isUuid(req.variantId) ? req.variantId : null,
-      variant_name: req.variantName || req.product?.variantName || '',
-      pack_size: req.packSize || req.product?.packSize || '',
+      id: requestId,
+      customer_id: (req.customerId && req.customerId.trim()) || `usr_${cleanPhone}`,
+      customer_name: (req.customerName || req.customer?.name || 'Customer').trim(),
+      customer_phone: cleanPhone,
+      product_id: (req.productId && req.productId.trim()) || req.product?.id || 'unknown',
+      product_name: (req.productName || req.product?.name || 'Requested Item').trim(),
+      variant_id: req.variantId ? String(req.variantId).trim() : null,
+      variant_name: req.variantName || req.product?.variantName || null,
+      pack_size: req.packSize || req.product?.packSize || null,
       quantity: Math.max(1, Number(req.quantity) || 1),
       request_date: req.requestDate || req.createdAt || new Date().toISOString(),
       created_at: req.createdAt || new Date().toISOString(),
     };
 
-    // If id is a valid UUID, include it; otherwise let PostgreSQL auto-generate UUID or use custom text id
-    if (req.id && !req.id.startsWith('preq-')) {
-      payload.id = req.id;
-    }
-
-    let { error } = await supabase.from('product_requests').upsert(payload, { onConflict: 'id' });
-
-    // If UUID syntax error (22P02) or foreign key constraint (23503) occurred, retry with sanitized references
-    if (error && (error.code === '23503' || error.code === '22P02' || error.message?.includes('foreign key') || error.message?.includes('uuid'))) {
-      delete payload.id;
-      payload.customer_id = null;
-      payload.product_id = null;
-      payload.variant_id = null;
-      const retry = await supabase.from('product_requests').insert(payload);
-      error = retry.error;
-    }
+    const { error } = await supabase.from('product_requests').insert(payload);
 
     if (error) {
       console.warn('Notice saving product_requests to Supabase:', error.message);
@@ -2120,6 +2170,154 @@ export function subscribeToProductRequests(
   // Safe no-op: product_requests are strictly restricted to verified SHOPKEEPER server-side API
   // and removed from public Realtime publication to eliminate anonymous eavesdropping.
   return () => {};
+}
+
+/**
+ * Fetches all categories from Supabase ordered by display_order.
+ */
+export async function fetchCategoriesFromSupabase(): Promise<Category[] | null> {
+  if (!supabase) return null;
+  try {
+    const { data, error } = await supabase
+      .from('categories')
+      .select('*')
+      .order('display_order', { ascending: true });
+
+    if (error) {
+      console.warn('Failed to fetch categories from Supabase:', error.message);
+      return null;
+    }
+
+    if (!data) return [];
+
+    return data.map((row: any) => ({
+      id: String(row.id),
+      name: String(row.name || ''),
+      imageUrl: row.image_url ? String(row.image_url) : '',
+      displayOrder: typeof row.display_order === 'number' ? row.display_order : 1,
+    }));
+  } catch (err) {
+    console.warn('Error fetching categories from Supabase:', err);
+    return null;
+  }
+}
+
+/**
+ * Saves or updates a Category in Supabase.
+ */
+export async function saveCategoryToSupabase(
+  category: Category
+): Promise<{ success: boolean; error?: string; category?: Category }> {
+  if (!supabase) {
+    return { success: false, error: 'Supabase is not configured.' };
+  }
+  try {
+    const cleanId = (category.id || `cat_${Date.now()}`).trim();
+    const cleanName = (category.name || '').trim();
+    if (!cleanName) {
+      return { success: false, error: 'Category name is required.' };
+    }
+
+    const payload = {
+      id: cleanId,
+      name: cleanName,
+      image_url: category.imageUrl ? category.imageUrl.trim() : null,
+      display_order: typeof category.displayOrder === 'number' ? category.displayOrder : 1,
+      updated_at: new Date().toISOString(),
+    };
+
+    const { data, error } = await supabase
+      .from('categories')
+      .upsert(payload, { onConflict: 'id' })
+      .select('*')
+      .maybeSingle();
+
+    if (error) {
+      console.error('Failed to save category to Supabase:', error.message);
+      return { success: false, error: error.message };
+    }
+
+    const savedCat: Category = {
+      id: data?.id || cleanId,
+      name: data?.name || cleanName,
+      imageUrl: data?.image_url || category.imageUrl || '',
+      displayOrder: data?.display_order ?? category.displayOrder ?? 1,
+    };
+
+    return { success: true, category: savedCat };
+  } catch (err: any) {
+    console.error('Exception saving category to Supabase:', err);
+    return { success: false, error: err?.message || 'Database error occurred while saving category.' };
+  }
+}
+
+/**
+ * Deletes a Category from Supabase.
+ */
+export async function deleteCategoryFromSupabase(
+  categoryId: string
+): Promise<{ success: boolean; error?: string }> {
+  if (!supabase) {
+    return { success: false, error: 'Supabase is not configured.' };
+  }
+  try {
+    // Nullify category references on products
+    try {
+      await supabase
+        .from('products')
+        .update({ category_id: null })
+        .eq('category_id', categoryId);
+    } catch {}
+
+    const { error } = await supabase
+      .from('categories')
+      .delete()
+      .eq('id', categoryId);
+
+    if (error) {
+      console.error('Failed to delete category from Supabase:', error.message);
+      return { success: false, error: error.message };
+    }
+
+    return { success: true };
+  } catch (err: any) {
+    console.error('Exception deleting category from Supabase:', err);
+    return { success: false, error: err?.message || 'Database error occurred while deleting category.' };
+  }
+}
+
+/**
+ * Reorders categories in Supabase.
+ */
+export async function reorderCategoriesInSupabase(
+  categoryList: Category[]
+): Promise<{ success: boolean; error?: string }> {
+  if (!supabase) {
+    return { success: false, error: 'Supabase is not configured.' };
+  }
+  try {
+    const updates = categoryList.map((cat, idx) => ({
+      id: cat.id,
+      name: cat.name,
+      image_url: cat.imageUrl || null,
+      display_order: idx + 1,
+      updated_at: new Date().toISOString(),
+    }));
+
+    const { error } = await supabase
+      .from('categories')
+      .upsert(updates, { onConflict: 'id' });
+
+    if (error) {
+      console.warn('Reorder categories sync failed:', error.message);
+      return { success: false, error: error.message };
+    }
+
+    return { success: true };
+  } catch (err: any) {
+    console.warn('Exception reordering categories in Supabase:', err);
+    return { success: false, error: err?.message };
+  }
 }
 
 

@@ -29,7 +29,6 @@ export function hasCustomSettings(s: SystemSetting): boolean {
     s.codBaseCharge !== INITIAL_SETTINGS.codBaseCharge ||
     s.freeShippingMinAmount !== INITIAL_SETTINGS.freeShippingMinAmount ||
     s.baseDeliveryFee !== INITIAL_SETTINGS.baseDeliveryFee ||
-    s.referralRewardAmount !== INITIAL_SETTINGS.referralRewardAmount ||
     s.appName !== INITIAL_SETTINGS.appName ||
     s.advancePaymentDiscountPct !== INITIAL_SETTINGS.advancePaymentDiscountPct
   );

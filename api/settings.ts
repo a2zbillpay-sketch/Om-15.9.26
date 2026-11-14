@@ -23,7 +23,7 @@ export interface SystemSetting {
   codBaseCharge: number;
   freeShippingMinAmount: number;
   baseDeliveryFee: number;
-  referralRewardAmount: number;
+  referralRewardAmount?: number;
   lowStockThreshold?: number;
   updatedAt: string;
 }
@@ -36,7 +36,7 @@ const DEFAULT_SETTINGS: SystemSetting = {
   secondaryColorHex: '#D4AF37',
   accentColorHex: '#FF6B00',
   advancePaymentDiscountPct: 5.0,
-  codBaseCharge: 49.0,
+  codBaseCharge: 0.0,
   freeShippingMinAmount: 249.0,
   baseDeliveryFee: 11.0,
   referralRewardAmount: 0.0,
@@ -56,6 +56,78 @@ function getSupabaseClient(): SupabaseClient | null {
     }
   }
   return null;
+}
+
+export interface ResolvedCodBaseCharge {
+  amount: number;
+  source: 'store_settings.cod_base_charge' | 'settings_file' | 'default_zero';
+  error?: string;
+}
+
+/**
+ * Resolves the authoritative Shopkeeper-configured COD fee (codBaseCharge) from
+ * Supabase store_settings.cod_base_charge, falling back strictly to ₹0 default
+ * when no custom row exists (never any hardcoded ₹49/₹50 fallback).
+ * Returns an explicit error if the database query itself fails.
+ */
+export async function resolveAuthoritativeCodBaseCharge(
+  supabaseClient?: SupabaseClient | null
+): Promise<ResolvedCodBaseCharge> {
+  const client = supabaseClient ?? getSupabaseClient();
+
+  if (client) {
+    try {
+      const { data, error } = await client
+        .from('store_settings')
+        .select('cod_base_charge')
+        .eq('id', 'global_settings')
+        .maybeSingle();
+
+      if (error) {
+        return {
+          amount: 0,
+          source: 'default_zero',
+          error: error.message,
+        };
+      }
+
+      if (data) {
+        const raw = data.cod_base_charge;
+        if (raw !== undefined && raw !== null && !isNaN(Number(raw))) {
+          return {
+            amount: Math.max(0, Math.round(Number(raw) * 100) / 100),
+            source: 'store_settings.cod_base_charge',
+          };
+        }
+        return {
+          amount: 0,
+          source: 'default_zero',
+        };
+      }
+    } catch (err: any) {
+      return {
+        amount: 0,
+        source: 'default_zero',
+        error: err?.message || 'Failed to query store_settings.cod_base_charge',
+      };
+    }
+  }
+
+  if (fs.existsSync(SETTINGS_FILE)) {
+    const fileSettings = loadSettingsFromFile();
+    const fileVal = Number(fileSettings.codBaseCharge);
+    if (!isNaN(fileVal) && fileVal >= 0) {
+      return {
+        amount: Math.round(fileVal * 100) / 100,
+        source: 'settings_file',
+      };
+    }
+  }
+
+  return {
+    amount: DEFAULT_SETTINGS.codBaseCharge,
+    source: 'default_zero',
+  };
 }
 
 function loadSettingsFromFile(): SystemSetting {
@@ -119,7 +191,7 @@ async function syncWithSupabaseIfConfigured(
           codBaseCharge:
             data.cod_base_charge !== undefined
               ? Number(data.cod_base_charge)
-              : (settings.codBaseCharge ?? 50.0),
+              : (settings.codBaseCharge ?? 0.0),
           freeShippingMinAmount:
             data.free_shipping_min_amount !== undefined
               ? Number(data.free_shipping_min_amount)
@@ -128,10 +200,7 @@ async function syncWithSupabaseIfConfigured(
             data.base_delivery_fee !== undefined
               ? Number(data.base_delivery_fee)
               : (settings.baseDeliveryFee ?? 11.0),
-          referralRewardAmount:
-            data.referral_reward_amount !== undefined
-              ? Number(data.referral_reward_amount)
-              : (settings.referralRewardAmount ?? 0.0),
+          referralRewardAmount: 0.0,
           lowStockThreshold:
             data.low_stock_threshold !== undefined && !isNaN(Number(data.low_stock_threshold))
               ? Number(data.low_stock_threshold)
@@ -153,7 +222,6 @@ async function syncWithSupabaseIfConfigured(
         cod_base_charge: settings.codBaseCharge,
         free_shipping_min_amount: settings.freeShippingMinAmount,
         base_delivery_fee: settings.baseDeliveryFee,
-        referral_reward_amount: settings.referralRewardAmount,
         updated_at: timestamp,
       };
 
@@ -277,7 +345,12 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
           ? { advancePaymentDiscountPct: Number(incomingUpdates.advancePaymentDiscountPct) }
           : {}),
         ...(incomingUpdates.codBaseCharge !== undefined
-          ? { codBaseCharge: Number(incomingUpdates.codBaseCharge) }
+          ? {
+              codBaseCharge: Math.max(
+                0,
+                Math.round((Number(incomingUpdates.codBaseCharge) || 0) * 100) / 100
+              ),
+            }
           : {}),
         ...(incomingUpdates.freeShippingMinAmount !== undefined
           ? { freeShippingMinAmount: Number(incomingUpdates.freeShippingMinAmount) }
@@ -297,10 +370,8 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
       // Persist to central server store
       saveSettingsToFile(mergedSettings);
 
-      // Asynchronously sync to Supabase if configured
-      syncWithSupabaseIfConfigured(mergedSettings, 'WRITE').catch((err) => {
-        console.warn('Background Supabase write failed:', err);
-      });
+      // Authoritatively sync to Supabase store_settings so cod_base_charge is immediately consistent
+      await syncWithSupabaseIfConfigured(mergedSettings, 'WRITE');
 
       res.statusCode = 200;
       res.end(

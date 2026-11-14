@@ -242,7 +242,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                   id="open-wallet-btn"
                   onClick={onOpenWallet}
                   className="flex items-center gap-1.5 border px-2.5 py-1.5 rounded-lg text-xs font-bold transition shadow-sm bg-emerald-950/70 hover:bg-emerald-900/80 border-emerald-500/40 text-emerald-300"
-                  title="Your Wallet Balance & Referrals"
+                  title="Your Wallet Balance"
                 >
                   <Wallet size={14} className="text-emerald-400" />
                   <span>{formattedBalance}</span>

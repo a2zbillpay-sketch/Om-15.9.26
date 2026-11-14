@@ -80,10 +80,14 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
   // Recalculates new order total and applies eligible Advance Online Discount BEFORE subtracting amount already paid.
   const editSubtotal = useMemo(() => {
     return cart.reduce((acc, item) => {
+      const baseSellingPrice = item.variant
+        ? item.variant.baseSellingPrice
+        : Number(item.product.baseSellingPrice ?? item.product.price ?? 0);
+      const tieredPrices = item.variant?.tieredPrices || item.product.tieredPrices || [];
       const unitPrice = getActiveUnitPrice(
-        item.variant.baseSellingPrice,
+        baseSellingPrice,
         item.quantity,
-        item.variant.tieredPrices || []
+        tieredPrices
       );
       return acc + unitPrice * item.quantity;
     }, 0);
@@ -112,7 +116,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
   const editCodCharge = isEditingCod
     ? (editingOrder?.codCharge !== undefined && editingOrder.codCharge > 0
         ? editingOrder.codCharge
-        : (currentUser.codOrderCount < 3 ? 0 : settings.codBaseCharge))
+        : Math.max(0, Number(settings.codBaseCharge) || 0))
     : 0;
 
   // Example: ₹505 subtotal − ₹15 advance online discount = ₹490
@@ -327,16 +331,27 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
             </div>
           ) : (
             cart.map((item) => {
+              const baseSellingPrice = item.variant
+                ? item.variant.baseSellingPrice
+                : Number(item.product.baseSellingPrice ?? item.product.price ?? 0);
+              const tieredPrices = item.variant?.tieredPrices || item.product.tieredPrices || [];
               const activePrice = getActiveUnitPrice(
-                item.variant.baseSellingPrice,
+                baseSellingPrice,
                 item.quantity,
-                item.variant.tieredPrices || []
+                tieredPrices
               );
               const itemTotal = activePrice * item.quantity;
-              const hasTierDiscount = activePrice < item.variant.baseSellingPrice;
+              const hasTierDiscount = activePrice < baseSellingPrice;
+              const packText = item.variant
+                ? formatVariantPack(item.variant)
+                : (item.product.packLabel || (item.product.unit ? String(item.product.unit) : 'Standard Pack'));
+              const itemKey = item.variantId || item.productId;
+              const maxLimit = item.variant
+                ? item.variant.maxOrderLimit
+                : Number(item.product.maxOrderLimit || 20);
 
               return (
-                <div key={item.variantId} className="pt-3 first:pt-0 flex gap-3 items-center">
+                <div key={itemKey} className="pt-3 first:pt-0 flex gap-3 items-center">
                   {item.product.imageUrl && item.product.imageUrl.trim() ? (
                     <button
                       type="button"
@@ -368,7 +383,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                       {item.product.name}
                     </h4>
                     <p className="text-[11px] text-gray-500">
-                      {formatVariantPack(item.variant)}
+                      {packText}
                     </p>
 
                     <div className="flex flex-wrap items-center gap-1.5 mt-1">
@@ -392,7 +407,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                   <div className="flex flex-col items-end gap-1.5 shrink-0">
                     <div className="flex items-center bg-gray-100 border border-gray-300 rounded-lg">
                       <button
-                        onClick={() => updateCartQty(item.variantId, item.quantity - 1)}
+                        onClick={() => updateCartQty(itemKey, item.quantity - 1)}
                         className="w-6 h-6 flex items-center justify-center hover:bg-gray-200 text-gray-700 transition"
                       >
                         <Minus size={12} />
@@ -401,8 +416,8 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                         {item.quantity}
                       </span>
                       <button
-                        onClick={() => updateCartQty(item.variantId, item.quantity + 1)}
-                        disabled={item.quantity >= item.variant.maxOrderLimit}
+                        onClick={() => updateCartQty(itemKey, item.quantity + 1)}
+                        disabled={item.quantity >= maxLimit}
                         className="w-6 h-6 flex items-center justify-center hover:bg-gray-200 text-gray-700 transition disabled:opacity-30"
                       >
                         <Plus size={12} />

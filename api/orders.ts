@@ -1,6 +1,11 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { verifyAdminSession } from './auth/_verify.js';
+import {
+  enforceOverdueCodLateFees,
+  parseCodMetaFromNotes,
+  buildOrderNotesWithMeta,
+} from './_codLateFee.js';
 
 function getSupabaseClient(): SupabaseClient | null {
   const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
@@ -70,14 +75,66 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
     // Admin shopkeeper view: Can fetch all orders or filter by customer phone
     if (adminSession && adminSession.role === 'SHOPKEEPER') {
       try {
-        let query = supabase.from('orders').select('*').order('created_at', { ascending: false });
-        if (phoneParam) {
-          const clean = phoneParam.replace(/\D/g, '').slice(-10);
-          if (clean) query = query.eq('customer_phone', clean);
+        const cleanAdminPhoneFilter = phoneParam ? phoneParam.replace(/\D/g, '').slice(-10) : '';
+        const adminLateFeeRes = await enforceOverdueCodLateFees(
+          supabase,
+          cleanAdminPhoneFilter ? { phone: cleanAdminPhoneFilter } : undefined
+        );
+        if (adminLateFeeRes.errors.length > 0) {
+          console.error('COD late fee enforcement errors (admin GET):', adminLateFeeRes.errors);
         }
-        const { data, error } = await query;
-        if (error) return sendJson(res, 500, { success: false, error: error.message });
-        return sendJson(res, 200, { success: true, orders: data || [] });
+
+        let query = supabase.from('orders').select('*').order('created_at', { ascending: false });
+        if (cleanAdminPhoneFilter) {
+          query = query.eq('customer_phone', cleanAdminPhoneFilter);
+        }
+        const { data: ordersData, error: ordersErr } = await query;
+        if (ordersErr) return sendJson(res, 500, { success: false, error: ordersErr.message });
+
+        const orders = ordersData || [];
+        const orderIds = orders.map((o: any) => o.id).filter(Boolean);
+
+        // Fetch relational order_items mirror
+        let itemsByOrder = new Map<string, any[]>();
+        if (orderIds.length > 0) {
+          const { data: itemsData } = await supabase
+            .from('order_items')
+            .select('*')
+            .in('order_id', orderIds);
+
+          if (itemsData) {
+            for (const it of itemsData) {
+              if (!itemsByOrder.has(it.order_id)) {
+                itemsByOrder.set(it.order_id, []);
+              }
+              itemsByOrder.get(it.order_id)!.push({
+                id: it.id,
+                orderId: it.order_id,
+                productId: it.product_id,
+                variantId: it.product_variant_id,
+                productName: it.product_name,
+                variantName: it.variant_name,
+                brand: it.brand,
+                unit: it.unit,
+                packSize: Number(it.pack_size) || 1,
+                quantity: Number(it.quantity) || 1,
+                unitPrice: Number(it.unit_price) || 0,
+                price: Number(it.total_price) || 0,
+                isDiscountExcluded: Boolean(it.is_discount_excluded),
+              });
+            }
+          }
+        }
+
+        const enrichedOrders = orders.map((o: any) => {
+          const relationalItems = itemsByOrder.get(o.id);
+          if (relationalItems && relationalItems.length > 0) {
+            return { ...o, items: relationalItems };
+          }
+          return o;
+        });
+
+        return sendJson(res, 200, { success: true, orders: enrichedOrders });
       } catch (err: any) {
         return sendJson(res, 500, { success: false, error: err?.message || 'Server error' });
       }
@@ -97,17 +154,65 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
     }
 
     try {
-      const { data, error } = await supabase
+      const custLateFeeRes = await enforceOverdueCodLateFees(supabase, { phone: cleanPhone });
+      if (custLateFeeRes.errors.length > 0) {
+        console.error('COD late fee enforcement errors (customer GET):', custLateFeeRes.errors);
+      }
+
+      const { data: ordersData, error: ordersErr } = await supabase
         .from('orders')
         .select('*')
         .eq('customer_phone', cleanPhone)
         .order('created_at', { ascending: false });
 
-      if (error) {
-        return sendJson(res, 500, { success: false, error: error.message });
+      if (ordersErr) {
+        return sendJson(res, 500, { success: false, error: ordersErr.message });
       }
 
-      return sendJson(res, 200, { success: true, orders: data || [] });
+      const orders = ordersData || [];
+      const orderIds = orders.map((o: any) => o.id).filter(Boolean);
+
+      // Fetch relational order_items mirror
+      let itemsByOrder = new Map<string, any[]>();
+      if (orderIds.length > 0) {
+        const { data: itemsData } = await supabase
+          .from('order_items')
+          .select('*')
+          .in('order_id', orderIds);
+
+        if (itemsData) {
+          for (const it of itemsData) {
+            if (!itemsByOrder.has(it.order_id)) {
+              itemsByOrder.set(it.order_id, []);
+            }
+            itemsByOrder.get(it.order_id)!.push({
+              id: it.id,
+              orderId: it.order_id,
+              productId: it.product_id,
+              variantId: it.product_variant_id,
+              productName: it.product_name,
+              variantName: it.variant_name,
+              brand: it.brand,
+              unit: it.unit,
+              packSize: Number(it.pack_size) || 1,
+              quantity: Number(it.quantity) || 1,
+              unitPrice: Number(it.unit_price) || 0,
+              price: Number(it.total_price) || 0,
+              isDiscountExcluded: Boolean(it.is_discount_excluded),
+            });
+          }
+        }
+      }
+
+      const enrichedOrders = orders.map((o: any) => {
+        const relationalItems = itemsByOrder.get(o.id);
+        if (relationalItems && relationalItems.length > 0) {
+          return { ...o, items: relationalItems };
+        }
+        return o;
+      });
+
+      return sendJson(res, 200, { success: true, orders: enrichedOrders });
     } catch (err: any) {
       return sendJson(res, 500, { success: false, error: err?.message || 'Server error' });
     }
@@ -134,9 +239,16 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
         return sendJson(res, 400, { success: false, error: 'Order must contain at least one item' });
       }
 
+      // Check customer active status in database
+      const { data: dbCustomer } = await supabase
+        .from('users')
+        .select('id, name, phone, role, shop_name, wallet_balance, outstanding_balance')
+        .eq('phone', cleanPhone)
+        .maybeSingle();
+
       // Load authoritative settings from database (with standard Om Distributors defaults)
       let advanceDiscountPct = 5.0; // 5% advance payment discount
-      let codBaseCharge = 49.0;     // ₹49 COD fee
+      let codBaseCharge = 0.0;      // ₹0 initial COD fee
       let freeShippingMin = 249.0;  // ₹249 free delivery threshold
       let baseDeliveryFee = 11.0;   // ₹11 standard delivery fee
 
@@ -174,18 +286,30 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
         .select('*')
         .in('id', productIds.length > 0 ? productIds : ['none']);
 
+      // Fetch all variants associated with these products to know whether products have variants in the database
       const { data: dbVariants } = await supabase
         .from('product_variants')
         .select('*')
-        .in('id', variantIds.length > 0 ? variantIds : ['none']);
+        .in('product_id', productIds.length > 0 ? productIds : ['none']);
 
+      // Also fetch tiered prices for both variant IDs and product IDs (for variant-less products)
+      const targetIds = [...variantIds, ...productIds];
       const { data: dbTieredPrices } = await supabase
         .from('tiered_prices')
         .select('*')
-        .in('variant_id', variantIds.length > 0 ? variantIds : ['none']);
+        .in('variant_id', targetIds.length > 0 ? targetIds : ['none']);
 
       const prodMap = new Map((dbProducts || []).map((p: any) => [p.id, p]));
       const varMap = new Map((dbVariants || []).map((v: any) => [v.id, v]));
+
+      // Group variants by product to know whether a product genuinely has variants
+      const variantsByProduct = new Map<string, any[]>();
+      for (const v of dbVariants || []) {
+        if (!variantsByProduct.has(v.product_id)) {
+          variantsByProduct.set(v.product_id, []);
+        }
+        variantsByProduct.get(v.product_id)!.push(v);
+      }
 
       // Verify each item server-side against database catalog
       let verifiedSubtotal = 0;
@@ -200,14 +324,26 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
           ? prodMap.get(item.productId)
           : (matchedVar ? prodMap.get(matchedVar.product_id) : null);
 
-        // Authoritative unit price from variant base selling price or item price
+        const prodVariants = matchedProd ? (variantsByProduct.get(matchedProd.id) || []) : [];
+        const productHasVariants = prodVariants.length > 0;
+
+        // If product has variants in the catalog, customer MUST select a valid variant
+        if (productHasVariants && !matchedVar) {
+          return sendJson(res, 400, {
+            success: false,
+            error: `Product "${matchedProd?.name || 'Item'}" has multiple pack sizes; a valid variant must be selected.`,
+          });
+        }
+
+        // Authoritative unit price from variant base selling price or base product price
         let baseUnitPrice = matchedVar
           ? Number(matchedVar.base_selling_price || matchedVar.mrp || 0)
-          : Number(item.unitPrice || item.price || 0);
+          : (matchedProd ? Number(matchedProd.price ?? matchedProd.base_selling_price ?? matchedProd.mrp ?? 0) : Number(item.unitPrice || item.price || 0));
 
         // Check tiered wholesale pricing
-        if (matchedVar && dbTieredPrices) {
-          const slabs = dbTieredPrices.filter((t: any) => t.variant_id === matchedVar.id);
+        const slabTargetId = matchedVar ? matchedVar.id : matchedProd?.id;
+        if (slabTargetId && dbTieredPrices) {
+          const slabs = dbTieredPrices.filter((t: any) => t.variant_id === slabTargetId);
           const sorted = [...slabs].sort((a: any, b: any) => Number(b.min_qty) - Number(a.min_qty));
           for (const slab of sorted) {
             if (quantity >= Number(slab.min_qty) && quantity <= Number(slab.max_qty)) {
@@ -231,13 +367,13 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
 
         verifiedLineItems.push({
           id: item.id || `item-${Date.now()}-${i}`,
-          productId: matchedProd?.id || item.productId || '',
-          variantId: matchedVar?.id || item.variantId || '',
+          productId: matchedProd?.id || item.productId || null,
+          variantId: matchedVar ? matchedVar.id : null,
           productName: matchedProd?.name || item.productName || 'Grocery Item',
-          variantName: matchedVar?.pack_label || item.variantName || '',
-          brand: matchedProd?.brand || item.brand || '',
-          unit: matchedVar?.unit || item.unit || 'PIECE',
-          packSize: matchedVar ? Number(matchedVar.pack_size) : (Number(item.packSize) || 1),
+          variantName: matchedVar ? matchedVar.pack_label : (item.variantName || matchedProd?.unit || 'Standard'),
+          brand: matchedProd?.brand || item.brand || null,
+          unit: matchedVar?.unit || item.unit || matchedProd?.unit || 'PIECE',
+          packSize: matchedVar ? Number(matchedVar.pack_size) : (Number(item.packSize) || Number(matchedProd?.pack_size) || 1),
           quantity,
           unitPrice: baseUnitPrice,
           price: lineTotal,
@@ -251,24 +387,13 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
       // Authoritative Delivery Fee: Free delivery if subtotal >= freeShippingMinAmount (₹249)
       const deliveryFee = verifiedSubtotal >= freeShippingMin ? 0 : baseDeliveryFee;
 
-      // Authoritative COD Charge: First 3 COD orders are free
+      // Authoritative COD Charge: Initial COD fee defaults to ₹0 (no count-based free-order rule)
       const isAdvance =
         body.paymentMethod === 'ADVANCE_ONLINE' ||
         body.paymentMethod === 'ONLINE' ||
         body.paymentMethod === 'UPI';
 
-      let codCharge = 0;
-      if (!isAdvance) {
-        // Query database count of previous completed/placed COD orders for this phone
-        const { count: previousCodCount } = await supabase
-          .from('orders')
-          .select('id', { count: 'exact', head: true })
-          .eq('customer_phone', cleanPhone)
-          .eq('payment_method', 'COD');
-
-        const orderCount = previousCodCount !== null ? previousCodCount : 0;
-        codCharge = orderCount < 3 ? 0 : codBaseCharge;
-      }
+      const codCharge = !isAdvance ? Math.max(0, Number(codBaseCharge) || 0) : 0;
 
       // Authoritative 5% Advance Payment Discount
       const advanceDiscountAmount = isAdvance
@@ -281,31 +406,34 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
 
       // Authoritative Wallet Usage (Only applicable in Advance Online flow)
       let walletAmountUsed = 0;
-      let authoritativeWalletBalance = 0;
+      let authoritativeWalletBalance = dbCustomer?.wallet_balance ? Math.max(0, Number(dbCustomer.wallet_balance)) : 0;
 
       if (isAdvance && body.useWallet) {
-        // Query user's persistent wallet balance from database
-        const { data: dbUser } = await supabase
-          .from('users')
-          .select('id, wallet_balance')
-          .eq('phone', cleanPhone)
-          .maybeSingle();
-
-        if (dbUser && dbUser.wallet_balance) {
-          authoritativeWalletBalance = Math.max(0, Number(dbUser.wallet_balance));
+        // If wallet balance was not loaded from dbCustomer, fetch it fresh from database
+        if (!dbCustomer) {
+          const { data: freshUser } = await supabase
+            .from('users')
+            .select('wallet_balance')
+            .eq('phone', cleanPhone)
+            .maybeSingle();
+          if (freshUser && freshUser.wallet_balance) {
+            authoritativeWalletBalance = Math.max(0, Number(freshUser.wallet_balance));
+          }
         }
-
         walletAmountUsed = Math.min(authoritativeWalletBalance, orderFinalAmount);
       }
 
       const finalPayable = Math.max(0, Math.round((orderFinalAmount - walletAmountUsed) * 100) / 100);
 
       // Construct verified order payload
-      const orderId = body.orderId || `ord-${Date.now()}`;
+      const orderId = body.orderId || `ord-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
       const orderNumber = body.orderNumber || `OM-${Math.floor(10000 + Math.random() * 90000)}`;
 
       const metaPayload = JSON.stringify({
         codCollected: 0,
+        codCharge,
+        codLateFeeApplied: false,
+        codLateFeeAmount: 0,
         prevOutstanding: Number(body.previousOutstanding) || 0,
         totalPayable: isAdvance ? finalPayable : orderFinalAmount,
         walletAmountUsed,
@@ -324,39 +452,76 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
           ? body.address
           : body.address?.fullAddress || body.deliveryAddress || 'Address not specified';
 
+      const customerId = body.customerId || dbCustomer?.id || `usr_${cleanPhone}`;
+      const customerName = body.customerName || dbCustomer?.name || `Customer (${cleanPhone.slice(-4)})`;
+      const shopName = body.shopName || dbCustomer?.shop_name || customerName;
+
+      // 1. Insert into public.orders table
       const insertPayload = {
         id: orderId,
-        customer_id: body.customerId || `usr_${cleanPhone}`,
-        customer_name: body.customerName || `Customer (${cleanPhone.slice(-4)})`,
+        order_number: orderNumber,
+        customer_id: customerId,
+        customer_name: customerName,
         customer_phone: cleanPhone,
-        shop_name: body.customerName || `Customer (${cleanPhone.slice(-4)})`,
+        shop_name: shopName,
         'Product Name': productNameSerialized,
         subtotal: verifiedSubtotal,
         discount_amount: advanceDiscountAmount,
         final_total: orderFinalAmount,
         status: 'ORDER_ACCEPTED',
         payment_method: isAdvance ? 'ADVANCE_ONLINE' : 'COD',
+        payment_status: isAdvance && finalPayable === 0 ? 'RECEIVED' : 'PENDING',
         is_paid: isAdvance && finalPayable === 0,
         delivery_address: deliveryAddress,
         preferred_slot: body.deliveryDate || body.preferredSlot || new Date().toISOString().split('T')[0],
         notes: `Order #${orderNumber} | COD_META:${metaPayload}`,
+        weight_kg: Number(body.weightKg) || null,
+        razorpay_order_id: body.razorpayOrderId || null,
+        razorpay_payment_id: body.razorpayPaymentId || null,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       };
 
-      const { error: insertError } = await supabase.from('orders').insert(insertPayload);
+      const { error: insertOrderError } = await supabase.from('orders').insert(insertPayload);
 
-      if (insertError) {
-        return sendJson(res, 500, { success: false, error: insertError.message });
+      if (insertOrderError) {
+        return sendJson(res, 500, { success: false, error: insertOrderError.message });
       }
 
-      // If wallet used, record debit in ledger and deduct user's wallet_balance
+      // 2. Insert line items into public.order_items table (Relational Line-Item Mirror)
+      const orderItemsPayload = verifiedLineItems.map((it, idx) => ({
+        id: it.id || `item-${Date.now()}-${idx}`,
+        order_id: orderId,
+        product_id: it.productId || null,
+        product_variant_id: it.variantId || null,
+        product_name: it.productName,
+        variant_name: it.variantName || null,
+        brand: it.brand || null,
+        unit: it.unit || 'PIECE',
+        pack_size: it.packSize || 1,
+        quantity: it.quantity,
+        unit_price: it.unitPrice,
+        total_price: it.price,
+        is_discount_excluded: it.isDiscountExcluded,
+        created_at: new Date().toISOString(),
+      }));
+
+      const { error: insertItemsError } = await supabase
+        .from('order_items')
+        .insert(orderItemsPayload);
+
+      if (insertItemsError) {
+        // Log warning but proceed since orders table has COD_META and "Product Name" redundancy
+        console.warn('Warning: Could not mirror order items into public.order_items:', insertItemsError.message);
+      }
+
+      // 3. If wallet was used, record debit in ledger and deduct user's wallet_balance
       if (walletAmountUsed > 0) {
         const remainingWallet = Math.max(0, authoritativeWalletBalance - walletAmountUsed);
         await supabase.from('ledger').insert({
           id: `wtx_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-          customer_id: body.customerId || `usr_${cleanPhone}`,
-          customer_name: body.customerName || 'Customer',
+          customer_id: customerId,
+          customer_name: customerName,
           order_id: orderId,
           date: new Date().toISOString(),
           type: 'DEBIT',
@@ -394,7 +559,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
   }
 
   // ============================================================================
-  // 3. PUT: Order Status & Payment Updates (Verified Shopkeeper Session ONLY)
+  // 3. PUT: Order Status, Edits, Refunds & Payment Updates (Verified Shopkeeper Session ONLY)
   // ============================================================================
   if (method === 'PUT') {
     const adminSession = verifyAdminSession(req);
@@ -407,20 +572,207 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
 
     try {
       const body = await parseJsonBody(req);
-      const orderId = body.id || body.orderId;
-      if (!orderId) {
+      const rawOrderId = String(body.id || body.orderId || '').trim();
+      if (!rawOrderId) {
         return sendJson(res, 400, { success: false, error: 'Order ID is required' });
       }
+
+      // Resolve existing order row (by id or order_number)
+      const { data: existingOrder } = rawOrderId.startsWith('OM-')
+        ? await supabase.from('orders').select('*').eq('order_number', rawOrderId).maybeSingle()
+        : await supabase.from('orders').select('*').eq('id', rawOrderId).maybeSingle();
+
+      const resolvedOrderId = existingOrder?.id || rawOrderId;
 
       const updatePayload: Record<string, any> = {
         updated_at: new Date().toISOString(),
       };
-      if (body.status) updatePayload.status = body.status;
-      if (body.isPaid !== undefined) updatePayload.is_paid = Boolean(body.isPaid);
-      if (body.notes) updatePayload.notes = body.notes;
 
-      const { error } = await supabase.from('orders').update(updatePayload).eq('id', orderId);
+      if (body.status) updatePayload.status = body.status;
+
+      if (body.paymentStatus) {
+        updatePayload.payment_status = body.paymentStatus;
+        if (body.paymentStatus === 'RECEIVED') {
+          updatePayload.is_paid = true;
+        } else if (body.paymentStatus === 'PENDING' || body.paymentStatus === 'REFUNDED' || body.paymentStatus === 'FAILED') {
+          updatePayload.is_paid = false;
+        }
+      }
+
+      if (body.isPaid !== undefined) {
+        updatePayload.is_paid = Boolean(body.isPaid);
+        if (body.isPaid && !updatePayload.payment_status) {
+          updatePayload.payment_status = 'RECEIVED';
+        } else if (!body.isPaid && !updatePayload.payment_status) {
+          updatePayload.payment_status = 'PENDING';
+        }
+      }
+
+      if (body.subtotal !== undefined && !isNaN(Number(body.subtotal))) {
+        updatePayload.subtotal = Number(body.subtotal);
+      }
+      if (body.discountAmount !== undefined && !isNaN(Number(body.discountAmount))) {
+        updatePayload.discount_amount = Number(body.discountAmount);
+      }
+      const resolvedFinalTotal =
+        body.finalAmount !== undefined ? Number(body.finalAmount) :
+        body.finalTotal !== undefined ? Number(body.finalTotal) :
+        undefined;
+      if (resolvedFinalTotal !== undefined && !isNaN(resolvedFinalTotal)) {
+        updatePayload.final_total = resolvedFinalTotal;
+      }
+      if (typeof body.productNameSerialized === 'string') {
+        updatePayload['Product Name'] = body.productNameSerialized;
+      }
+      if (body.weightKg !== undefined && body.weightKg !== null && !isNaN(Number(body.weightKg))) {
+        updatePayload.weight_kg = Number(body.weightKg);
+      }
+      if (body.notes !== undefined || body.status === 'DELIVERED') {
+        const { orderNumber: existingOrdNum, meta: existingMeta } = parseCodMetaFromNotes(existingOrder?.notes);
+        const { orderNumber: incomingOrdNum, meta: incomingMeta } = parseCodMetaFromNotes(body.notes);
+        const resolvedNum =
+          existingOrder?.order_number ||
+          incomingOrdNum ||
+          existingOrdNum ||
+          resolvedOrderId.replace(/^ord[-_]/i, '').slice(0, 8);
+
+        const nowISO = new Date().toISOString();
+        const isDeliveredTransition = body.status === 'DELIVERED';
+        const mergedMeta: Record<string, any> = {
+          ...existingMeta,
+          ...incomingMeta,
+          ...(existingMeta.codCharge !== undefined
+            ? { codCharge: Math.max(Number(existingMeta.codCharge) || 0, Number(incomingMeta.codCharge) || 0) }
+            : {}),
+          ...(existingMeta.codLateFeeApplied
+            ? {
+                codLateFeeApplied: true,
+                codLateFeeAmount: Number(existingMeta.codLateFeeAmount) || 0,
+                codLateFeeAppliedAt: existingMeta.codLateFeeAppliedAt,
+              }
+            : {}),
+        };
+
+        if (isDeliveredTransition && !mergedMeta.deliveredAt) {
+          mergedMeta.deliveredAt = body.deliveredAt || nowISO;
+        }
+
+        // Protect authoritative late-fee-adjusted final_total if late fee already applied
+        if (existingMeta.codLateFeeApplied && existingOrder?.final_total !== undefined) {
+          updatePayload.final_total = Number(existingOrder.final_total);
+          mergedMeta.totalPayable = Number(existingOrder.final_total);
+        }
+
+        updatePayload.notes = buildOrderNotesWithMeta(String(resolvedNum), mergedMeta);
+      }
+
+      // Idempotent server-side wallet refund on Shopkeeper order cancellation
+      const refundAmount = Number(body.refundAmount) || 0;
+      if (body.status === 'CANCELLED' && refundAmount > 0) {
+        const cleanPhone = String(
+          body.customerPhone || existingOrder?.customer_phone || ''
+        )
+          .replace(/\D/g, '')
+          .slice(-10);
+        const customerId = String(
+          body.customerId || existingOrder?.customer_id || (cleanPhone ? `usr_${cleanPhone}` : 'Customer')
+        );
+        const customerName = String(
+          body.customerName || existingOrder?.customer_name || 'Customer'
+        );
+
+        // Check existing CREDIT refund in ledger to prevent duplicates
+        const { data: existingRefunds } = await supabase
+          .from('ledger')
+          .select('id, amount')
+          .eq('order_id', resolvedOrderId)
+          .eq('type', 'CREDIT');
+
+        const alreadyCredited = (existingRefunds || []).reduce(
+          (sum: number, row: any) => sum + (Number(row.amount) || 0),
+          0
+        );
+
+        if (alreadyCredited < refundAmount) {
+          const amountToCredit = Math.round((refundAmount - alreadyCredited) * 100) / 100;
+          let currentWallet = 0;
+
+          if (cleanPhone) {
+            const { data: dbUser } = await supabase
+              .from('users')
+              .select('id, wallet_balance')
+              .eq('phone', cleanPhone)
+              .maybeSingle();
+            if (dbUser && dbUser.wallet_balance !== undefined) {
+              currentWallet = Math.max(0, Number(dbUser.wallet_balance) || 0);
+            }
+          }
+
+          const newBalanceAfter = Math.round((currentWallet + amountToCredit) * 100) / 100;
+          const refundDesc =
+            typeof body.refundDescription === 'string' && body.refundDescription.trim()
+              ? body.refundDescription.trim()
+              : `Refund for Cancelled Order #${existingOrder?.order_number || resolvedOrderId}`;
+
+          const { error: ledgerErr } = await supabase.from('ledger').insert({
+            id: `wtx_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+            customer_id: customerId,
+            customer_name: customerName,
+            order_id: resolvedOrderId,
+            date: new Date().toISOString(),
+            type: 'CREDIT',
+            amount: amountToCredit,
+            description: refundDesc,
+            balance_after: newBalanceAfter,
+          });
+
+          if (!ledgerErr) {
+            if (cleanPhone) {
+              await supabase
+                .from('users')
+                .update({
+                  wallet_balance: newBalanceAfter,
+                  updated_at: new Date().toISOString(),
+                })
+                .eq('phone', cleanPhone);
+            }
+            updatePayload.payment_status = 'REFUNDED';
+            updatePayload.is_paid = false;
+          }
+        } else {
+          updatePayload.payment_status = 'REFUNDED';
+          updatePayload.is_paid = false;
+        }
+      }
+
+      const { error } = await supabase
+        .from('orders')
+        .update(updatePayload)
+        .eq('id', resolvedOrderId);
+
       if (error) return sendJson(res, 500, { success: false, error: error.message });
+
+      // Relational order_items sync if updated items are provided (edited order)
+      if (Array.isArray(body.items) && body.items.length > 0) {
+        await supabase.from('order_items').delete().eq('order_id', resolvedOrderId);
+        const orderItemsPayload = body.items.map((it: any, idx: number) => ({
+          id: it.id || `item-${Date.now()}-${idx}`,
+          order_id: resolvedOrderId,
+          product_id: it.productId || null,
+          product_variant_id: it.variantId || null,
+          product_name: it.productName || 'Grocery Item',
+          variant_name: it.variantName || null,
+          brand: it.brand || null,
+          unit: it.unit || 'PIECE',
+          pack_size: Number(it.packSize) || 1,
+          quantity: Math.max(1, Number(it.quantity) || 1),
+          unit_price: Number(it.unitPrice) || 0,
+          total_price: Number(it.price) || 0,
+          is_discount_excluded: Boolean(it.isDiscountExcluded),
+          created_at: new Date().toISOString(),
+        }));
+        await supabase.from('order_items').insert(orderItemsPayload);
+      }
 
       return sendJson(res, 200, { success: true });
     } catch (err: any) {

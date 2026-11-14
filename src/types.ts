@@ -62,8 +62,6 @@ export interface User {
   name: string;
   phone: string;
   role: Role;
-  referralCode: string;
-  referredById?: string | null;
   walletBalance: number;
   outstandingBalance?: number;
   codOrderCount: number;
@@ -123,13 +121,25 @@ export interface Product {
   displayOrder?: number;
   variants: ProductVariant[];
   createdAt: string;
+
+  // Independent product-level pricing, unit, and stock for products without variants
+  mrp?: number;
+  baseSellingPrice?: number;
+  price?: number;
+  stockQuantity?: number;
+  stock?: number;
+  unit?: UnitType | string;
+  packSize?: number;
+  packLabel?: string;
+  maxOrderLimit?: number;
+  tieredPrices?: TieredPrice[];
 }
 
 export interface OrderItem {
   id: string;
   orderId: string;
   productId?: string;
-  variantId: string;
+  variantId?: string | null;
   variantName?: string;
   productName?: string;
   brand?: string;
@@ -164,6 +174,10 @@ export interface Order {
   previousOnlinePaid?: number;
   codCollectedAmount?: number;
   walletAmountUsed?: number;
+  deliveredAt?: string;
+  codLateFeeApplied?: boolean;
+  codLateFeeAmount?: number;
+  codLateFeeAppliedAt?: string;
   stockDeducted?: boolean;
   stockRestored?: boolean;
   googleLocation?: GoogleLocation;
@@ -208,7 +222,7 @@ export interface SystemSetting {
   codBaseCharge: number;
   freeShippingMinAmount: number;
   baseDeliveryFee: number;
-  referralRewardAmount: number;
+  referralRewardAmount?: number;
   lowStockThreshold?: number;
   updatedAt: string;
 }
@@ -216,8 +230,8 @@ export interface SystemSetting {
 export interface CartItem {
   productId: string;
   product: Product;
-  variantId: string;
-  variant: ProductVariant;
+  variantId?: string | null;
+  variant?: ProductVariant | null;
   quantity: number;
 }
 
@@ -259,7 +273,7 @@ export interface ProductRequestProduct {
   id: string;
   name: string;
   brand?: string;
-  variantId: string;
+  variantId?: string | null;
   variantName?: string;
   packSize?: string;
   unit?: string;
@@ -275,7 +289,7 @@ export interface ProductRequest {
   product: ProductRequestProduct;
   productId: string;
   productName: string;
-  variantId: string;
+  variantId?: string | null;
   variantName?: string;
   packSize?: string;
   quantity: number;

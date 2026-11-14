@@ -1,7 +1,8 @@
 // lib/engine/checkout-calculator.ts
 
 export interface VariantCartItem {
-  variantId: string;
+  variantId?: string | null;
+  productId?: string;
   quantity: number;
   baseSellingPrice: number;
   isDiscountExcluded: boolean;
@@ -9,7 +10,7 @@ export interface VariantCartItem {
 }
 
 export interface UserContext {
-  codOrderCount: number;
+  codOrderCount?: number;
 }
 
 export interface SystemSettings {
@@ -64,7 +65,7 @@ export function getActiveUnitPrice(
 
 export function calculateCheckoutTotals(
   items: VariantCartItem[],
-  user: UserContext,
+  _user: UserContext,
   settings: SystemSettings,
   previousOutstanding: number = 0,
   availableWalletBalance: number = 0,
@@ -91,8 +92,8 @@ export function calculateCheckoutTotals(
   // 2. Delivery Fee Calculation (Free delivery if subtotal >= freeShippingMinAmount)
   const deliveryFee = subtotal >= settings.freeShippingMinAmount ? 0 : settings.baseDeliveryFee;
 
-  // 3. COD Charge Calculation (First 3 COD orders are FREE)
-  const codCharge = user.codOrderCount < 3 ? 0 : settings.codBaseCharge;
+  // 3. COD Charge Calculation (Initial COD fee defaults to ₹0; no order-count-based rule)
+  const codCharge = Math.max(0, Number(settings.codBaseCharge) || 0);
 
   // 4. Advance Payment Discount Calculation (Applied STRICTLY and ONLY to eligible items; NEVER on excluded items)
   const discountPct = Math.max(0, Number(settings.advancePaymentDiscountPct) || 0);

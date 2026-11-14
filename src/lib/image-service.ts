@@ -188,6 +188,45 @@ export async function optimizeProductImage(
   const fitMode: SquareFitMode = options.fitMode || 'crop';
   const backgroundColor = options.backgroundColor || '#FFFFFF';
 
+  const inputMime = file.type ? file.type.toLowerCase() : 'image/jpeg';
+
+  // Animated GIF handling: Do NOT flatten GIFs through <canvas> (which destroys animation frames)
+  if (inputMime === 'image/gif') {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const objectUrl = URL.createObjectURL(file);
+
+      img.onload = () => {
+        URL.revokeObjectURL(objectUrl);
+        const origWidth = img.naturalWidth || img.width || 600;
+        const origHeight = img.naturalHeight || img.height || 600;
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          resolve({
+            blob: file,
+            dataUrl: reader.result as string,
+            originalSize: file.size,
+            optimizedSize: file.size,
+            width: origWidth,
+            height: origHeight,
+            mimeType: 'image/gif',
+          });
+        };
+        reader.onerror = () => {
+          reject(new Error('Failed to read GIF image data.'));
+        };
+        reader.readAsDataURL(file);
+      };
+
+      img.onerror = () => {
+        URL.revokeObjectURL(objectUrl);
+        reject(new Error('Failed to load GIF image. The file may be corrupt or unreadable.'));
+      };
+
+      img.src = objectUrl;
+    });
+  }
+
   return new Promise((resolve, reject) => {
     const img = new Image();
     const objectUrl = URL.createObjectURL(file);
@@ -275,52 +314,9 @@ export async function optimizeProductImage(
 const PRIMARY_BUCKET = 'product-images';
 const FALLBACK_BUCKET = 'products';
 
-async function uploadToServerApi(
-  fileBlob: Blob,
-  originalFileName: string,
-  folder: string
-): Promise<ImageUploadResult | null> {
-  try {
-    const dataUrl = await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as string);
-      reader.onerror = reject;
-      reader.readAsDataURL(fileBlob);
-    });
-
-    const res = await fetch('/api/categories', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({
-        action: 'upload',
-        dataUrl,
-        fileName: originalFileName,
-        folder,
-      }),
-    });
-
-    if (res.ok) {
-      const json = await res.json();
-      if (json.success && json.url) {
-        return {
-          success: true,
-          url: json.url,
-          isCloudStorage: true,
-        };
-      }
-    } else {
-      const errorJson = await res.json().catch(() => ({}));
-      console.warn('Storage upload error response:', errorJson?.error || res.statusText);
-    }
-  } catch (e) {
-    console.warn('Server upload notice (falling back):', e);
-  }
-  return null;
-}
-
 /**
- * Uploads an optimized product image blob to cloud storage (Supabase Storage or Server).
+ * Uploads an optimized image blob to Supabase cloud storage (product-images bucket).
+ * Strictly saves to "product-images/categories/" when folder is 'categories'.
  * Falls back gracefully in local development when Supabase Storage is not provisioned.
  */
 export async function uploadProductImageToStorage(
@@ -328,17 +324,22 @@ export async function uploadProductImageToStorage(
   originalFileName: string = 'product.jpg',
   folder: string = 'catalog'
 ): Promise<ImageUploadResult> {
-  // 1. Primary: Try server upload endpoint for persistent, permanent file storage
-  const serverResult = await uploadToServerApi(fileBlob, originalFileName, folder);
-  if (serverResult && serverResult.success) {
-    return serverResult;
-  }
 
   // 2. If Supabase is configured and connected
   if (isSupabaseConfigured && supabase) {
     try {
-      const ext = originalFileName.split('.').pop()?.toLowerCase() || 'jpg';
-      const cleanExt = ['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext) ? ext : 'jpg';
+      const mimeToExt: Record<string, string> = {
+        'image/gif': 'gif',
+        'image/png': 'png',
+        'image/webp': 'webp',
+        'image/jpeg': 'jpg',
+        'image/jpg': 'jpg',
+      };
+      const blobMime = fileBlob.type ? fileBlob.type.toLowerCase() : '';
+      const nameExt = originalFileName.split('.').pop()?.toLowerCase() || '';
+      const cleanExt =
+        mimeToExt[blobMime] ||
+        (['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(nameExt) ? nameExt : 'jpg');
       const prefix = folder === 'categories' ? 'cat' : 'prod';
       const uniqueFileName = `${prefix}_${Date.now()}_${Math.random().toString(36).substring(2, 9)}.${cleanExt}`;
       const filePath = `${folder}/${uniqueFileName}`;
@@ -451,4 +452,40 @@ export async function uploadCategoryImageToStorage(
 ): Promise<ImageUploadResult> {
   return uploadProductImageToStorage(fileBlob, originalFileName, 'categories');
 }
+
+/**
+ * Validates, optimizes, and uploads a category photo file to "product-images/categories/".
+ */
+export async function uploadCategoryPhoto(
+  file: File | Blob,
+  originalFileName?: string
+): Promise<ImageUploadResult> {
+  const validation = validateImageFile(file);
+  if (!validation.valid) {
+    return {
+      success: false,
+      error: validation.error,
+      isCloudStorage: false,
+    };
+  }
+
+  const name = originalFileName || (file instanceof File ? file.name : 'category.jpg');
+
+  try {
+    const optimized = await optimizeProductImage(file, {
+      maxDimension: 600,
+      quality: 0.85,
+      fitMode: 'contain',
+    });
+
+    return await uploadProductImageToStorage(optimized.blob, name, 'categories');
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err?.message || 'Failed to optimize image for upload.',
+      isCloudStorage: false,
+    };
+  }
+}
+
 

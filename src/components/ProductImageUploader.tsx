@@ -73,9 +73,11 @@ export const ProductImageUploader: React.FC<ProductImageUploaderProps> = ({
 
   const hasImage = Boolean(currentImageUrl && currentImageUrl.trim());
 
-  // Render live 1:1 preview whenever pending crop state changes
+  const isPendingGif = Boolean(pendingCrop && pendingCrop.file.type.toLowerCase() === 'image/gif');
+
+  // Render live 1:1 preview whenever pending crop state changes (for static images)
   useEffect(() => {
-    if (!pendingCrop || !modalCanvasRef.current) return;
+    if (!pendingCrop || isPendingGif || !modalCanvasRef.current) return;
 
     const canvas = modalCanvasRef.current;
     const ctx = canvas.getContext('2d');
@@ -94,7 +96,7 @@ export const ProductImageUploader: React.FC<ProductImageUploaderProps> = ({
       pendingCrop.fitMode,
       '#FFFFFF'
     );
-  }, [pendingCrop?.fitMode, pendingCrop?.imageElement, pendingCrop?.origWidth, pendingCrop?.origHeight]);
+  }, [pendingCrop?.fitMode, pendingCrop?.imageElement, pendingCrop?.origWidth, pendingCrop?.origHeight, isPendingGif]);
 
   const handleFileInputChange = (e: ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -408,7 +410,7 @@ export const ProductImageUploader: React.FC<ProductImageUploaderProps> = ({
             {/* Helper Hint */}
             {!isProcessing && !statusMessage && !errorMessage && activeTab !== 'URL' && (
               <div className="flex items-center justify-between text-[10px] text-gray-500 pt-0.5">
-                <span>Square 1:1 auto-adjusted (JPEG/PNG, Max 15MB).</span>
+                <span>Square 1:1 auto-adjusted (JPEG/PNG/WebP/GIF, Max 15MB).</span>
                 <span className="text-[#0F2C59] font-medium flex items-center gap-0.5">
                   <Cloud size={11} className="text-[#0F2C59]" />
                   Compressed for fast load
@@ -448,20 +450,31 @@ export const ProductImageUploader: React.FC<ProductImageUploaderProps> = ({
               </button>
             </div>
 
-            {/* Live 1:1 Canvas Preview */}
+            {/* Live 1:1 Canvas / Animated GIF Preview */}
             <div className="space-y-2">
               <div className="relative w-56 h-56 mx-auto rounded-xl overflow-hidden border-2 border-gray-200 bg-white shadow-inner flex items-center justify-center">
-                <canvas
-                  ref={modalCanvasRef}
-                  id="square-preview-canvas"
-                  className="w-full h-full object-contain"
-                />
+                {isPendingGif ? (
+                  <img
+                    src={pendingCrop.objectUrl}
+                    alt="Animated GIF preview"
+                    className={`w-full h-full ${
+                      pendingCrop.fitMode === 'contain' ? 'object-contain bg-white' : 'object-cover'
+                    }`}
+                  />
+                ) : (
+                  <canvas
+                    ref={modalCanvasRef}
+                    id="square-preview-canvas"
+                    className="w-full h-full object-contain"
+                  />
+                )}
                 <span className="absolute top-2 left-2 bg-[#0F2C59]/80 backdrop-blur-xs text-white text-[9px] font-bold px-2 py-0.5 rounded uppercase tracking-wider">
-                  1:1 Preview
+                  {isPendingGif ? 'GIF Preview' : '1:1 Preview'}
                 </span>
               </div>
               <p className="text-[10px] text-center text-gray-400">
                 Original photo: {pendingCrop.origWidth} × {pendingCrop.origHeight} px
+                {isPendingGif ? ' • GIF animation preserved' : ''}
               </p>
             </div>
 

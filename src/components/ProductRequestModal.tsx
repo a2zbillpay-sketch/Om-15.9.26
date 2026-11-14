@@ -52,7 +52,7 @@ export const ProductRequestModal: React.FC<ProductRequestModalProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, onClose]);
 
-  if (!isOpen || !product || !variant) return null;
+  if (!isOpen || !product) return null;
 
   const handleAccept = () => {
     setContactError(null);
@@ -147,7 +147,7 @@ export const ProductRequestModal: React.FC<ProductRequestModalProps> = ({
               <div className="text-right">
                 <div className="font-bold text-gray-900">{product.name}</div>
                 <div className="text-[11px] text-gray-500 font-medium">
-                  {formatVariantPack(variant)}
+                  {variant ? formatVariantPack(variant) : (product.packLabel || (product.unit ? String(product.unit) : 'Standard Pack'))}
                   {product.brand ? ` • ${product.brand}` : ''}
                 </div>
               </div>
@@ -159,7 +159,7 @@ export const ProductRequestModal: React.FC<ProductRequestModalProps> = ({
                 <span className="text-gray-600 font-medium">Requested Quantity:</span>
               </div>
               <span className="font-extrabold text-[#0F2C59] bg-blue-50 px-2 py-0.5 rounded-md border border-blue-200">
-                {quantity} {variant.unit || 'unit(s)'}
+                {quantity} {variant?.unit || product.unit || 'unit(s)'}
               </span>
             </div>
 

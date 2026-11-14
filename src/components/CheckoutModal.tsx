@@ -58,6 +58,8 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   const [selectedUpiApp, setSelectedUpiApp] = useState<'PAYTM' | 'PHONEPE' | 'GPAY' | 'QR'>('QR');
   const [walletErrorMessage, setWalletErrorMessage] = useState<string | null>(null);
   const [applyWalletInAdvance, setApplyWalletInAdvance] = useState(true);
+  const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
+  const [orderErrorMessage, setOrderErrorMessage] = useState<string | null>(null);
 
   // Google Location Picker state
   const [isGoogleLocationPickerOpen, setIsGoogleLocationPickerOpen] = useState(false);
@@ -94,6 +96,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
       return;
     }
     setWalletErrorMessage(null);
+    setOrderErrorMessage(null);
     setIsDualPaymentOpen(true);
   };
 
@@ -102,6 +105,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
     app?: 'PAYTM' | 'PHONEPE' | 'GPAY' | 'QR'
   ) => {
     setWalletErrorMessage(null);
+    setOrderErrorMessage(null);
     if (method === PaymentMethod.ADVANCE_ONLINE) {
       if (app) {
         setSelectedUpiApp(app);
@@ -113,6 +117,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
       // Cash On Delivery Placement - triggered strictly via "Confirm COD Order" button
       // Wallet deduction is strictly ₹0 for COD (never used or reduced)
       try {
+        setIsSubmittingOrder(true);
         const order = await createOrder({
           address: currentSelectedAddress,
           paymentMethod: PaymentMethod.COD,
@@ -123,16 +128,21 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
         setIsDualPaymentOpen(false);
         onClose();
         onOrderSuccess(order.id, order);
-      } catch (err) {
+      } catch (err: any) {
         console.error('Error creating COD order:', err);
+        setOrderErrorMessage(err?.message || 'Failed to place order. Please try again.');
         throw err;
+      } finally {
+        setIsSubmittingOrder(false);
       }
     }
   };
 
   const handleCompleteAdvancePayment = async () => {
     setWalletErrorMessage(null);
+    setOrderErrorMessage(null);
     try {
+      setIsSubmittingOrder(true);
       const order = await createOrder({
         address: currentSelectedAddress,
         paymentMethod: PaymentMethod.ADVANCE_ONLINE,
@@ -146,6 +156,9 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
       onOrderSuccess(order.id, order);
     } catch (err: any) {
       console.error('Error creating advance order:', err);
+      setOrderErrorMessage(err?.message || 'Failed to place advance order. Please try again.');
+    } finally {
+      setIsSubmittingOrder(false);
     }
   };
 
@@ -581,14 +594,27 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                     </div>
                   )}
 
+                  {orderErrorMessage && (
+                    <div
+                      id="advance-order-error-banner"
+                      className="p-3 bg-red-50 border border-red-300 text-red-800 text-xs font-bold rounded-xl flex items-center gap-2 mb-4"
+                    >
+                      <AlertTriangle size={16} className="text-red-600 shrink-0" />
+                      <span>{orderErrorMessage}</span>
+                    </div>
+                  )}
+
                   <button
                     id="confirm-simulated-payment-btn"
+                    disabled={isSubmittingOrder}
                     onClick={handleCompleteAdvancePayment}
-                    className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold py-3 rounded-xl shadow-md transition text-xs flex items-center justify-center gap-2 cursor-pointer"
+                    className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-extrabold py-3 rounded-xl shadow-md transition text-xs flex items-center justify-center gap-2 cursor-pointer"
                   >
                     <ShieldCheck size={16} />
                     <span>
-                      {remainingOnlinePayment === 0
+                      {isSubmittingOrder
+                        ? 'Confirming Order with Server...'
+                        : remainingOnlinePayment === 0
                         ? 'Confirm Advance Order (Fully covered by Wallet Applied (Advance))'
                         : `Authorize ₹${remainingOnlinePayment} via ${
                             selectedUpiApp === 'PAYTM'

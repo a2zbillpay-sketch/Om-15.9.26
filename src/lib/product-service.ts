@@ -374,10 +374,6 @@ export function normalizeAndValidateProduct(raw: any): ProductValidationResult {
   const barcode = barcodeValidation.barcode;
 
   const rawVariants = Array.isArray(raw.variants) ? raw.variants : [];
-  if (rawVariants.length === 0) {
-    return { valid: false, error: 'Product must have at least one pack variant.' };
-  }
-
   const normalizedVariants: ProductVariant[] = [];
   for (let i = 0; i < rawVariants.length; i++) {
     const vResult = normalizeAndValidateVariant(rawVariants[i], productId, i);
@@ -386,6 +382,23 @@ export function normalizeAndValidateProduct(raw: any): ProductValidationResult {
     }
     normalizedVariants.push(vResult.variant);
   }
+
+  // Parse product-level tiered prices (if product has 0 variants)
+  const productTieredPrices: TieredPrice[] = [];
+  if (normalizedVariants.length === 0 && Array.isArray(raw.tieredPrices)) {
+    for (const rawTp of raw.tieredPrices) {
+      const tpResult = normalizeAndValidateTieredPrice(rawTp, productId, Number(raw.baseSellingPrice ?? raw.price ?? 0));
+      if (tpResult.valid && tpResult.tieredPrice) {
+        productTieredPrices.push(tpResult.tieredPrice);
+      }
+    }
+  }
+
+  const basePrice = normalizedVariants[0]?.baseSellingPrice ?? Number(raw.baseSellingPrice ?? raw.price ?? 0);
+  const mrpVal = normalizedVariants[0]?.mrp ?? Number(raw.mrp ?? raw.price ?? 0);
+  const stockVal = normalizedVariants.length > 0
+    ? normalizedVariants.reduce((sum, v) => sum + (Number(v.stockQuantity) || 0), 0)
+    : Number(raw.stockQuantity ?? raw.stock ?? 0);
 
   return {
     valid: true,
@@ -407,6 +420,16 @@ export function normalizeAndValidateProduct(raw: any): ProductValidationResult {
           ? Number(raw.discount)
           : normalizedVariants[0]?.discount,
       isDiscountExcluded,
+      price: basePrice,
+      baseSellingPrice: basePrice,
+      mrp: mrpVal,
+      stock: stockVal,
+      stockQuantity: stockVal,
+      unit: raw.unit || (normalizedVariants[0]?.unit ?? UnitType.NOS),
+      packSize: Number(raw.packSize || normalizedVariants[0]?.packSize || 1),
+      packLabel: raw.packLabel || normalizedVariants[0]?.packLabel,
+      maxOrderLimit: Number(raw.maxOrderLimit || normalizedVariants[0]?.maxOrderLimit || 20),
+      tieredPrices: normalizedVariants.length === 0 ? productTieredPrices : undefined,
       lowStockThreshold:
         raw.lowStockThreshold !== undefined && raw.lowStockThreshold !== null && !isNaN(Number(raw.lowStockThreshold))
           ? Math.max(1, Number(raw.lowStockThreshold))
@@ -442,15 +465,14 @@ export async function saveProductWithCascadeSync(
       categoryName = product.categoryId || '';
     }
     const primaryVariant = product.variants?.[0];
-    const basePrice = primaryVariant ? Number(primaryVariant.baseSellingPrice || 0) : 0;
-    const mrp = primaryVariant ? Number(primaryVariant.mrp || 0) : 0;
-    const totalStock = (product.variants || []).reduce(
-      (sum, v) => sum + (Number(v.stockQuantity) || 0),
-      0
-    );
+    const basePrice = primaryVariant ? Number(primaryVariant.baseSellingPrice || 0) : Number(product.baseSellingPrice ?? product.price ?? 0);
+    const mrp = primaryVariant ? Number(primaryVariant.mrp || 0) : Number(product.mrp ?? product.price ?? 0);
+    const totalStock = product.variants && product.variants.length > 0
+      ? product.variants.reduce((sum, v) => sum + (Number(v.stockQuantity) || 0), 0)
+      : Number(product.stockQuantity ?? product.stock ?? 0);
     const unitLabel = primaryVariant
       ? (primaryVariant.packLabel || `${primaryVariant.packSize || 1} ${primaryVariant.unit || 'KG'}`)
-      : '1 KG';
+      : (product.packLabel || (product.unit ? String(product.unit) : '1 Piece'));
 
     const keywordsVal = product.searchKeywords && product.searchKeywords.trim() ? product.searchKeywords.trim() : null;
 

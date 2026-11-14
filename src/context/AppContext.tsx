@@ -44,6 +44,7 @@ import {
   getCustomerWalletBalanceFromLedger,
   fetchWalletTransactionsFromSupabase,
   saveCustomerProfileToSupabase,
+  saveAddressToSupabase,
   fetchCustomerProfileFromSupabase,
   saveProductToSupabase,
   fetchProductsFromSupabase,
@@ -53,6 +54,10 @@ import {
   saveProductRequestToSupabase,
   fetchProductRequestsFromSupabase,
   subscribeToProductRequests,
+  fetchCategoriesFromSupabase,
+  saveCategoryToSupabase,
+  deleteCategoryFromSupabase,
+  reorderCategoriesInSupabase,
 } from '../lib/supabase';
 
 import { reorderProductsInDb } from '../lib/product-service';
@@ -93,7 +98,6 @@ const BLANK_CUSTOMER: User = {
   name: '',
   phone: '',
   role: Role.CUSTOMER,
-  referralCode: '',
   walletBalance: 0,
   codOrderCount: 0,
   addresses: [],
@@ -149,6 +153,7 @@ interface AppContextType {
   settings: SystemSetting;
   updateSettings: (newSettings: Partial<SystemSetting>) => void;
   categories: Category[];
+  refreshCategories: () => Promise<void>;
   addCategory: (categoryData: {
     name: string;
     imageUrl?: string;
@@ -169,7 +174,7 @@ interface AppContextType {
   reorderProducts: (newProducts: Product[]) => Promise<{ success: boolean; error?: string }>;
   reorderVariants: (productId: string, newVariants: ProductVariant[]) => Promise<{ success: boolean; error?: string }>;
   cart: CartItem[];
-  addToCart: (product: Product, variant: ProductVariant, quantity?: number) => void;
+  addToCart: (product: Product, variant?: ProductVariant | null, quantity?: number) => void;
   updateCartQty: (variantId: string, quantity: number) => void;
   removeFromCart: (variantId: string) => void;
   clearCart: () => void;
@@ -220,6 +225,7 @@ interface AppContextType {
   ) => Promise<{ success: boolean; error?: string }> | { success: boolean; error?: string };
   userAddresses: Address[];
   addAddress: (address: Omit<Address, 'id' | 'userId'>) => void;
+  setDefaultAddress: (addressId: string) => void;
   selectedAddressId: string | null;
   setSelectedAddressId: (id: string) => void;
   isAuthModalOpen: boolean;
@@ -274,7 +280,64 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return INITIAL_SETTINGS;
   });
 
-  const [categories, setCategories] = useState<Category[]>([]);
+  const [categories, setCategories] = useState<Category[]>(() => {
+    try {
+      const saved = localStorage.getItem('om_categories');
+      if (saved) {
+        const parsed: Category[] = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          // Explicitly purge any legacy 15 default/sample categories (cat-1 to cat-15)
+          const DEFAULT_CAT_IDS = new Set([
+            'cat-1', 'cat-2', 'cat-3', 'cat-4', 'cat-5', 'cat-6', 'cat-7',
+            'cat-8', 'cat-9', 'cat-10', 'cat-11', 'cat-12', 'cat-13', 'cat-14', 'cat-15',
+          ]);
+          const userDefinedCategories = parsed.filter(
+            (c) => c && c.id && !DEFAULT_CAT_IDS.has(c.id) && !/^cat-(?:[1-9]|1[0-5])$/i.test(c.id)
+          );
+          if (userDefinedCategories.length > 0) {
+            return userDefinedCategories;
+          }
+        }
+      }
+      localStorage.removeItem('om_categories');
+    } catch {}
+    return [];
+  });
+
+  // Pull persisted categories from Supabase on application mount
+  useEffect(() => {
+    fetchCategoriesFromSupabase()
+      .then((cats) => {
+        if (Array.isArray(cats)) {
+          const DEFAULT_CAT_IDS = new Set([
+            'cat-1', 'cat-2', 'cat-3', 'cat-4', 'cat-5', 'cat-6', 'cat-7',
+            'cat-8', 'cat-9', 'cat-10', 'cat-11', 'cat-12', 'cat-13', 'cat-14', 'cat-15',
+          ]);
+          const userCats = cats.filter(
+            (c) => c && c.id && !DEFAULT_CAT_IDS.has(c.id) && !/^cat-(?:[1-9]|1[0-5])$/i.test(c.id)
+          );
+          setCategories(userCats);
+          if (userCats.length === 0) {
+            try {
+              localStorage.removeItem('om_categories');
+            } catch {}
+          }
+        }
+      })
+      .catch((err) => {
+        console.warn('Initial categories fetch notice:', err);
+      });
+  }, []);
+
+  useEffect(() => {
+    try {
+      if (categories && categories.length > 0) {
+        localStorage.setItem('om_categories', JSON.stringify(categories));
+      } else {
+        localStorage.removeItem('om_categories');
+      }
+    } catch {}
+  }, [categories]);
 
   const [products, setProducts] = useState<Product[]>(() => {
     const saved = localStorage.getItem('om_products');
@@ -412,7 +475,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           name: '',
           phone: session.phone,
           role: Role.CUSTOMER,
-          referralCode: `OM${session.phone.slice(-4)}`,
           walletBalance: 0,
           codOrderCount: 0,
           addresses: [],
@@ -1012,7 +1074,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         outstandingBalance: userDebt,
       };
       setCurrentUser(updatedUser);
-      setSelectedAddressId(matchingUser.addresses[0]?.id || null);
+      const defaultAddr = matchingUser.addresses.find((a) => a.isDefault) || matchingUser.addresses[0];
+      setSelectedAddressId(defaultAddr?.id || null);
     } else {
       const updatedUser = { ...currentUser, role };
       setCurrentUser(updatedUser);
@@ -1053,9 +1116,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!newProd.name || !newProd.name.trim()) {
       return { success: false, error: 'Product name is required.' };
     }
-    if (!newProd.variants || newProd.variants.length === 0) {
-      return { success: false, error: 'At least one variant is required.' };
-    }
 
     const id = `prod-${Date.now()}`;
     const product: Product = {
@@ -1063,11 +1123,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       brand: newProd.brand ? newProd.brand.trim() : '',
       id,
       createdAt: new Date().toISOString(),
-      variants: (newProd.variants || []).map((v, idx) => ({
-        ...v,
-        id: v.id || `var-${id}-${idx + 1}`,
-        productId: id,
-      })),
+      variants: Array.isArray(newProd.variants)
+        ? newProd.variants.map((v, idx) => ({
+            ...v,
+            id: v.id || `var-${id}-${idx + 1}`,
+            productId: id,
+          }))
+        : [],
     };
 
     // 2. Save product through Server Boundary /api/products
@@ -1215,7 +1277,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setProducts((prev) => prev.filter((p) => p.id !== id));
   };
 
-  // Category operations: safe local handlers (no category-service or DB dependencies)
+  // Category operations: Supabase persistent handlers
+  const refreshCategories = async (): Promise<void> => {
+    try {
+      const fetched = await fetchCategoriesFromSupabase();
+      if (Array.isArray(fetched)) {
+        setCategories(fetched);
+      }
+    } catch (e) {
+      console.warn('Refresh categories error:', e);
+    }
+  };
+
   const addCategory = async (categoryData: {
     name: string;
     imageUrl?: string;
@@ -1230,6 +1303,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       imageUrl: categoryData.imageUrl ? categoryData.imageUrl.trim() : '',
       displayOrder: categories.length + 1,
     };
+
+    if (isSupabaseConfigured) {
+      const res = await saveCategoryToSupabase(newCategory);
+      if (res.success && res.category) {
+        setCategories((prev) => [...prev, res.category!]);
+        return res;
+      }
+    }
     setCategories((prev) => [...prev, newCategory]);
     return { success: true, category: newCategory };
   };
@@ -1247,12 +1328,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       name: updates.name !== undefined ? updates.name.trim() : existing.name,
       imageUrl: updates.imageUrl !== undefined ? updates.imageUrl.trim() : existing.imageUrl,
     };
+
+    if (isSupabaseConfigured) {
+      const res = await saveCategoryToSupabase(updated);
+      if (res.success && res.category) {
+        setCategories((prev) => prev.map((c) => (c.id === id ? res.category! : c)));
+        return res;
+      }
+    }
     setCategories((prev) => prev.map((c) => (c.id === id ? updated : c)));
     return { success: true, category: updated };
   };
 
   const deleteCategory = async (id: string): Promise<{ success: boolean; error?: string }> => {
+    if (isSupabaseConfigured) {
+      const res = await deleteCategoryFromSupabase(id);
+      if (!res.success) {
+        return res;
+      }
+    }
     setCategories((prev) => prev.filter((c) => c.id !== id));
+    // Clear category reference on local products if any
+    setProducts((prev) =>
+      prev.map((p) => (p.categoryId === id ? { ...p, categoryId: '' } : p))
+    );
     return { success: true };
   };
 
@@ -1264,6 +1363,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       displayOrder: idx + 1,
     }));
     setCategories(updatedList);
+    if (isSupabaseConfigured) {
+      return await reorderCategoriesInSupabase(updatedList);
+    }
     return { success: true };
   };
 
@@ -1302,20 +1404,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Cart operations (scoped to active customer)
-  const addToCart = (product: Product, variant: ProductVariant, quantity = 1) => {
+  const addToCart = (product: Product, variant?: ProductVariant | null, quantity = 1) => {
     setCart((prev) => {
-      const existingIndex = prev.findIndex((item) => item.variantId === variant.id);
+      const existingIndex = prev.findIndex((item) =>
+        variant ? item.variantId === variant.id : !item.variantId && item.productId === product.id
+      );
+      const maxLimit = variant ? variant.maxOrderLimit : (product.maxOrderLimit || 20);
+      const stock = variant ? variant.stockQuantity : Number(product.stockQuantity ?? product.stock ?? 0);
+
       let updated: CartItem[];
       if (existingIndex > -1) {
         const existing = prev[existingIndex];
         const newQty = Math.min(
-          variant.maxOrderLimit,
-          Math.min(variant.stockQuantity, existing.quantity + quantity)
+          maxLimit,
+          Math.min(stock, existing.quantity + quantity)
         );
         updated = [...prev];
         updated[existingIndex] = { ...existing, quantity: newQty };
       } else {
-        updated = [...prev, { productId: product.id, product, variantId: variant.id, variant, quantity }];
+        const initialQty = Math.min(maxLimit, Math.min(stock, quantity));
+        updated = [
+          ...prev,
+          {
+            productId: product.id,
+            product,
+            variantId: variant?.id || null,
+            variant: variant || null,
+            quantity: Math.max(1, initialQty),
+          },
+        ];
       }
       if (currentUser?.phone) {
         saveCustomerCart(currentUser.phone, updated);
@@ -1324,18 +1441,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
-  const updateCartQty = (variantId: string, quantity: number) => {
+  const updateCartQty = (itemKey: string, quantity: number) => {
     if (quantity <= 0) {
-      removeFromCart(variantId);
+      removeFromCart(itemKey);
       return;
     }
     setCart((prev) => {
       const updated = prev.map((item) => {
-        if (item.variantId === variantId) {
-          const clamped = Math.min(
-            item.variant.maxOrderLimit,
-            Math.min(item.variant.stockQuantity, quantity)
-          );
+        const isMatch = item.variantId === itemKey || (!item.variantId && item.productId === itemKey);
+        if (isMatch) {
+          const maxLimit = item.variant ? item.variant.maxOrderLimit : (item.product.maxOrderLimit || 20);
+          const stock = item.variant ? item.variant.stockQuantity : Number(item.product.stockQuantity ?? item.product.stock ?? 0);
+          const clamped = Math.min(maxLimit, Math.min(stock, quantity));
           return { ...item, quantity: clamped };
         }
         return item;
@@ -1347,9 +1464,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
-  const removeFromCart = (variantId: string) => {
+  const removeFromCart = (itemKey: string) => {
     setCart((prev) => {
-      const updated = prev.filter((item) => item.variantId !== variantId);
+      const updated = prev.filter((item) => !(item.variantId === itemKey || (!item.variantId && item.productId === itemKey)));
       if (currentUser?.phone) {
         saveCustomerCart(currentUser.phone, updated);
       }
@@ -1377,13 +1494,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           return {
             productId: match.product.id,
             product: match.product,
-            variantId: match.variant.id,
-            variant: match.variant,
+            variantId: match.variant?.id || null,
+            variant: match.variant || null,
+            quantity: Number(item.quantity) || 1,
+          };
+        }
+        if (!item.variantId) {
+          const fallbackProduct: Product = {
+            id: item.productId || `prod-${item.id}`,
+            name: item.productName || 'Grocery Item',
+            brand: item.brand || '',
+            description: '',
+            categoryId: 'ALL',
+            price: item.unitPrice || item.price,
+            baseSellingPrice: item.unitPrice || item.price,
+            mrp: item.unitPrice || item.price,
+            stock: 999,
+            stockQuantity: 999,
+            unit: (item.unit as any) || 'PACK',
+            packSize: item.packSize || 1,
+            packLabel: item.variantName || 'Standard',
+            isDiscountExcluded: Boolean(item.isDiscountExcluded),
+            variants: [],
+            createdAt: new Date().toISOString(),
+          };
+          return {
+            productId: fallbackProduct.id,
+            product: fallbackProduct,
+            variantId: null,
+            variant: null,
             quantity: Number(item.quantity) || 1,
           };
         }
         const fallbackVariant: ProductVariant = {
-          id: item.variantId || `var-${item.id}`,
+          id: item.variantId,
           productId: item.productId || `prod-${item.id}`,
           unit: (item.unit as any) || 'PACK',
           packSize: item.packSize || 1,
@@ -1446,21 +1590,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // 1. Build updated OrderItem[] from cart
     const updatedOrderItems: OrderItem[] = cart.map((item) => {
+      const baseSellingPrice = item.variant
+        ? item.variant.baseSellingPrice
+        : Number(item.product.baseSellingPrice ?? item.product.price ?? 0);
+      const tieredPrices = item.variant?.tieredPrices || item.product.tieredPrices || [];
       const unitPrice = getActiveUnitPrice(
-        item.variant.baseSellingPrice,
+        baseSellingPrice,
         item.quantity,
-        item.variant.tieredPrices || []
+        tieredPrices
       );
+      const variantName = item.variant
+        ? item.variant.packLabel
+        : (item.product.packLabel || (item.product.unit ? String(item.product.unit) : 'Standard'));
+      const unit = item.variant ? item.variant.unit : (item.product.unit || 'PIECE');
+      const packSize = item.variant ? item.variant.packSize : (item.product.packSize || 1);
+
       return {
-        id: `item-${Date.now()}-${item.variantId}`,
+        id: `item-${Date.now()}-${item.variantId || item.productId}`,
         orderId: currentOrder.id,
         productId: item.productId || item.product.id,
-        variantId: item.variantId,
-        variantName: item.variant.packLabel,
+        variantId: item.variantId || null,
+        variantName,
         productName: item.product.name,
         brand: item.product.brand,
-        unit: item.variant.unit,
-        packSize: item.variant.packSize,
+        unit,
+        packSize,
         quantity: item.quantity,
         unitPrice,
         price: unitPrice * item.quantity,
@@ -1477,12 +1631,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // Delivery fee
     const deliveryFee = subtotal >= settings.freeShippingMinAmount ? 0 : settings.baseDeliveryFee;
 
-    // COD charge if order was COD
+    // COD charge if order was COD (no count-based free-order rule)
     const isCod = currentOrder.paymentMethod === PaymentMethod.COD;
     const codCharge = isCod
       ? (currentOrder.codCharge !== undefined && currentOrder.codCharge > 0
           ? currentOrder.codCharge
-          : (currentUser.codOrderCount < 3 ? 0 : settings.codBaseCharge))
+          : Math.max(0, Number(settings.codBaseCharge) || 0))
       : 0;
 
     // Recalculate discount on the combined subtotal of all items in the new bill, including newly added items.
@@ -1558,8 +1712,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       if (isSupabaseConfigured) {
         stockResult.affectedProducts.forEach((p) => {
-          updateProductStockInSupabase(p.id, p.variants).catch(() => {});
-          saveProductToSupabase(p).catch((err) => {
+          updateProductStockInSupabase(p.id, p.variants, p).catch((err) => {
             console.warn('Background Supabase product stock adjust error:', err);
           });
         });
@@ -1614,7 +1767,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     editingOrder,
     cart,
     orders,
-    currentUser.codOrderCount,
     settings,
     products,
     isSupabaseConfigured,
@@ -1716,28 +1868,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
 
         const { product, variant } = match;
-        const availableStock = Number(variant.stockQuantity) || 0;
+        const availableStock = variant
+          ? Number(variant.stockQuantity) || 0
+          : Number(product.stockQuantity ?? product.stock ?? 0);
 
         // Skip product if out of stock
         if (availableStock <= 0) {
-          const packLabel = variant.packLabel ? ` (${variant.packLabel})` : '';
+          const packLabel = variant?.packLabel ? ` (${variant.packLabel})` : '';
           skippedItems.push(`${product.name}${packLabel}`);
           continue;
         }
 
         // Desired quantity from the past order
         const requestedQty = Math.max(1, Number(item.quantity) || 1);
-        const maxLimit =
-          variant.maxOrderLimit && variant.maxOrderLimit > 0
-            ? variant.maxOrderLimit
-            : availableStock;
+        const maxLimit = variant
+          ? (variant.maxOrderLimit && variant.maxOrderLimit > 0 ? variant.maxOrderLimit : availableStock)
+          : (product.maxOrderLimit && product.maxOrderLimit > 0 ? product.maxOrderLimit : availableStock);
         const finalQty = Math.min(requestedQty, availableStock, maxLimit);
 
         itemsForCart.push({
           productId: product.id,
           product,
-          variantId: variant.id,
-          variant,
+          variantId: variant?.id || null,
+          variant: variant || null,
           quantity: Math.max(1, finalQty),
         });
       }
@@ -1894,16 +2047,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Dynamic Checkout Breakdown calculation using the engine
   const checkoutBreakdown = useMemo(() => {
     const variantItems = cart.map((item) => ({
-      variantId: item.variantId,
+      variantId: item.variantId || null,
+      productId: item.productId,
       quantity: item.quantity,
-      baseSellingPrice: item.variant.baseSellingPrice,
+      baseSellingPrice: item.variant
+        ? item.variant.baseSellingPrice
+        : Number(item.product.baseSellingPrice ?? item.product.price ?? 0),
       isDiscountExcluded: item.product.isDiscountExcluded === true || (item.product.isDiscountExcluded as any) === 'true',
-      tieredPrices: item.variant.tieredPrices || [],
+      tieredPrices: item.variant?.tieredPrices || item.product.tieredPrices || [],
     }));
 
     return calculateCheckoutTotals(
       variantItems,
-      { codOrderCount: currentUser.codOrderCount },
+      {},
       {
         advancePaymentDiscountPct: settings.advancePaymentDiscountPct,
         codBaseCharge: settings.codBaseCharge,
@@ -1914,7 +2070,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       currentUser.walletBalance > 0 ? currentUser.walletBalance : 0,
       useWalletBalance
     );
-  }, [cart, currentUser.codOrderCount, settings, currentUser.walletBalance, useWalletBalance]);
+  }, [cart, settings, currentUser.walletBalance, useWalletBalance]);
 
   // Order Management
   const createOrder = async (data: {
@@ -2066,21 +2222,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       razorpayPaymentId: isAdvance ? `pay_${Date.now()}` : undefined,
       createdAt: new Date().toISOString(),
       items: cart.map((item) => {
+        const baseSellingPrice = item.variant
+          ? item.variant.baseSellingPrice
+          : Number(item.product.baseSellingPrice ?? item.product.price ?? 0);
+        const tieredPrices = item.variant?.tieredPrices || item.product.tieredPrices || [];
         const unitPrice = getActiveUnitPrice(
-          item.variant.baseSellingPrice,
+          baseSellingPrice,
           item.quantity,
-          item.variant.tieredPrices || []
+          tieredPrices
         );
+        const variantName = item.variant
+          ? item.variant.packLabel
+          : (item.product.packLabel || (item.product.unit ? String(item.product.unit) : 'Standard'));
+        const unit = item.variant ? item.variant.unit : (item.product.unit || 'PIECE');
+        const packSize = item.variant ? item.variant.packSize : (item.product.packSize || 1);
+
         return {
-          id: `item-${Date.now()}-${item.variantId}`,
+          id: `item-${Date.now()}-${item.variantId || item.productId}`,
           orderId,
           productId: item.productId || item.product.id,
-          variantId: item.variantId,
-          variantName: item.variant.packLabel,
+          variantId: item.variantId || null,
+          variantName,
           productName: item.product.name,
           brand: item.product.brand,
-          unit: item.variant.unit,
-          packSize: item.variant.packSize,
+          unit,
+          packSize,
           quantity: item.quantity,
           unitPrice,
           price: unitPrice * item.quantity,
@@ -2091,121 +2257,126 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       stockRestored: false,
     };
 
-    // Update orders
-    setOrders((prev) => [newOrder, ...prev]);
+    // 1. Authoritative Server-First Order Placement: Await server response
+    const saveResult = await saveOrderToSupabase(newOrder);
 
-    // Persist to Supabase if configured
-    if (isSupabaseConfigured) {
-      saveOrderToSupabase(newOrder).catch((err) => {
-        console.warn('Background Supabase order save error:', err);
-      });
+    if (!saveResult.success) {
+      const errorMsg = saveResult.error || 'Failed to place order on server. Please try again.';
+      console.error('Order creation rejected by server:', errorMsg);
+      // Cart remains untouched! Local state is NOT updated!
+      throw new Error(errorMsg);
     }
 
-    // Deduct only the amount actually used from the persistent wallet balance
-    if (walletUsed > 0) {
-      // Prevent duplicate wallet deductions if the payment/order operation is retried
-      const isAlreadyDebited = walletTransactions.some(
-        (tx) =>
-          (tx.orderId === newOrder.id || tx.orderNumber === newOrder.orderNumber) &&
-          tx.type === 'DEBIT'
-      );
+    // 2. Synchronize with server-authoritative order details
+    const serverOrder = saveResult.order;
+    const confirmedOrder: Order = {
+      ...newOrder,
+      id: serverOrder?.id || newOrder.id,
+      orderNumber: serverOrder?.orderNumber || newOrder.orderNumber,
+      subtotal: typeof serverOrder?.subtotal === 'number' ? serverOrder.subtotal : newOrder.subtotal,
+      discountAmount: typeof serverOrder?.discountAmount === 'number' ? serverOrder.discountAmount : newOrder.discountAmount,
+      deliveryFee: typeof serverOrder?.deliveryFee === 'number' ? serverOrder.deliveryFee : newOrder.deliveryFee,
+      codCharge: typeof serverOrder?.codCharge === 'number' ? serverOrder.codCharge : newOrder.codCharge,
+      finalAmount: typeof serverOrder?.finalAmount === 'number' ? serverOrder.finalAmount : newOrder.finalAmount,
+      walletAmountUsed: typeof serverOrder?.walletAmountUsed === 'number' ? serverOrder.walletAmountUsed : newOrder.walletAmountUsed,
+      totalPayable: typeof serverOrder?.totalPayable === 'number' ? serverOrder.totalPayable : newOrder.totalPayable,
+      paymentMethod: (serverOrder?.paymentMethod as PaymentMethod) || newOrder.paymentMethod,
+      items: Array.isArray(serverOrder?.items) && serverOrder.items.length > 0
+        ? serverOrder.items.map((it: any) => ({
+            id: it.id || `item-${Date.now()}-${it.variantId || it.productId}`,
+            orderId: serverOrder?.id || newOrder.id,
+            productId: it.productId,
+            variantId: it.variantId || null,
+            variantName: it.variantName || 'Standard',
+            productName: it.productName,
+            brand: it.brand,
+            unit: it.unit || 'PIECE',
+            packSize: it.packSize || 1,
+            quantity: it.quantity,
+            unitPrice: it.unitPrice,
+            price: it.price,
+            isDiscountExcluded: Boolean(it.isDiscountExcluded),
+          }))
+        : newOrder.items,
+    };
 
-      if (!isAlreadyDebited) {
-        const updatedCurrentUser: User = {
-          ...currentUser,
-          walletBalance: newWalletBalance,
-        };
+    // 3. Update orders state ONLY after successful server confirmation
+    setOrders((prev) => {
+      const next = [confirmedOrder, ...prev.filter((o) => o.id !== confirmedOrder.id)];
+      try {
+        localStorage.setItem('om_orders', JSON.stringify(next));
+      } catch {}
+      return next;
+    });
 
-        setCurrentUser(updatedCurrentUser);
-        localStorage.setItem('om_current_user', JSON.stringify(updatedCurrentUser));
+    // 4. Update wallet locally if wallet was used in the confirmed order
+    const actualWalletUsed = confirmedOrder.walletAmountUsed || 0;
+    if (actualWalletUsed > 0) {
+      const updatedWalletBalance = Math.max(0, currentActualWallet - actualWalletUsed);
+      const updatedCurrentUser: User = {
+        ...currentUser,
+        walletBalance: updatedWalletBalance,
+      };
 
-        const customerPhone = newOrder.userPhone || currentUser.phone;
-        if (customerPhone) {
-          const cleanPhone = customerPhone.replace(/\D/g, '').slice(-10);
-          localStorage.setItem(`om_profile_${cleanPhone}`, JSON.stringify(updatedCurrentUser));
-          const rawDigits = customerPhone.replace(/\D/g, '');
-          if (rawDigits && rawDigits !== cleanPhone) {
-            localStorage.setItem(`om_profile_${rawDigits}`, JSON.stringify(updatedCurrentUser));
-          }
-        }
+      setCurrentUser(updatedCurrentUser);
+      localStorage.setItem('om_current_user', JSON.stringify(updatedCurrentUser));
 
-        setUsers((prev) => {
-          const updated = prev.map((u) => {
-            const uClean = u.phone ? u.phone.replace(/\D/g, '').slice(-10) : '';
-            const targetClean = customerPhone ? customerPhone.replace(/\D/g, '').slice(-10) : '';
-            if (
-              u.id === newOrder.userId ||
-              u.id === currentUser.id ||
-              (targetClean && uClean === targetClean)
-            ) {
-              return {
-                ...u,
-                walletBalance: newWalletBalance,
-              };
-            }
-            return u;
-          });
-          localStorage.setItem('om_users', JSON.stringify(updated));
-          return updated;
-        });
-
-        const newWalletTx: WalletTransaction = {
-          id: `wtx-${Date.now()}`,
-          userId: newOrder.userId || currentUser.id,
-          userPhone: newOrder.userPhone || currentUser.phone,
-          orderId: newOrder.id,
-          orderNumber: newOrder.orderNumber,
-          type: 'DEBIT',
-          amount: walletUsed,
-          balanceAfter: newWalletBalance,
-          description: `Wallet Applied (Advance) for Order #${newOrder.orderNumber}`,
-          createdAt: new Date().toISOString(),
-        };
-
-        setWalletTransactions((prev) => {
-          const updated = [newWalletTx, ...prev];
-          localStorage.setItem('om_wallet_transactions', JSON.stringify(updated));
-          return updated;
-        });
-
-        // Persist debit to Supabase ledger and users table
-        if (isSupabaseConfigured) {
-          debitCustomerWalletInSupabase({
-            userId: newOrder.userId || currentUser.id,
-            customerPhone: newOrder.userPhone || currentUser.phone,
-            customerName: newOrder.userName || currentUser.name,
-            orderId: newOrder.id,
-            orderNumber: newOrder.orderNumber,
-            amount: walletUsed,
-            newWalletBalance,
-            description: `Wallet Applied (Advance) for Order #${newOrder.orderNumber}`,
-          })
-            .then(() => {
-              refreshCustomerWallet();
-            })
-            .catch((err) => {
-              console.warn('Background Supabase wallet debit error:', err);
-            });
+      const customerPhone = confirmedOrder.userPhone || currentUser.phone;
+      if (customerPhone) {
+        const cleanPhone = customerPhone.replace(/\D/g, '').slice(-10);
+        localStorage.setItem(`om_profile_${cleanPhone}`, JSON.stringify(updatedCurrentUser));
+        const rawDigits = customerPhone.replace(/\D/g, '');
+        if (rawDigits && rawDigits !== cleanPhone) {
+          localStorage.setItem(`om_profile_${rawDigits}`, JSON.stringify(updatedCurrentUser));
         }
       }
+
+      setUsers((prev) => {
+        const updated = prev.map((u) => {
+          const uClean = u.phone ? u.phone.replace(/\D/g, '').slice(-10) : '';
+          const targetClean = customerPhone ? customerPhone.replace(/\D/g, '').slice(-10) : '';
+          if (
+            u.id === confirmedOrder.userId ||
+            u.id === currentUser.id ||
+            (targetClean && uClean === targetClean)
+          ) {
+            return {
+              ...u,
+              walletBalance: updatedWalletBalance,
+            };
+          }
+          return u;
+        });
+        localStorage.setItem('om_users', JSON.stringify(updated));
+        return updated;
+      });
+
+      const newWalletTx: WalletTransaction = {
+        id: `wtx-${Date.now()}`,
+        userId: confirmedOrder.userId || currentUser.id,
+        userPhone: confirmedOrder.userPhone || currentUser.phone,
+        orderId: confirmedOrder.id,
+        orderNumber: confirmedOrder.orderNumber,
+        type: 'DEBIT',
+        amount: actualWalletUsed,
+        balanceAfter: updatedWalletBalance,
+        description: `Wallet Applied (Advance) for Order #${confirmedOrder.orderNumber}`,
+        createdAt: new Date().toISOString(),
+      };
+
+      setWalletTransactions((prev) => {
+        const updated = [newWalletTx, ...prev];
+        localStorage.setItem('om_wallet_transactions', JSON.stringify(updated));
+        return updated;
+      });
+
+      // Synchronize latest server-side wallet balance
+      refreshCustomerWallet();
     }
 
-    // Update user cod count if COD
-    if (data.paymentMethod === PaymentMethod.COD) {
-      setCurrentUser((prev) => ({
-        ...prev,
-        codOrderCount: prev.codOrderCount + 1,
-      }));
-      setUsers((prev) =>
-        prev.map((u) =>
-          u.id === currentUser.id ? { ...u, codOrderCount: u.codOrderCount + 1 } : u
-        )
-      );
-    }
-
-    // Do NOT deduct stock when order is Pending. Stock deduction occurs strictly upon acceptance.
+    // 5. Clear cart ONLY after verified order confirmation
     clearCart();
-    return newOrder;
+    return confirmedOrder;
   };
 
   const cancelOrder = (orderId: string, isShopkeeperOverride: boolean = false): boolean => {
@@ -2236,8 +2407,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       if (isSupabaseConfigured && affectedProducts.length > 0) {
         affectedProducts.forEach((p) => {
-          updateProductStockInSupabase(p.id, p.variants).catch(() => {});
-          saveProductToSupabase(p).catch((err) => {
+          updateProductStockInSupabase(p.id, p.variants, p).catch((err) => {
             console.warn('Background Supabase product stock restore error:', err);
           });
         });
@@ -2301,6 +2471,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const amountToCredit = isAlreadyRefunded ? 0 : Math.max(0, advancePaidAmount - alreadyRefundedAmount);
 
     let walletCreditSucceeded = isAlreadyRefunded;
+    let pendingRefundMeta: {
+      refundAmount: number;
+      refundDescription: string;
+      customerId?: string;
+      customerPhone?: string;
+      customerName?: string;
+    } | null = null;
 
     // Credit refundable amount to customer's Store Wallet
     if (advancePaidAmount > 0 && amountToCredit > 0) {
@@ -2371,7 +2548,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             name: target.userName || 'Customer',
             phone: customerPhone || cleanCustomerPhone,
             role: Role.CUSTOMER,
-            referralCode: `OM${cleanCustomerPhone.slice(-4)}`,
             walletBalance: newCustomerWalletBalance,
             codOrderCount: 0,
             createdAt: new Date().toISOString(),
@@ -2419,7 +2595,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         } catch {}
       }
 
-      // Record wallet credit ledger transaction
+      // Record wallet credit ledger transaction (deduplicated)
       const refundDescription =
         walletAmountUsed > 0 && onlineAdvancePayment > 0
           ? `Refund for Cancelled Order #${target.orderNumber} (₹${walletAmountUsed} wallet + ₹${onlineAdvancePayment} online advance)`
@@ -2427,10 +2603,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           ? `Refund for Cancelled Order #${target.orderNumber} (₹${walletAmountUsed} wallet used)`
           : `Refund for Cancelled Order #${target.orderNumber} (₹${onlineAdvancePayment} online advance)`;
 
+      const resolvedCustId = target.userId || (customerInUsers ? customerInUsers.id : (isCurrentCustomer ? currentUser.id : `user-${cleanCustomerPhone}`));
+      const resolvedCustPhone = customerPhone || (customerInUsers ? customerInUsers.phone : (isCurrentCustomer ? currentUser.phone : cleanCustomerPhone));
+
       const newWalletTx: WalletTransaction = {
         id: `wtx-${Date.now()}`,
-        userId: target.userId || (customerInUsers ? customerInUsers.id : (isCurrentCustomer ? currentUser.id : `user-${cleanCustomerPhone}`)),
-        userPhone: customerPhone || (customerInUsers ? customerInUsers.phone : (isCurrentCustomer ? currentUser.phone : cleanCustomerPhone)),
+        userId: resolvedCustId,
+        userPhone: resolvedCustPhone,
         orderId: target.id,
         orderNumber: target.orderNumber,
         type: 'CREDIT',
@@ -2441,15 +2620,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
 
       setWalletTransactions((prev) => {
+        const alreadyExists = prev.some(
+          (t) => t.type === 'CREDIT' && (t.orderId === target.id || t.orderNumber === target.orderNumber)
+        );
+        if (alreadyExists) return prev;
         const updated = [newWalletTx, ...prev];
         localStorage.setItem('om_wallet_transactions', JSON.stringify(updated));
         return updated;
       });
 
-      if (isSupabaseConfigured) {
+      pendingRefundMeta = {
+        refundAmount: amountToCredit,
+        refundDescription,
+        customerId: resolvedCustId,
+        customerPhone: resolvedCustPhone,
+        customerName: target.userName || (customerInUsers ? customerInUsers.name : 'Customer'),
+      };
+
+      if (isSupabaseConfigured && !isShopkeeperOverride) {
         creditCustomerWalletInSupabase({
-          userId: target.userId || (customerInUsers ? customerInUsers.id : (isCurrentCustomer ? currentUser.id : undefined)),
-          customerPhone: customerPhone || (customerInUsers ? customerInUsers.phone : (isCurrentCustomer ? currentUser.phone : cleanCustomerPhone)),
+          userId: resolvedCustId,
+          customerPhone: resolvedCustPhone,
           customerName: target.userName || (customerInUsers ? customerInUsers.name : 'Customer'),
           orderId: target.id,
           orderNumber: target.orderNumber,
@@ -2504,10 +2695,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           codCollected: target.codCollectedAmount || 0,
           prevOutstanding: target.previousOutstanding || 0,
           totalPayable: target.totalPayable !== undefined ? target.totalPayable : target.finalAmount,
+          paymentStatus: updatedPaymentStatus,
+          ...(isShopkeeperOverride && pendingRefundMeta ? pendingRefundMeta : {}),
         }
-      ).catch((err) => {
-        console.warn('Background Supabase cancel order error:', err);
-      });
+      )
+        .then((ok) => {
+          if (ok && isShopkeeperOverride && pendingRefundMeta) {
+            refreshCustomerWallet();
+          }
+        })
+        .catch((err) => {
+          console.warn('Background Supabase cancel order error:', err);
+        });
     }
 
     // Notify the shopkeeper/admin that the order was cancelled
@@ -2570,13 +2769,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       if (isSupabaseConfigured && affectedProducts.length > 0) {
         affectedProducts.forEach((p) => {
-          updateProductStockInSupabase(p.id, p.variants).catch(() => {});
-          saveProductToSupabase(p).catch((err) => {
+          updateProductStockInSupabase(p.id, p.variants, p).catch((err) => {
             console.warn('Background Supabase product stock deduction error:', err);
           });
         });
       }
     }
+
+    const deliveryTimestamp = newStatus === OrderStatus.DELIVERED ? (target.deliveredAt || new Date().toISOString()) : target.deliveredAt;
 
     setOrders((prev) =>
       prev.map((o) => {
@@ -2603,6 +2803,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           return {
             ...o,
             status: newStatus,
+            deliveredAt: isDelivered ? (o.deliveredAt || deliveryTimestamp) : o.deliveredAt,
             paymentStatus: updatedPaymentStatus,
             codCollectedAmount: updatedCodCollected,
             stockDeducted: isAcceptedOrProgressing ? true : o.stockDeducted,
@@ -2621,6 +2822,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         walletAmountUsed: target.walletAmountUsed,
         items: target.items,
         codCollected: target.codCollectedAmount || 0,
+        codCharge: target.codCharge || 0,
+        deliveredAt: deliveryTimestamp,
+        codLateFeeApplied: target.codLateFeeApplied,
+        codLateFeeAmount: target.codLateFeeAmount,
+        codLateFeeAppliedAt: target.codLateFeeAppliedAt,
         prevOutstanding: target.previousOutstanding || 0,
         totalPayable: target.totalPayable !== undefined ? target.totalPayable : target.finalAmount,
       }).catch((err) => {
@@ -2731,24 +2937,62 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { success: true };
   };
 
-  // Address management
+  // Address management (supports multiple delivery addresses + persistent default address)
   const userAddresses = currentUser.addresses || [];
 
+  const persistUserAddressesLocally = (updatedUser: User) => {
+    const cleanPhone = updatedUser.phone ? updatedUser.phone.replace(/\D/g, '').slice(-10) : '';
+    try {
+      localStorage.setItem('om_current_user', JSON.stringify(updatedUser));
+      if (cleanPhone) {
+        localStorage.setItem(`om_profile_${cleanPhone}`, JSON.stringify(updatedUser));
+      }
+      setUsers((prev) => {
+        const exists = prev.some((u) => u.id === updatedUser.id || (cleanPhone && u.phone?.replace(/\D/g, '').slice(-10) === cleanPhone));
+        const next = exists
+          ? prev.map((u) => (u.id === updatedUser.id || (cleanPhone && u.phone?.replace(/\D/g, '').slice(-10) === cleanPhone) ? updatedUser : u))
+          : [...prev, updatedUser];
+        localStorage.setItem('om_users', JSON.stringify(next));
+        return next;
+      });
+    } catch {}
+  };
+
   const addAddress = (addressData: Omit<Address, 'id' | 'userId'>) => {
+    const shouldBeDefault = Boolean(addressData.isDefault) || userAddresses.length === 0;
     const newAddress: Address = {
       ...addressData,
       id: `addr-${Date.now()}`,
       userId: currentUser.id,
-      isDefault: userAddresses.length === 0,
+      isDefault: shouldBeDefault,
     };
-    const updatedAddresses = [...userAddresses, newAddress];
-    const updatedUser = { ...currentUser, addresses: updatedAddresses };
+    const updatedAddresses = [
+      ...userAddresses.map((a) => (shouldBeDefault ? { ...a, isDefault: false } : a)),
+      newAddress,
+    ];
+    const updatedUser: User = { ...currentUser, addresses: updatedAddresses };
     setCurrentUser(updatedUser);
     setSelectedAddressId(newAddress.id);
-    setUsers((prev) => prev.map((u) => (u.id === currentUser.id ? updatedUser : u)));
+    persistUserAddressesLocally(updatedUser);
+
+    if (isSupabaseConfigured) {
+      saveAddressToSupabase(newAddress).catch(() => {});
+    }
   };
 
-  // Customer profile save (Rule 1, 2, 6, 7, 8)
+  const setDefaultAddress = (addressId: string) => {
+    if (!userAddresses.some((a) => a.id === addressId)) return;
+    const updatedAddresses = userAddresses.map((a) => ({
+      ...a,
+      isDefault: a.id === addressId,
+    }));
+    const updatedUser: User = { ...currentUser, addresses: updatedAddresses };
+    setCurrentUser(updatedUser);
+    setSelectedAddressId(addressId);
+    persistUserAddressesLocally(updatedUser);
+  };
+
+  // Customer profile save (Rule 1, 2, 6, 7, 8 — preserves additional delivery addresses)
   const saveCustomerProfile = async (data: {
     name: string;
     fullAddress: string;
@@ -2756,11 +3000,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     pincode?: string;
   }): Promise<void> => {
     // Sourced strictly from authenticated customer record (Rule 1 & 2)
-    const cleanPhone = currentUser.phone.replace(/\D/g, '');
+    const cleanPhone = currentUser.phone.replace(/\D/g, '').slice(-10) || currentUser.phone.replace(/\D/g, '');
     const targetUserId = currentUser.id || `user-${cleanPhone}`;
-    const targetAddrId = currentUser.addresses[0]?.id || `addr-${targetUserId}-1`;
+    const existingDefault = currentUser.addresses.find((a) => a.isDefault) || currentUser.addresses[0];
+    const targetAddrId = existingDefault?.id || `addr-${targetUserId}-1`;
 
-    const updatedAddress: Address = {
+    const updatedDefaultAddress: Address = {
       id: targetAddrId,
       userId: targetUserId,
       fullAddress: data.fullAddress.trim(),
@@ -2769,28 +3014,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       isDefault: true,
     };
 
+    const otherAddresses = (currentUser.addresses || [])
+      .filter((a) => a.id !== targetAddrId)
+      .map((a) => ({ ...a, isDefault: false }));
+
     const updatedUser: User = {
       ...currentUser,
       id: targetUserId,
       name: data.name.trim(),
       phone: cleanPhone, // Guaranteed not replaced (Rule 2)
       role: Role.CUSTOMER,
-      addresses: [updatedAddress],
+      addresses: [updatedDefaultAddress, ...otherAddresses],
       isDatabaseVerified: isSupabaseConfigured,
     };
 
     // 1. Update state
     setCurrentUser(updatedUser);
-    setSelectedAddressId(updatedAddress.id);
+    setSelectedAddressId(updatedDefaultAddress.id);
     setUsers((prev) => {
-      const exists = prev.some((u) => u.phone === cleanPhone || u.id === targetUserId);
-      if (exists) {
-        return prev.map((u) => (u.phone === cleanPhone || u.id === targetUserId ? updatedUser : u));
-      }
-      return [...prev, updatedUser];
+      const exists = prev.some((u) => u.phone?.replace(/\D/g, '').slice(-10) === cleanPhone || u.id === targetUserId);
+      const next = exists
+        ? prev.map((u) => (u.phone?.replace(/\D/g, '').slice(-10) === cleanPhone || u.id === targetUserId ? updatedUser : u))
+        : [...prev, updatedUser];
+      try {
+        localStorage.setItem('om_users', JSON.stringify(next));
+      } catch {}
+      return next;
     });
 
     // 2. Rule 5 & 8: Save to customer-isolated localStorage key
+    localStorage.setItem('om_current_user', JSON.stringify(updatedUser));
     localStorage.setItem(`om_profile_${cleanPhone}`, JSON.stringify(updatedUser));
     localStorage.setItem(
       'om_customer_session',
@@ -3025,7 +3278,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         name: resolvedUser?.name || name?.trim() || '',
         phone: cleanPhone,
         role: Role.CUSTOMER,
-        referralCode: resolvedUser?.referralCode || `OM${cleanPhone.slice(-4)}`,
         walletBalance: resolvedWalletBalance >= 0 ? resolvedWalletBalance : 0,
         outstandingBalance: userDebt,
         codOrderCount: resolvedUser?.codOrderCount || 0,
@@ -3036,7 +3288,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       setCurrentUser(finalUser);
       setActiveRoleState(Role.CUSTOMER);
-      setSelectedAddressId(finalUser.addresses[0]?.id || null);
+      const defaultAddr = finalUser.addresses.find((a) => a.isDefault) || finalUser.addresses[0];
+      setSelectedAddressId(defaultAddr?.id || null);
       setIsAuthModalOpen(false);
 
       const customerSavedCart = loadCustomerCart(cleanPhone);
@@ -3095,7 +3348,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       name: name?.trim() || '',
       phone: cleanPhone,
       role: Role.CUSTOMER,
-      referralCode: `OM${cleanPhone.length >= 4 ? cleanPhone.slice(-4) : '2026'}`,
       walletBalance: initialNewWalletBalance,
       codOrderCount: 0,
       addresses: [], // Strictly blank for new customers!
@@ -3150,6 +3402,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         settings,
         updateSettings,
         categories,
+        refreshCategories,
         addCategory,
         updateCategory,
         deleteCategory,
@@ -3187,6 +3440,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         recordCodCollection,
         userAddresses,
         addAddress,
+        setDefaultAddress,
         selectedAddressId,
         setSelectedAddressId,
         isAuthModalOpen,

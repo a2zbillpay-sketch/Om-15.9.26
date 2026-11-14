@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { verifyAdminSession } from './auth/_verify.js';
+import { enforceOverdueCodLateFees } from './_codLateFee.js';
 
 interface CodTransactionAllocation {
   orderId: string;
@@ -184,6 +185,12 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
     try {
       const phoneFilter = normalizePhone(url.searchParams.get('phone'));
 
+      // Enforce next-calendar-day COD late fee (from store_settings) on unpaid delivered COD orders before returning state
+      const enfGet = await enforceOverdueCodLateFees(supabase, phoneFilter ? { phone: phoneFilter } : undefined);
+      if (enfGet.errors.length > 0) {
+        console.error('COD late fee enforcement errors in /api/cod-collections GET:', enfGet.errors);
+      }
+
       // 1. Fetch COD ledger records from Supabase
       let ledgerQuery = supabase
         .from('ledger')
@@ -356,8 +363,19 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
         const cleanPhone = normalizePhone(customerPhone);
         const cleanCollected = Math.max(0, Math.round(Number(collectedAmount) * 100) / 100);
 
+        // Enforce overdue COD late fees (from store_settings) first (does NOT apply on delivery calendar day)
+        if (cleanPhone) {
+          const enf = await enforceOverdueCodLateFees(supabase, { phone: cleanPhone });
+          if (enf.errors.length > 0) {
+            return sendJson(res, 500, {
+              success: false,
+              error: `Failed to verify COD late fee before collection: ${enf.errors.join('; ')}`,
+            });
+          }
+        }
+
         // 1. Verify target order exists in Supabase. Never recreate deleted test data!
-        const { data: targetOrderRow, error: targetOrderErr } = await supabase
+        let { data: targetOrderRow, error: targetOrderErr } = await supabase
           .from('orders')
           .select('*')
           .eq('id', orderId)
@@ -375,6 +393,28 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
             success: false,
             error: `Order ${orderId} does not exist in Supabase or was deleted.`,
           });
+        }
+
+        // If phone wasn't passed in payload, run enforcement for targetOrderRow's phone and reload if updated
+        const targetRowPhone = normalizePhone(targetOrderRow.customer_phone);
+        if (!cleanPhone && targetRowPhone) {
+          const enf = await enforceOverdueCodLateFees(supabase, { phone: targetRowPhone });
+          if (enf.errors.length > 0) {
+            return sendJson(res, 500, {
+              success: false,
+              error: `Failed to verify COD late fee before collection: ${enf.errors.join('; ')}`,
+            });
+          }
+          if (enf.updatedOrderIds.includes(orderId)) {
+            const { data: refreshedOrderRow } = await supabase
+              .from('orders')
+              .select('*')
+              .eq('id', orderId)
+              .maybeSingle();
+            if (refreshedOrderRow) {
+              targetOrderRow = refreshedOrderRow;
+            }
+          }
         }
 
         const targetInitialUpdatedAt = targetOrderRow.updated_at;
@@ -642,11 +682,15 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
       const targetUpd = updatedOrdersMap[orderId];
       if (targetUpd) {
         const isPaid = targetUpd.paymentStatus === 'RECEIVED';
+        const nowISO = new Date().toISOString();
         const mergedMeta = {
           ...(targetUpd.existingMeta || {}),
           codCollected: targetUpd.codCollectedAmount,
           prevOutstanding: targetUpd.previousOutstanding || 0,
           totalPayable: targetUpd.finalAmount || 0,
+          ...(targetUpd.status === 'DELIVERED' && !targetUpd.existingMeta?.deliveredAt
+            ? { deliveredAt: nowISO }
+            : {}),
         };
         const metaString = JSON.stringify(mergedMeta);
         const orderNotes = `Order #${targetUpd.orderNumber || orderId.slice(0, 8)} | COD_META:${metaString}`;

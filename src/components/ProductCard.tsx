@@ -13,8 +13,9 @@ interface ProductCardProps {
 
 export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
   const { cart, addToCart, updateCartQty, settings, requestProduct, currentUser } = useApp();
+  const hasVariants = Boolean(product.variants && product.variants.length > 0);
   const [selectedVariantId, setSelectedVariantId] = useState<string>(
-    product.variants[0]?.id || ''
+    product.variants?.[0]?.id || ''
   );
   const [isZoomOpen, setIsZoomOpen] = useState(false);
   const [isRequestModalOpen, setIsRequestModalOpen] = useState(false);
@@ -25,37 +26,60 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
   const isExcluded =
     product.isDiscountExcluded === true || (product.isDiscountExcluded as any) === 'true';
 
-  const currentVariant =
-    product.variants.find((v) => v.id === selectedVariantId) || product.variants[0];
+  const currentVariant = hasVariants
+    ? product.variants.find((v) => v.id === selectedVariantId) || product.variants[0]
+    : undefined;
 
-  // Find if variant is currently in cart
-  const cartItem = cart.find((item) => item.variantId === currentVariant?.id);
+  const basePrice = currentVariant
+    ? currentVariant.baseSellingPrice
+    : Number(product.baseSellingPrice ?? product.price ?? 0);
+  const mrp = currentVariant
+    ? currentVariant.mrp
+    : Number(product.mrp ?? product.price ?? 0);
+  const stock = currentVariant
+    ? currentVariant.stockQuantity
+    : Number(product.stockQuantity ?? product.stock ?? 0);
+  const maxOrderLimit = currentVariant
+    ? currentVariant.maxOrderLimit
+    : Number(product.maxOrderLimit || 20);
+  const unit = currentVariant
+    ? currentVariant.unit
+    : (product.unit || 'PIECE');
+  const packLabel = currentVariant
+    ? formatVariantPack(currentVariant)
+    : (product.packLabel || (product.unit ? String(product.unit) : 'Standard Pack'));
+  const tieredPrices = currentVariant
+    ? (currentVariant.tieredPrices || [])
+    : (product.tieredPrices || []);
+
+  // Find if item is currently in cart
+  const cartItem = cart.find((item) =>
+    currentVariant ? item.variantId === currentVariant.id : !item.variantId && item.productId === product.id
+  );
   const cartQuantity = cartItem ? cartItem.quantity : 0;
 
-  if (!currentVariant) return null;
-
   const currentPrice = getActiveUnitPrice(
-    currentVariant.baseSellingPrice,
+    basePrice,
     cartQuantity > 0 ? cartQuantity : 1,
-    currentVariant.tieredPrices || []
+    tieredPrices
   );
 
-  const discountPercent = Math.round(
-    ((currentVariant.mrp - currentPrice) / currentVariant.mrp) * 100
-  );
+  const discountPercent = mrp > currentPrice
+    ? Math.round(((mrp - currentPrice) / mrp) * 100)
+    : 0;
 
   const handleAdd = () => {
-    addToCart(product, currentVariant, 1);
+    addToCart(product, currentVariant || null, 1);
   };
 
   const handleIncrement = () => {
-    if (cartQuantity < Math.min(currentVariant.stockQuantity, currentVariant.maxOrderLimit)) {
-      updateCartQty(currentVariant.id, cartQuantity + 1);
+    if (cartQuantity < Math.min(stock, maxOrderLimit)) {
+      updateCartQty(currentVariant?.id || product.id, cartQuantity + 1);
     }
   };
 
   const handleDecrement = () => {
-    updateCartQty(currentVariant.id, cartQuantity - 1);
+    updateCartQty(currentVariant?.id || product.id, cartQuantity - 1);
   };
 
   const handleRequestProduct = () => {
@@ -63,12 +87,12 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
     setIsRequestModalOpen(true);
   };
 
-  const isOutOfStock =
-    Number(currentVariant?.stockQuantity ?? 0) <= 0 ||
-    ((product as any).stock !== undefined &&
-      Number((product as any).stock) <= 0 &&
-      (!product.variants || product.variants.length === 0 || product.variants.every((v) => Number(v.stockQuantity || 0) <= 0))) ||
-    (!product.variants || product.variants.length === 0 || product.variants.every((v) => Number(v.stockQuantity || 0) <= 0));
+  const isOutOfStock = stock <= 0;
+
+  const displayImageUrl =
+    (currentVariant?.imageUrl && currentVariant.imageUrl.trim()) ||
+    (product.imageUrl && product.imageUrl.trim()) ||
+    '';
 
   return (
     <div
@@ -106,28 +130,28 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
           {/* Top-Left: Product Image (exact same size) */}
           <div
             onClick={() => {
-              if (product.imageUrl && product.imageUrl.trim()) {
+              if (displayImageUrl) {
                 setIsZoomOpen(true);
               }
             }}
             onKeyDown={(e) => {
-              if ((e.key === 'Enter' || e.key === ' ') && product.imageUrl && product.imageUrl.trim()) {
+              if ((e.key === 'Enter' || e.key === ' ') && displayImageUrl) {
                 e.preventDefault();
                 setIsZoomOpen(true);
               }
             }}
-            role={product.imageUrl && product.imageUrl.trim() ? 'button' : undefined}
-            tabIndex={product.imageUrl && product.imageUrl.trim() ? 0 : undefined}
-            aria-label={product.imageUrl && product.imageUrl.trim() ? `Zoom photo for ${product.name}` : undefined}
-            title={product.imageUrl && product.imageUrl.trim() ? 'Tap to view full-size photo' : undefined}
+            role={displayImageUrl ? 'button' : undefined}
+            tabIndex={displayImageUrl ? 0 : undefined}
+            aria-label={displayImageUrl ? `Zoom photo for ${product.name}` : undefined}
+            title={displayImageUrl ? 'Tap to view full-size photo' : undefined}
             className={`relative w-[120px] sm:w-[130px] aspect-square max-w-[130px] max-h-[130px] shrink-0 rounded-xl bg-gray-50 border border-gray-200 overflow-hidden flex items-center justify-center shadow-xs group/img ${
-              product.imageUrl && product.imageUrl.trim() ? 'cursor-pointer hover:border-[#0F2C59]/40 hover:shadow-sm' : ''
+              displayImageUrl ? 'cursor-pointer hover:border-[#0F2C59]/40 hover:shadow-sm' : ''
             }`}
           >
-            {product.imageUrl && product.imageUrl.trim() ? (
+            {displayImageUrl ? (
               <>
                 <img
-                  src={product.imageUrl}
+                  src={displayImageUrl}
                   alt={product.name}
                   className="w-full h-full object-contain p-1 group-hover/img:scale-105 transition-transform duration-300"
                   loading="lazy"
@@ -169,7 +193,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
           </p>
 
           {/* Variant Selector Pills */}
-          {product.variants.length > 1 && (
+          {hasVariants && product.variants.length > 1 && (
             <div className="mt-3">
               <span className="text-[10px] font-bold text-gray-500 block mb-1">Select Pack Size:</span>
               <div className="flex flex-wrap gap-1.5">
@@ -181,7 +205,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
                       setHasRequested(false);
                     }}
                     className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition border ${
-                      v.id === currentVariant.id
+                      v.id === currentVariant?.id
                         ? 'bg-[#0F2C59] text-white border-[#0F2C59]'
                         : 'bg-gray-50 text-gray-700 border-gray-200 hover:bg-gray-100'
                     }`}
@@ -194,20 +218,20 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
           )}
 
           {/* Wholesale Quantity Tier Pricing Slab */}
-          {currentVariant.tieredPrices && currentVariant.tieredPrices.length > 0 && (
+          {tieredPrices.length > 0 && (
             <div className="mt-3 bg-amber-50/70 border border-amber-200/80 rounded-xl p-2.5 text-[11px]">
               <div className="flex items-center gap-1 font-bold text-amber-900 mb-1">
                 <Layers size={12} className="text-[#FF6B00]" />
                 <span>Wholesale Quantity Slabs:</span>
               </div>
               <div className="space-y-0.5 text-gray-700">
-                {currentVariant.tieredPrices.map((tier) => (
+                {tieredPrices.map((tier) => (
                   <div key={tier.id} className="flex justify-between items-center text-[10px]">
                     <span className="text-gray-600">
-                      {tier.minQty}–{tier.maxQty} {currentVariant.unit}:
+                      {tier.minQty}–{tier.maxQty} {unit}:
                     </span>
                     <span className="font-bold text-emerald-800">
-                      ₹{tier.unitPrice} / {currentVariant.unit}
+                      ₹{tier.unitPrice} / {unit}
                     </span>
                   </div>
                 ))}
@@ -228,14 +252,14 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
                   <span className="text-base font-black text-[#0F2C59]">
                     ₹{Number.isInteger(currentPrice) ? currentPrice : currentPrice.toFixed(2)}
                   </span>
-                  {currentVariant.mrp > currentPrice && (
+                  {mrp > currentPrice && (
                     <span className="text-xs text-gray-400 line-through">
-                      ₹{Number.isInteger(currentVariant.mrp) ? currentVariant.mrp : currentVariant.mrp.toFixed(2)}
+                      ₹{Number.isInteger(mrp) ? mrp : mrp.toFixed(2)}
                     </span>
                   )}
                 </div>
                 <div className="text-[10px] text-gray-500 font-medium">
-                  Per {formatVariantPack(currentVariant)}
+                  Per {packLabel}
                 </div>
               </div>
 
@@ -274,7 +298,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
 
               {/* Book this Product Button */}
               <button
-                id={`request-product-${currentVariant.id}`}
+                id={`request-product-${currentVariant?.id || product.id}`}
                 type="button"
                 onClick={handleRequestProduct}
                 disabled={requestedQty <= 0}
@@ -302,14 +326,14 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
                 <span className="text-base font-black text-[#0F2C59]">
                   ₹{Number.isInteger(currentPrice) ? currentPrice : currentPrice.toFixed(2)}
                 </span>
-                {currentVariant.mrp > currentPrice && (
+                {mrp > currentPrice && (
                   <span className="text-xs text-gray-400 line-through">
-                    ₹{Number.isInteger(currentVariant.mrp) ? currentVariant.mrp : currentVariant.mrp.toFixed(2)}
+                    ₹{Number.isInteger(mrp) ? mrp : mrp.toFixed(2)}
                   </span>
                 )}
               </div>
               <div className="text-[10px] text-gray-500 font-medium">
-                Per {formatVariantPack(currentVariant)}
+                Per {packLabel}
               </div>
               {isExcluded ? (
                 <div className="text-[9px] font-bold text-amber-800 bg-amber-50 border border-amber-200/80 px-1.5 py-0.5 rounded mt-1 inline-block">
@@ -326,7 +350,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
             <div className="flex flex-col items-end gap-1.5 shrink-0">
               {cartQuantity === 0 ? (
                 <button
-                  id={`add-to-cart-${currentVariant.id}`}
+                  id={`add-to-cart-${currentVariant?.id || product.id}`}
                   onClick={handleAdd}
                   className="bg-[#0F2C59] hover:bg-[#153e7d] text-white font-extrabold text-xs px-3.5 py-2 rounded-xl shadow-sm transition flex items-center gap-1.5 hover:scale-105"
                 >
@@ -336,7 +360,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
               ) : (
                 <div className="flex items-center bg-[#0F2C59] text-white rounded-xl shadow-sm p-0.5">
                   <button
-                    id={`cart-decrease-${currentVariant.id}`}
+                    id={`cart-decrease-${currentVariant?.id || product.id}`}
                     onClick={handleDecrement}
                     className="w-7 h-7 flex items-center justify-center hover:bg-white/20 rounded-lg transition"
                     aria-label="Decrease quantity"
@@ -347,9 +371,9 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
                     {cartQuantity}
                   </span>
                   <button
-                    id={`cart-increase-${currentVariant.id}`}
+                    id={`cart-increase-${currentVariant?.id || product.id}`}
                     onClick={handleIncrement}
-                    disabled={cartQuantity >= Math.min(currentVariant.stockQuantity, currentVariant.maxOrderLimit)}
+                    disabled={cartQuantity >= Math.min(stock, maxOrderLimit)}
                     className="w-7 h-7 flex items-center justify-center hover:bg-white/20 rounded-lg transition disabled:opacity-40"
                     aria-label="Increase quantity"
                   >
@@ -376,11 +400,11 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
         )}
       </div>
 
-      {product.imageUrl && (
+      {displayImageUrl && (
         <ImageLightboxModal
           isOpen={isZoomOpen}
           onClose={() => setIsZoomOpen(false)}
-          imageUrl={product.imageUrl}
+          imageUrl={displayImageUrl}
           title={product.name}
           subtitle={product.brand}
         />
@@ -393,7 +417,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
         onAccept={(contact) => {
           const req = requestProduct({
             product,
-            variant: currentVariant,
+            variant: currentVariant || null,
             quantity: requestedQty,
             customerOverride: contact,
           });
@@ -405,7 +429,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
           setIsRequestModalOpen(false);
         }}
         product={product}
-        variant={currentVariant}
+        variant={currentVariant || null}
         quantity={requestedQty}
         requestDate={lastRequestDate}
         customerName={currentUser.name}

@@ -18,8 +18,11 @@ export const CustomerProfilePage: React.FC<CustomerProfilePageProps> = ({
 }) => {
   const { currentUser, saveCustomerProfile, logout, isSupabaseConfigured } = useApp();
 
-  // Primary delivery address record
-  const primaryAddress = currentUser.addresses && currentUser.addresses.length > 0 ? currentUser.addresses[0] : null;
+  // Primary / default delivery address record
+  const primaryAddress =
+    currentUser.addresses && currentUser.addresses.length > 0
+      ? currentUser.addresses.find((a) => a.isDefault) || currentUser.addresses[0]
+      : null;
 
   const [name, setName] = useState(currentUser.name || '');
   const [address, setAddress] = useState(primaryAddress?.fullAddress || '');
@@ -35,7 +38,10 @@ export const CustomerProfilePage: React.FC<CustomerProfilePageProps> = ({
   // Keep fields synchronized strictly if currentUser changes, without stale cross-user leaks
   useEffect(() => {
     setName(currentUser.name || '');
-    const currentPrimary = currentUser.addresses && currentUser.addresses.length > 0 ? currentUser.addresses[0] : null;
+    const currentPrimary =
+      currentUser.addresses && currentUser.addresses.length > 0
+        ? currentUser.addresses.find((a) => a.isDefault) || currentUser.addresses[0]
+        : null;
     setAddress(currentPrimary?.fullAddress || '');
     setLandmark(currentPrimary?.landmark || '');
     setPincode(currentPrimary?.pincode || '');

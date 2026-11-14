@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ShieldCheck, Truck, ArrowRight, Percent, CheckCircle2, Wallet } from 'lucide-react';
+import { ShieldCheck, Truck, ArrowRight, Percent, CheckCircle2, Wallet, AlertTriangle } from 'lucide-react';
 import { CheckoutBreakdown } from '../lib/engine/checkout-calculator';
 import { useApp } from '../context/AppContext';
 
@@ -22,12 +22,14 @@ export const DualPaymentModal: React.FC<DualPaymentModalProps> = ({
   const [selectedMethod, setSelectedMethod] = useState<'COD' | 'ADVANCE_ONLINE' | null>(null);
   const [isPlacingOrder, setIsPlacingOrder] = useState(false);
   const [showCodConfirmPopup, setShowCodConfirmPopup] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   useEffect(() => {
     if (isOpen) {
       setSelectedMethod(null);
       setIsPlacingOrder(false);
       setShowCodConfirmPopup(false);
+      setErrorMessage(null);
     }
   }, [isOpen]);
 
@@ -57,12 +59,14 @@ export const DualPaymentModal: React.FC<DualPaymentModalProps> = ({
   const handleFinalPlaceCodOrder = async () => {
     if (isPlacingOrder) return;
     setIsPlacingOrder(true);
+    setErrorMessage(null);
     try {
       await onSelectPayment('COD');
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to create COD order:', err);
       setIsPlacingOrder(false);
       setShowCodConfirmPopup(false);
+      setErrorMessage(err?.message || 'Failed to place COD order. Please try again.');
     }
   };
 
@@ -89,6 +93,16 @@ export const DualPaymentModal: React.FC<DualPaymentModalProps> = ({
           <h2 className="text-xl font-extrabold text-[#0F2C59]">Choose Payment Option</h2>
           <p className="text-xs text-gray-500 mt-1">Compare savings before placing your order</p>
         </div>
+
+        {errorMessage && (
+          <div
+            id="dual-payment-error-banner"
+            className="p-3 bg-red-50 border border-red-300 text-red-800 text-xs font-bold rounded-xl flex items-center gap-2 mb-4"
+          >
+            <AlertTriangle size={16} className="text-red-600 shrink-0" />
+            <span>{errorMessage}</span>
+          </div>
+        )}
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
           {/* Option 1: Advance Online */}
@@ -184,13 +198,12 @@ export const DualPaymentModal: React.FC<DualPaymentModalProps> = ({
                 </div>
               ) : null}
 
-              {/* Separate button: Directly open native UPI payment app */}
+              {/* Button: Select Advance Online Payment */}
               <button
                 id="select-advance-payment-btn"
                 type="button"
                 onClick={() => {
-                  const upiUri = `upi://pay?pa=9158518639@ptaxis&pn=${encodeURIComponent('OM DISTRIBUTORS')}&am=${remainingOnlinePayable}&cu=INR`;
-                  window.location.href = upiUri;
+                  onSelectPayment('ADVANCE_ONLINE');
                 }}
                 className="mt-3 w-full bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99] text-white py-2.5 px-4 rounded-xl font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-md transition cursor-pointer"
               >
@@ -242,9 +255,14 @@ export const DualPaymentModal: React.FC<DualPaymentModalProps> = ({
                   <span>₹{breakdown.subtotal}</span>
                 </div>
                 <div className="flex justify-between text-amber-800">
-                  <span>COD Charge:</span>
-                  <span>{breakdown.codCharge === 0 ? <span className="text-emerald-600 font-bold">FREE (First 3 Orders)</span> : `+₹${breakdown.codCharge}`}</span>
+                  <span>Initial COD Fee:</span>
+                  <span>{breakdown.codCharge === 0 ? <span className="text-gray-900 font-bold">₹0</span> : `+₹${breakdown.codCharge}`}</span>
                 </div>
+                {breakdown.codCharge === 0 && (
+                  <div className="text-[10px] text-amber-800/90 leading-snug">
+                    (डिलिव्हरीच्या दिवशी पेमेंटवर ₹0; पूर्ण पेमेंट न मिळाल्यास पुढील दिवसापासून ₹49 शुल्क एकदाच लागू होईल)
+                  </div>
+                )}
                 <div className="flex justify-between text-gray-600">
                   <span>Delivery Fee:</span>
                   <span>{breakdown.deliveryFee === 0 ? <span className="text-emerald-600 font-bold">FREE</span> : `₹${breakdown.deliveryFee}`}</span>
@@ -327,7 +345,7 @@ export const DualPaymentModal: React.FC<DualPaymentModalProps> = ({
                 </h3>
 
                 <p className="text-xs text-gray-700 leading-relaxed font-medium">
-                  तुमची ऑर्डर डिलिव्हरीच्या वेळी पूर्ण पेमेंट घेऊन दिली जाईल. कृपया पूर्ण रक्कम तयार ठेवा. पूर्ण पेमेंट न मिळाल्यास COD चार्जेस लागू होऊ शकतात.
+                  तुमची ऑर्डर डिलिव्हरीच्या वेळी पूर्ण पेमेंट घेऊन दिली जाईल. डिलिव्हरीच्या दिवशी पेमेंट केल्यास COD शुल्क ₹0 राहील; त्याच दिवशी पूर्ण पेमेंट न मिळाल्यास पुढील कॅलेंडर दिवसापासून ₹49 COD शुल्क एकदाच लागू होईल.
                 </p>
 
                 <p className="text-xs font-bold text-gray-900 pt-1">

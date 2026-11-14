@@ -193,6 +193,10 @@ CREATE TABLE IF NOT EXISTS public.orders (
   weight_kg NUMERIC(10, 2),
   razorpay_order_id TEXT,
   razorpay_payment_id TEXT,
+  delivered_at TIMESTAMPTZ,
+  cod_charge NUMERIC(10, 2) NOT NULL DEFAULT 0.00,
+  cod_late_fee_applied BOOLEAN NOT NULL DEFAULT false,
+  cod_late_fee_applied_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -217,6 +221,10 @@ ALTER TABLE public.orders
   ADD COLUMN IF NOT EXISTS weight_kg NUMERIC(10, 2),
   ADD COLUMN IF NOT EXISTS razorpay_order_id TEXT,
   ADD COLUMN IF NOT EXISTS razorpay_payment_id TEXT,
+  ADD COLUMN IF NOT EXISTS delivered_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS cod_charge NUMERIC(10, 2) DEFAULT 0.00,
+  ADD COLUMN IF NOT EXISTS cod_late_fee_applied BOOLEAN DEFAULT false,
+  ADD COLUMN IF NOT EXISTS cod_late_fee_applied_at TIMESTAMPTZ,
   ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT now(),
   ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now();
 
@@ -316,10 +324,9 @@ CREATE TABLE IF NOT EXISTS public.store_settings (
   secondary_color_hex TEXT DEFAULT '#D4AF37',
   accent_color_hex TEXT DEFAULT '#FF6B00',
   advance_payment_discount_pct NUMERIC(5, 2) NOT NULL DEFAULT 5.00,
-  cod_base_charge NUMERIC(10, 2) NOT NULL DEFAULT 49.00,
+  cod_base_charge NUMERIC(10, 2) NOT NULL DEFAULT 0.00,
   free_shipping_min_amount NUMERIC(10, 2) NOT NULL DEFAULT 249.00,
   base_delivery_fee NUMERIC(10, 2) NOT NULL DEFAULT 11.00,
-  referral_reward_amount NUMERIC(10, 2) NOT NULL DEFAULT 0.00,
   low_stock_threshold NUMERIC(10, 2) NOT NULL DEFAULT 10.00,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -332,13 +339,16 @@ ALTER TABLE public.store_settings
   ADD COLUMN IF NOT EXISTS secondary_color_hex TEXT DEFAULT '#D4AF37',
   ADD COLUMN IF NOT EXISTS accent_color_hex TEXT DEFAULT '#FF6B00',
   ADD COLUMN IF NOT EXISTS advance_payment_discount_pct NUMERIC(5, 2) DEFAULT 5.00,
-  ADD COLUMN IF NOT EXISTS cod_base_charge NUMERIC(10, 2) DEFAULT 49.00,
+  ADD COLUMN IF NOT EXISTS cod_base_charge NUMERIC(10, 2) DEFAULT 0.00,
   ADD COLUMN IF NOT EXISTS free_shipping_min_amount NUMERIC(10, 2) DEFAULT 249.00,
   ADD COLUMN IF NOT EXISTS base_delivery_fee NUMERIC(10, 2) DEFAULT 11.00,
-  ADD COLUMN IF NOT EXISTS referral_reward_amount NUMERIC(10, 2) DEFAULT 0.00,
   ADD COLUMN IF NOT EXISTS low_stock_threshold NUMERIC(10, 2) DEFAULT 10.00,
   ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT now(),
   ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now();
+
+-- Drop legacy referral_reward_amount column if present on existing databases
+ALTER TABLE public.store_settings
+  DROP COLUMN IF EXISTS referral_reward_amount;
 
 -- 2.12 Legacy System Settings Mirror Table (for backward compatibility)
 CREATE TABLE IF NOT EXISTS public.system_settings (
@@ -349,10 +359,9 @@ CREATE TABLE IF NOT EXISTS public.system_settings (
   secondary_color_hex TEXT DEFAULT '#D4AF37',
   accent_color_hex TEXT DEFAULT '#FF6B00',
   advance_payment_discount_pct NUMERIC(5, 2) NOT NULL DEFAULT 5.00,
-  cod_base_charge NUMERIC(10, 2) NOT NULL DEFAULT 49.00,
+  cod_base_charge NUMERIC(10, 2) NOT NULL DEFAULT 0.00,
   free_shipping_min_amount NUMERIC(10, 2) NOT NULL DEFAULT 249.00,
   base_delivery_fee NUMERIC(10, 2) NOT NULL DEFAULT 11.00,
-  referral_reward_amount NUMERIC(10, 2) NOT NULL DEFAULT 0.00,
   low_stock_threshold NUMERIC(10, 2) NOT NULL DEFAULT 10.00,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -364,12 +373,15 @@ ALTER TABLE public.system_settings
   ADD COLUMN IF NOT EXISTS secondary_color_hex TEXT DEFAULT '#D4AF37',
   ADD COLUMN IF NOT EXISTS accent_color_hex TEXT DEFAULT '#FF6B00',
   ADD COLUMN IF NOT EXISTS advance_payment_discount_pct NUMERIC(5, 2) DEFAULT 5.00,
-  ADD COLUMN IF NOT EXISTS cod_base_charge NUMERIC(10, 2) DEFAULT 49.00,
+  ADD COLUMN IF NOT EXISTS cod_base_charge NUMERIC(10, 2) DEFAULT 0.00,
   ADD COLUMN IF NOT EXISTS free_shipping_min_amount NUMERIC(10, 2) DEFAULT 249.00,
   ADD COLUMN IF NOT EXISTS base_delivery_fee NUMERIC(10, 2) DEFAULT 11.00,
-  ADD COLUMN IF NOT EXISTS referral_reward_amount NUMERIC(10, 2) DEFAULT 0.00,
   ADD COLUMN IF NOT EXISTS low_stock_threshold NUMERIC(10, 2) DEFAULT 10.00,
   ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now();
+
+-- Drop legacy referral_reward_amount column if present on legacy table
+ALTER TABLE public.system_settings
+  DROP COLUMN IF EXISTS referral_reward_amount;
 
 -- ==============================================================================
 -- 3. Default Store Settings Seeding (DO NOT OVERWRITE EXISTING SETTINGS)
@@ -386,7 +398,6 @@ INSERT INTO public.store_settings (
   cod_base_charge,
   free_shipping_min_amount,
   base_delivery_fee,
-  referral_reward_amount,
   low_stock_threshold
 ) VALUES (
   'global_settings',
@@ -396,10 +407,9 @@ INSERT INTO public.store_settings (
   '#D4AF37',
   '#FF6B00',
   5.00,
-  49.00,
+  0.00,
   249.00,
   11.00,
-  0.00,
   10.00
 ) ON CONFLICT (id) DO NOTHING;
 
@@ -414,7 +424,6 @@ INSERT INTO public.system_settings (
   cod_base_charge,
   free_shipping_min_amount,
   base_delivery_fee,
-  referral_reward_amount,
   low_stock_threshold
 ) VALUES (
   'global_settings',
@@ -424,10 +433,9 @@ INSERT INTO public.system_settings (
   '#D4AF37',
   '#FF6B00',
   5.00,
-  49.00,
+  0.00,
   249.00,
   11.00,
-  0.00,
   10.00
 ) ON CONFLICT (id) DO NOTHING;
 
@@ -717,3 +725,51 @@ BEGIN
     ALTER PUBLICATION supabase_realtime ADD TABLE public.products;
   END IF;
 END $$;
+
+-- ==============================================================================
+-- 7. Next-Calendar-Day COD Late Fee Function (Idempotent, Settings-Driven)
+-- ==============================================================================
+-- Reads cod_base_charge from public.store_settings (defaults to 0.00).
+-- Applies fee once per unpaid DELIVERED COD order with valid delivered_at once the
+-- next IST calendar day starts. Exits immediately with 0 when fee <= 0.
+-- Note: Server API (/api/orders, /api/cod-collections, /api/cod-late-fee-cron) also
+-- enforces this rule automatically and idempotently via store_settings + COD_META + OCC.
+
+CREATE OR REPLACE FUNCTION public.apply_overdue_cod_late_fees()
+RETURNS INTEGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  v_fee NUMERIC(10, 2) := 0.00;
+  v_updated_count INTEGER := 0;
+BEGIN
+  SELECT COALESCE(cod_base_charge, 0.00)
+  INTO v_fee
+  FROM public.store_settings
+  WHERE id = 'global_settings'
+  LIMIT 1;
+
+  IF COALESCE(v_fee, 0.00) <= 0.00 THEN
+    RETURN 0;
+  END IF;
+
+  UPDATE public.orders
+  SET
+    final_total = COALESCE(final_total, 0) + v_fee,
+    cod_charge = COALESCE(cod_charge, 0) + v_fee,
+    cod_late_fee_applied = true,
+    cod_late_fee_applied_at = now(),
+    updated_at = now()
+  WHERE payment_method = 'COD'
+    AND status = 'DELIVERED'
+    AND is_paid = false
+    AND delivered_at IS NOT NULL
+    AND COALESCE(payment_status, 'PENDING') NOT IN ('RECEIVED', 'PAID', 'REFUNDED', 'FAILED')
+    AND COALESCE(cod_late_fee_applied, false) = false
+    AND ((now() AT TIME ZONE 'Asia/Kolkata')::date > (delivered_at AT TIME ZONE 'Asia/Kolkata')::date);
+
+  GET DIAGNOSTICS v_updated_count = ROW_COUNT;
+  RETURN v_updated_count;
+END;
+$$;
