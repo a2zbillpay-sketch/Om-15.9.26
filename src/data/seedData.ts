@@ -18,7 +18,7 @@ export const INITIAL_SETTINGS: SystemSetting = {
   primaryColorHex: '#0F2C59',
   secondaryColorHex: '#D4AF37',
   accentColorHex: '#FF6B00',
-  advancePaymentDiscountPct: 3.0,
+  advancePaymentDiscountPct: 0.0,
   codBaseCharge: 0.0,
   freeShippingMinAmount: 249.0,
   baseDeliveryFee: 11.0,

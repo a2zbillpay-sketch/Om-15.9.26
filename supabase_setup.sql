@@ -373,7 +373,7 @@ INSERT INTO public.store_settings (
   '#0F2C59',
   '#D4AF37',
   '#FF6B00',
-  5.00,
+  0.00,
   0.00,
   249.00,
   11.00,

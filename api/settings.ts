@@ -35,7 +35,7 @@ const DEFAULT_SETTINGS: SystemSetting = {
   primaryColorHex: '#0F2C59',
   secondaryColorHex: '#D4AF37',
   accentColorHex: '#FF6B00',
-  advancePaymentDiscountPct: 5.0,
+  advancePaymentDiscountPct: 0.0,
   codBaseCharge: 0.0,
   freeShippingMinAmount: 249.0,
   baseDeliveryFee: 11.0,
@@ -139,6 +139,9 @@ function loadSettingsFromFile(): SystemSetting {
         return {
           ...DEFAULT_SETTINGS,
           ...parsed,
+          // Single Source of Truth: advancePaymentDiscountPct must come from Supabase store_settings.advance_discount_percentage
+          // or fall back strictly to 0.00 when DB is unavailable (never stale local JSON).
+          advancePaymentDiscountPct: DEFAULT_SETTINGS.advancePaymentDiscountPct,
           lowStockThreshold:
             parsed.lowStockThreshold !== undefined && !isNaN(Number(parsed.lowStockThreshold))
               ? Number(parsed.lowStockThreshold)
@@ -162,12 +165,17 @@ function saveSettingsToFile(settings: SystemSetting): void {
   }
 }
 
-async function syncWithSupabaseIfConfigured(
+export async function syncWithSupabaseIfConfigured(
   settings: SystemSetting,
-  mode: 'READ' | 'WRITE'
+  mode: 'READ' | 'WRITE',
+  supabaseClient?: SupabaseClient | null
 ): Promise<SystemSetting> {
-  const supabase = getSupabaseClient();
-  if (!supabase) return settings;
+  const supabase = supabaseClient !== undefined ? supabaseClient : getSupabaseClient();
+  if (!supabase) {
+    return mode === 'READ'
+      ? { ...settings, advancePaymentDiscountPct: DEFAULT_SETTINGS.advancePaymentDiscountPct }
+      : settings;
+  }
 
   try {
     if (mode === 'READ') {
@@ -178,14 +186,17 @@ async function syncWithSupabaseIfConfigured(
         .maybeSingle();
 
       if (!error && data) {
+        const rawDiscount = data.advance_discount_percentage;
+        const resolvedDiscount =
+          rawDiscount !== undefined && rawDiscount !== null && !isNaN(Number(rawDiscount))
+            ? Math.max(0, Math.round(Number(rawDiscount) * 100) / 100)
+            : DEFAULT_SETTINGS.advancePaymentDiscountPct;
+
         const remoteSettings: SystemSetting = {
           ...settings,
           appName: data.app_name || data['app name'] || settings.appName,
           logoUrl: data.logo_url || data['logo url'] || settings.logoUrl || '/logo.jpg',
-          advancePaymentDiscountPct:
-            data.advance_discount_percentage !== undefined
-              ? Number(data.advance_discount_percentage)
-              : settings.advancePaymentDiscountPct,
+          advancePaymentDiscountPct: resolvedDiscount,
           codBaseCharge:
             data.cod_base_charge !== undefined
               ? Number(data.cod_base_charge)
@@ -209,13 +220,22 @@ async function syncWithSupabaseIfConfigured(
         saveSettingsToFile(remoteSettings);
         return remoteSettings;
       }
+
+      return { ...settings, advancePaymentDiscountPct: DEFAULT_SETTINGS.advancePaymentDiscountPct };
     } else if (mode === 'WRITE') {
       const timestamp = settings.updatedAt || new Date().toISOString();
+      const sanitizedDiscount =
+        settings.advancePaymentDiscountPct !== undefined &&
+        settings.advancePaymentDiscountPct !== null &&
+        !isNaN(Number(settings.advancePaymentDiscountPct))
+          ? Math.max(0, Math.round(Number(settings.advancePaymentDiscountPct) * 100) / 100)
+          : DEFAULT_SETTINGS.advancePaymentDiscountPct;
+
       // Try full upsert with extended columns
       const fullPayload = {
         id: 'global_settings',
         app_name: settings.appName,
-        advance_discount_percentage: settings.advancePaymentDiscountPct,
+        advance_discount_percentage: sanitizedDiscount,
         logo_url: settings.logoUrl,
         cod_base_charge: settings.codBaseCharge,
         free_shipping_min_amount: settings.freeShippingMinAmount,
@@ -239,13 +259,16 @@ async function syncWithSupabaseIfConfigured(
         await supabase.from('store_settings').upsert({
           id: 'global_settings',
           app_name: settings.appName,
-          advance_discount_percentage: settings.advancePaymentDiscountPct,
+          advance_discount_percentage: sanitizedDiscount,
           updated_at: timestamp,
         }, { onConflict: 'id' });
       }
     }
   } catch (err) {
     console.warn('Supabase settings sync error (non-fatal):', err);
+    if (mode === 'READ') {
+      return { ...settings, advancePaymentDiscountPct: DEFAULT_SETTINGS.advancePaymentDiscountPct };
+    }
   }
 
   return settings;
@@ -288,13 +311,8 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
   setNoCacheHeaders(res);
 
   if (req.method === 'GET') {
-    let current = loadSettingsFromFile();
-
-    // Check if initial file was missing or needs Supabase sync
-    if (!fs.existsSync(SETTINGS_FILE)) {
-      current = await syncWithSupabaseIfConfigured(current, 'READ');
-      saveSettingsToFile(current);
-    }
+    const localFallback = loadSettingsFromFile();
+    const current = await syncWithSupabaseIfConfigured(localFallback, 'READ');
 
     res.statusCode = 200;
     res.end(
@@ -324,7 +342,8 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
       const body = await parseJsonBody(req);
       const incomingUpdates: Partial<SystemSetting> = body.settings || body;
 
-      const current = loadSettingsFromFile();
+      const baseSettings = loadSettingsFromFile();
+      const current = await syncWithSupabaseIfConfigured(baseSettings, 'READ');
 
       const mergedSettings: SystemSetting = {
         ...current,
@@ -339,8 +358,15 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
         ...(incomingUpdates.accentColorHex !== undefined
           ? { accentColorHex: String(incomingUpdates.accentColorHex) }
           : {}),
-        ...(incomingUpdates.advancePaymentDiscountPct !== undefined
-          ? { advancePaymentDiscountPct: Number(incomingUpdates.advancePaymentDiscountPct) }
+        ...(incomingUpdates.advancePaymentDiscountPct !== undefined &&
+          incomingUpdates.advancePaymentDiscountPct !== null &&
+          !isNaN(Number(incomingUpdates.advancePaymentDiscountPct))
+          ? {
+              advancePaymentDiscountPct: Math.max(
+                0,
+                Math.round(Number(incomingUpdates.advancePaymentDiscountPct) * 100) / 100
+              ),
+            }
           : {}),
         ...(incomingUpdates.codBaseCharge !== undefined
           ? {
@@ -365,11 +391,11 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
         updatedAt: incomingUpdates.updatedAt || new Date().toISOString(),
       };
 
-      // Persist to central server store
-      saveSettingsToFile(mergedSettings);
-
-      // Authoritatively sync to Supabase store_settings so cod_base_charge is immediately consistent
+      // Authoritatively sync to Supabase store_settings (advance_discount_percentage, cod_base_charge, etc.)
       await syncWithSupabaseIfConfigured(mergedSettings, 'WRITE');
+
+      // Persist local cache copy
+      saveSettingsToFile(mergedSettings);
 
       res.statusCode = 200;
       res.end(
