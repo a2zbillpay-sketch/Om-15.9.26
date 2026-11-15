@@ -296,3 +296,25 @@ export function verifyCustomerSession(req: IncomingMessage): CustomerSession | n
   return verifyCustomerSessionToken(token);
 }
 
+export const CUSTOMER_SESSION_MAX_AGE_MS = 1000 * 60 * 60 * 24 * 7; // 7 days
+
+/**
+ * Sets the signed HttpOnly customer session cookie on the ServerResponse.
+ */
+export function setCustomerSessionCookie(res: ServerResponse, session: CustomerSession): boolean {
+  const token = createCustomerSessionToken(session);
+  if (!token) return false;
+
+  const maxAgeSeconds = Math.floor(CUSTOMER_SESSION_MAX_AGE_MS / 1000);
+  const cookieStr = `${CUSTOMER_SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=None; Secure; Partitioned; Max-Age=${maxAgeSeconds}`;
+  res.setHeader('Set-Cookie', cookieStr);
+  return true;
+}
+
+/**
+ * Clears the customer session cookie on logout.
+ */
+export function clearCustomerSessionCookie(res: ServerResponse): void {
+  const cookieStr = `${CUSTOMER_SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=None; Secure; Partitioned; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT`;
+  res.setHeader('Set-Cookie', cookieStr);
+}

@@ -44,7 +44,14 @@ import {
   getCustomerWalletBalanceFromLedger,
   fetchWalletTransactionsFromSupabase,
   saveCustomerProfileToSupabase,
-  saveAddressToSupabase,
+  loginCustomerServerSession,
+  logoutCustomerServerSession,
+  checkCustomerServerSession,
+  fetchAddressesFromSupabase,
+  createAddressInSupabase,
+  updateAddressInSupabase,
+  deleteAddressInSupabase,
+  setDefaultAddressInSupabase,
   fetchCustomerProfileFromSupabase,
   saveProductToSupabase,
   fetchProductsFromSupabase,
@@ -224,8 +231,18 @@ interface AppContextType {
     markAsDelivered?: boolean
   ) => Promise<{ success: boolean; error?: string }> | { success: boolean; error?: string };
   userAddresses: Address[];
-  addAddress: (address: Omit<Address, 'id' | 'userId'>) => void;
-  setDefaultAddress: (addressId: string) => void;
+  addressesLoading: boolean;
+  addressesError: string | null;
+  refreshAddresses: () => Promise<Address[]>;
+  addAddress: (
+    address: Omit<Address, 'id' | 'userId'>
+  ) => Promise<{ success: boolean; error?: string; address?: Address }>;
+  updateAddress: (
+    addressId: string,
+    updates: Partial<Address>
+  ) => Promise<{ success: boolean; error?: string; address?: Address }>;
+  deleteAddress: (addressId: string) => Promise<{ success: boolean; error?: string }>;
+  setDefaultAddress: (addressId: string) => Promise<{ success: boolean; error?: string }>;
   selectedAddressId: string | null;
   setSelectedAddressId: (id: string) => void;
   isAuthModalOpen: boolean;
@@ -457,19 +474,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
 
         // Rule: Sourced strictly for session.phone, accepting ONLY Role.CUSTOMER. Never use SHOPKEEPER or ADMIN.
+        // When Supabase is configured, never treat localStorage addresses as authoritative; wait for DB fetch.
         const phoneKey = `om_profile_${session.phone}`;
         const savedPhoneProfile = localStorage.getItem(phoneKey);
         if (savedPhoneProfile) {
           try {
             const parsed = JSON.parse(savedPhoneProfile);
             if (parsed && parsed.role === Role.CUSTOMER && parsed.id !== 'user-shopkeeper') {
-              return parsed;
+              return isSupabaseConfigured ? { ...parsed, addresses: [] } : parsed;
             }
           } catch {}
         }
 
-        const match = INITIAL_USERS.find((u) => u.role === Role.CUSTOMER && u.phone === session.phone);
-        if (match) return match;
+        if (!isSupabaseConfigured) {
+          const match = INITIAL_USERS.find((u) => u.role === Role.CUSTOMER && u.phone === session.phone);
+          if (match) return match;
+        }
 
         return {
           id: `user-${session.phone}`,
@@ -546,6 +566,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const defaultAddr = currentUser.addresses.find((a) => a.isDefault);
     return defaultAddr ? defaultAddr.id : currentUser.addresses[0]?.id || null;
   });
+
+  const [addressesLoading, setAddressesLoading] = useState<boolean>(false);
+  const [addressesError, setAddressesError] = useState<string | null>(null);
 
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
 
@@ -821,11 +844,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [products]);
 
   useEffect(() => {
-    localStorage.setItem('om_users', JSON.stringify(users));
+    try {
+      const sanitizedUsers = isSupabaseConfigured
+        ? users.map((u) => (u.role === Role.CUSTOMER ? { ...u, addresses: [] } : u))
+        : users;
+      localStorage.setItem('om_users', JSON.stringify(sanitizedUsers));
+    } catch {}
   }, [users]);
 
   useEffect(() => {
-    localStorage.setItem('om_current_user', JSON.stringify(currentUser));
+    try {
+      const sanitizedCurrent =
+        isSupabaseConfigured && currentUser.role === Role.CUSTOMER
+          ? { ...currentUser, addresses: [] }
+          : currentUser;
+      localStorage.setItem('om_current_user', JSON.stringify(sanitizedCurrent));
+    } catch {}
   }, [currentUser]);
 
   // Sync cart strictly to the active customer's scoped key. Never store to a shared global cart.
@@ -2974,10 +3008,93 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { success: true };
   };
 
-  // Address management (supports multiple delivery addresses + persistent default address)
+  // Address management (single source of truth: Supabase public.addresses via /api/addresses)
   const userAddresses = currentUser.addresses || [];
 
-  const persistUserAddressesLocally = (updatedUser: User) => {
+  const applyAuthoritativeAddresses = useCallback((dbAddresses: Address[], targetPhone?: string) => {
+    setCurrentUser((prev) => {
+      const prevClean = prev.phone ? prev.phone.replace(/\D/g, '').slice(-10) : '';
+      const cleanTarget = targetPhone ? targetPhone.replace(/\D/g, '').slice(-10) : prevClean;
+      if (targetPhone && prevClean && prevClean !== cleanTarget) return prev;
+      return { ...prev, addresses: dbAddresses };
+    });
+
+    setSelectedAddressId((prevSelected) => {
+      if (prevSelected && dbAddresses.some((a) => a.id === prevSelected)) {
+        return prevSelected;
+      }
+      const def = dbAddresses.find((a) => a.isDefault) || dbAddresses[0];
+      return def ? def.id : null;
+    });
+  }, []);
+
+  const ensureCustomerSessionCookie = useCallback(
+    async (phoneOverride?: string, nameOverride?: string, customerIdOverride?: string): Promise<boolean> => {
+      if (!isSupabaseConfigured) return true;
+      const cleanPhone = (phoneOverride || currentUser.phone || '').replace(/\D/g, '').slice(-10);
+      if (cleanPhone.length !== 10) return false;
+
+      const check = await checkCustomerServerSession();
+      if (check.authenticated && check.phone === cleanPhone) {
+        return true;
+      }
+
+      const loginRes = await loginCustomerServerSession(cleanPhone, {
+        name: nameOverride ?? currentUser.name,
+        customerId: customerIdOverride ?? currentUser.id,
+      });
+      return loginRes.authenticated;
+    },
+    [currentUser.id, currentUser.name, currentUser.phone]
+  );
+
+  const refreshAddresses = useCallback(async (): Promise<Address[]> => {
+    if (!isSupabaseConfigured) {
+      return currentUser.addresses || [];
+    }
+
+    const cleanPhone = (currentUser.phone || '').replace(/\D/g, '').slice(-10);
+    if (activeRole !== Role.CUSTOMER || cleanPhone.length !== 10) {
+      return [];
+    }
+
+    setAddressesLoading(true);
+    setAddressesError(null);
+
+    try {
+      const hasSession = await ensureCustomerSessionCookie(cleanPhone);
+      if (!hasSession) {
+        const msg = 'Unable to verify customer session for loading addresses.';
+        setAddressesError(msg);
+        return [];
+      }
+
+      const result = await fetchAddressesFromSupabase();
+      if (!result.success) {
+        setAddressesError(result.error || 'Failed to load addresses from database.');
+        return [];
+      }
+
+      applyAuthoritativeAddresses(result.addresses, cleanPhone);
+      return result.addresses;
+    } catch (err: any) {
+      setAddressesError(err?.message || 'Database error while loading addresses.');
+      return [];
+    } finally {
+      setAddressesLoading(false);
+    }
+  }, [activeRole, applyAuthoritativeAddresses, currentUser.addresses, currentUser.phone, ensureCustomerSessionCookie]);
+
+  // Fetch authoritative addresses from Supabase on app mount / customer change
+  useEffect(() => {
+    const cleanPhone = (currentUser.phone || '').replace(/\D/g, '').slice(-10);
+    if (isSupabaseConfigured && activeRole === Role.CUSTOMER && cleanPhone.length === 10) {
+      refreshAddresses();
+    }
+  }, [currentUser.phone, activeRole]);
+
+  const persistLocalOfflineAddresses = (updatedUser: User) => {
+    if (isSupabaseConfigured) return;
     const cleanPhone = updatedUser.phone ? updatedUser.phone.replace(/\D/g, '').slice(-10) : '';
     try {
       localStorage.setItem('om_current_user', JSON.stringify(updatedUser));
@@ -2985,9 +3102,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         localStorage.setItem(`om_profile_${cleanPhone}`, JSON.stringify(updatedUser));
       }
       setUsers((prev) => {
-        const exists = prev.some((u) => u.id === updatedUser.id || (cleanPhone && u.phone?.replace(/\D/g, '').slice(-10) === cleanPhone));
+        const exists = prev.some(
+          (u) => u.id === updatedUser.id || (cleanPhone && u.phone?.replace(/\D/g, '').slice(-10) === cleanPhone)
+        );
         const next = exists
-          ? prev.map((u) => (u.id === updatedUser.id || (cleanPhone && u.phone?.replace(/\D/g, '').slice(-10) === cleanPhone) ? updatedUser : u))
+          ? prev.map((u) =>
+              u.id === updatedUser.id || (cleanPhone && u.phone?.replace(/\D/g, '').slice(-10) === cleanPhone)
+                ? updatedUser
+                : u
+            )
           : [...prev, updatedUser];
         localStorage.setItem('om_users', JSON.stringify(next));
         return next;
@@ -2995,93 +3118,314 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch {}
   };
 
-  const addAddress = (addressData: Omit<Address, 'id' | 'userId'>) => {
-    const shouldBeDefault = Boolean(addressData.isDefault) || userAddresses.length === 0;
-    const newAddress: Address = {
-      ...addressData,
-      id: `addr-${Date.now()}`,
-      userId: currentUser.id,
-      isDefault: shouldBeDefault,
-    };
-    const updatedAddresses = [
-      ...userAddresses.map((a) => (shouldBeDefault ? { ...a, isDefault: false } : a)),
-      newAddress,
-    ];
-    const updatedUser: User = { ...currentUser, addresses: updatedAddresses };
-    setCurrentUser(updatedUser);
-    setSelectedAddressId(newAddress.id);
-    persistUserAddressesLocally(updatedUser);
-
-    if (isSupabaseConfigured) {
-      saveAddressToSupabase(newAddress).catch(() => {});
+  const addAddress = async (
+    addressData: Omit<Address, 'id' | 'userId'>
+  ): Promise<{ success: boolean; error?: string; address?: Address }> => {
+    if (!addressData.fullAddress || !addressData.fullAddress.trim()) {
+      return { success: false, error: 'Full delivery address is required.' };
     }
+    if (!addressData.pincode || !addressData.pincode.trim()) {
+      return { success: false, error: 'Pincode is required.' };
+    }
+
+    if (!isSupabaseConfigured) {
+      const shouldBeDefault = Boolean(addressData.isDefault) || userAddresses.length === 0;
+      const newAddress: Address = {
+        ...addressData,
+        label: addressData.label?.trim() || undefined,
+        fullAddress: addressData.fullAddress.trim(),
+        landmark: addressData.landmark?.trim() || '',
+        pincode: addressData.pincode.trim(),
+        id: `addr-${Date.now()}`,
+        userId: currentUser.id,
+        isDefault: shouldBeDefault,
+      };
+      const updatedAddresses = [
+        ...userAddresses.map((a) => (shouldBeDefault ? { ...a, isDefault: false } : a)),
+        newAddress,
+      ];
+      const updatedUser: User = { ...currentUser, addresses: updatedAddresses };
+      setCurrentUser(updatedUser);
+      setSelectedAddressId(newAddress.id);
+      persistLocalOfflineAddresses(updatedUser);
+      return { success: true, address: newAddress };
+    }
+
+    setAddressesError(null);
+    const hasSession = await ensureCustomerSessionCookie();
+    if (!hasSession) {
+      const msg = 'Unable to verify customer session. Please log in again.';
+      setAddressesError(msg);
+      return { success: false, error: msg };
+    }
+
+    const res = await createAddressInSupabase({
+      ...addressData,
+      isDefault: Boolean(addressData.isDefault) || userAddresses.length === 0,
+    });
+
+    if (!res.success) {
+      const msg = res.error || 'Failed to save address to database.';
+      setAddressesError(msg);
+      return { success: false, error: msg };
+    }
+
+    const refreshed = await refreshAddresses();
+    const effectiveList = refreshed.length > 0 ? refreshed : res.addresses;
+    if (res.address?.id) {
+      setSelectedAddressId(res.address.id);
+    } else if (effectiveList.length > 0) {
+      const def = effectiveList.find((a) => a.isDefault) || effectiveList[0];
+      setSelectedAddressId(def.id);
+    }
+    return { success: true, address: res.address };
   };
 
-  const setDefaultAddress = (addressId: string) => {
-    if (!userAddresses.some((a) => a.id === addressId)) return;
-    const updatedAddresses = userAddresses.map((a) => ({
-      ...a,
-      isDefault: a.id === addressId,
-    }));
-    const updatedUser: User = { ...currentUser, addresses: updatedAddresses };
-    setCurrentUser(updatedUser);
+  const updateAddress = async (
+    addressId: string,
+    updates: Partial<Address>
+  ): Promise<{ success: boolean; error?: string; address?: Address }> => {
+    if (!addressId) {
+      return { success: false, error: 'Address ID is required.' };
+    }
+
+    if (!isSupabaseConfigured) {
+      const shouldBeDefault = updates.isDefault === true;
+      const updatedAddresses = userAddresses.map((a) => {
+        if (a.id === addressId) {
+          return {
+            ...a,
+            ...updates,
+            isDefault: updates.isDefault !== undefined ? updates.isDefault : a.isDefault,
+          };
+        }
+        return shouldBeDefault ? { ...a, isDefault: false } : a;
+      });
+      const updatedUser: User = { ...currentUser, addresses: updatedAddresses };
+      setCurrentUser(updatedUser);
+      persistLocalOfflineAddresses(updatedUser);
+      return { success: true, address: updatedAddresses.find((a) => a.id === addressId) };
+    }
+
+    setAddressesError(null);
+    const hasSession = await ensureCustomerSessionCookie();
+    if (!hasSession) {
+      const msg = 'Unable to verify customer session. Please log in again.';
+      setAddressesError(msg);
+      return { success: false, error: msg };
+    }
+
+    const res = await updateAddressInSupabase(addressId, updates);
+    if (!res.success) {
+      const msg = res.error || 'Failed to update address in database.';
+      setAddressesError(msg);
+      return { success: false, error: msg };
+    }
+
+    await refreshAddresses();
+    return { success: true, address: res.address };
+  };
+
+  const deleteAddress = async (addressId: string): Promise<{ success: boolean; error?: string }> => {
+    if (!addressId) {
+      return { success: false, error: 'Address ID is required.' };
+    }
+
+    if (!isSupabaseConfigured) {
+      const target = userAddresses.find((a) => a.id === addressId);
+      const remaining = userAddresses.filter((a) => a.id !== addressId);
+      if (target?.isDefault && remaining.length > 0 && !remaining.some((a) => a.isDefault)) {
+        remaining[0] = { ...remaining[0], isDefault: true };
+      }
+      const updatedUser: User = { ...currentUser, addresses: remaining };
+      setCurrentUser(updatedUser);
+      if (selectedAddressId === addressId) {
+        const nextDef = remaining.find((a) => a.isDefault) || remaining[0];
+        setSelectedAddressId(nextDef?.id || null);
+      }
+      persistLocalOfflineAddresses(updatedUser);
+      return { success: true };
+    }
+
+    setAddressesError(null);
+    const hasSession = await ensureCustomerSessionCookie();
+    if (!hasSession) {
+      const msg = 'Unable to verify customer session. Please log in again.';
+      setAddressesError(msg);
+      return { success: false, error: msg };
+    }
+
+    const res = await deleteAddressInSupabase(addressId);
+    if (!res.success) {
+      const msg = res.error || 'Failed to delete address from database.';
+      setAddressesError(msg);
+      return { success: false, error: msg };
+    }
+
+    const refreshed = await refreshAddresses();
+    if (selectedAddressId === addressId) {
+      const nextDef = refreshed.find((a) => a.isDefault) || refreshed[0];
+      setSelectedAddressId(nextDef?.id || null);
+    }
+    return { success: true };
+  };
+
+  const setDefaultAddress = async (addressId: string): Promise<{ success: boolean; error?: string }> => {
+    if (!userAddresses.some((a) => a.id === addressId)) {
+      return { success: false, error: 'Selected address not found.' };
+    }
+
+    if (!isSupabaseConfigured) {
+      const updatedAddresses = userAddresses.map((a) => ({
+        ...a,
+        isDefault: a.id === addressId,
+      }));
+      const updatedUser: User = { ...currentUser, addresses: updatedAddresses };
+      setCurrentUser(updatedUser);
+      setSelectedAddressId(addressId);
+      persistLocalOfflineAddresses(updatedUser);
+      return { success: true };
+    }
+
+    setAddressesError(null);
+    const hasSession = await ensureCustomerSessionCookie();
+    if (!hasSession) {
+      const msg = 'Unable to verify customer session. Please log in again.';
+      setAddressesError(msg);
+      return { success: false, error: msg };
+    }
+
+    const res = await setDefaultAddressInSupabase(addressId);
+    if (!res.success) {
+      const msg = res.error || 'Failed to set default address in database.';
+      setAddressesError(msg);
+      return { success: false, error: msg };
+    }
+
+    await refreshAddresses();
     setSelectedAddressId(addressId);
-    persistUserAddressesLocally(updatedUser);
+    return { success: true };
   };
 
-  // Customer profile save (Rule 1, 2, 6, 7, 8 — preserves additional delivery addresses)
+  // Customer profile save (Rule 1, 2, 6, 7, 8 — preserves additional delivery addresses & labels in public.addresses)
   const saveCustomerProfile = async (data: {
     name: string;
     fullAddress: string;
     landmark: string;
     pincode?: string;
+    label?: string;
   }): Promise<void> => {
     // Sourced strictly from authenticated customer record (Rule 1 & 2)
     const cleanPhone = currentUser.phone.replace(/\D/g, '').slice(-10) || currentUser.phone.replace(/\D/g, '');
     const targetUserId = currentUser.id || `user-${cleanPhone}`;
     const existingDefault = currentUser.addresses.find((a) => a.isDefault) || currentUser.addresses[0];
-    const targetAddrId = existingDefault?.id || `addr-${targetUserId}-1`;
+    const preservedLabel = data.label?.trim() || existingDefault?.label;
+    const cleanPincode = data.pincode?.trim() || '';
 
-    const updatedDefaultAddress: Address = {
-      id: targetAddrId,
-      userId: targetUserId,
-      fullAddress: data.fullAddress.trim(),
-      landmark: data.landmark.trim(),
-      pincode: data.pincode?.trim() || '',
-      isDefault: true,
-    };
+    let resolvedUserId = targetUserId;
+    let authoritativeAddresses: Address[] = currentUser.addresses || [];
 
-    const otherAddresses = (currentUser.addresses || [])
-      .filter((a) => a.id !== targetAddrId)
-      .map((a) => ({ ...a, isDefault: false }));
+    if (isSupabaseConfigured) {
+      const savedProfileUser = await saveCustomerProfileToSupabase(
+        targetUserId,
+        cleanPhone,
+        data.name.trim(),
+        data.fullAddress.trim(),
+        data.landmark.trim(),
+        cleanPincode
+      );
+      if (savedProfileUser?.id) {
+        resolvedUserId = savedProfileUser.id;
+      }
+
+      const hasSession = await ensureCustomerSessionCookie(cleanPhone, data.name.trim(), resolvedUserId);
+      if (!hasSession) {
+        throw new Error('Unable to establish customer database session. Please try again.');
+      }
+
+      const currentDbRes = await fetchAddressesFromSupabase();
+      const currentDbList = currentDbRes.success ? currentDbRes.addresses : [];
+      const dbDefault = currentDbList.find((a) => a.isDefault) || currentDbList[0] || null;
+
+      if (dbDefault) {
+        const updRes = await updateAddressInSupabase(dbDefault.id, {
+          fullAddress: data.fullAddress.trim(),
+          landmark: data.landmark.trim(),
+          pincode: cleanPincode,
+          label: preservedLabel ?? dbDefault.label,
+          isDefault: true,
+          allowEmptyPincode: true,
+        });
+        if (!updRes.success) {
+          throw new Error(updRes.error || 'Failed to update default address in database.');
+        }
+      } else {
+        const crtRes = await createAddressInSupabase({
+          label: preservedLabel || 'Home',
+          fullAddress: data.fullAddress.trim(),
+          landmark: data.landmark.trim(),
+          pincode: cleanPincode,
+          isDefault: true,
+          allowEmptyPincode: true,
+        });
+        if (!crtRes.success) {
+          throw new Error(crtRes.error || 'Failed to save delivery address to database.');
+        }
+      }
+
+      const refreshedRes = await fetchAddressesFromSupabase();
+      if (!refreshedRes.success) {
+        throw new Error(refreshedRes.error || 'Failed to refresh delivery addresses from database.');
+      }
+      authoritativeAddresses = refreshedRes.addresses;
+    } else {
+      const targetAddrId = existingDefault?.id || `addr-${targetUserId}-1`;
+      const updatedDefaultAddress: Address = {
+        id: targetAddrId,
+        userId: targetUserId,
+        ...(preservedLabel ? { label: preservedLabel } : {}),
+        fullAddress: data.fullAddress.trim(),
+        landmark: data.landmark.trim(),
+        pincode: cleanPincode,
+        isDefault: true,
+      };
+      const otherAddresses = (currentUser.addresses || [])
+        .filter((a) => a.id !== targetAddrId)
+        .map((a) => ({ ...a, isDefault: false }));
+      authoritativeAddresses = [updatedDefaultAddress, ...otherAddresses];
+    }
+
+    const defaultAfterSave = authoritativeAddresses.find((a) => a.isDefault) || authoritativeAddresses[0];
 
     const updatedUser: User = {
       ...currentUser,
-      id: targetUserId,
+      id: resolvedUserId,
       name: data.name.trim(),
-      phone: cleanPhone, // Guaranteed not replaced (Rule 2)
+      phone: cleanPhone,
       role: Role.CUSTOMER,
-      addresses: [updatedDefaultAddress, ...otherAddresses],
+      addresses: authoritativeAddresses,
       isDatabaseVerified: isSupabaseConfigured,
     };
 
     // 1. Update state
     setCurrentUser(updatedUser);
-    setSelectedAddressId(updatedDefaultAddress.id);
+    setSelectedAddressId(defaultAfterSave?.id || null);
     setUsers((prev) => {
-      const exists = prev.some((u) => u.phone?.replace(/\D/g, '').slice(-10) === cleanPhone || u.id === targetUserId);
+      const userForCache = isSupabaseConfigured ? { ...updatedUser, addresses: [] } : updatedUser;
+      const exists = prev.some((u) => u.phone?.replace(/\D/g, '').slice(-10) === cleanPhone || u.id === resolvedUserId);
       const next = exists
-        ? prev.map((u) => (u.phone?.replace(/\D/g, '').slice(-10) === cleanPhone || u.id === targetUserId ? updatedUser : u))
-        : [...prev, updatedUser];
+        ? prev.map((u) => (u.phone?.replace(/\D/g, '').slice(-10) === cleanPhone || u.id === resolvedUserId ? userForCache : u))
+        : [...prev, userForCache];
       try {
         localStorage.setItem('om_users', JSON.stringify(next));
       } catch {}
       return next;
     });
 
-    // 2. Rule 5 & 8: Save to customer-isolated localStorage key
-    localStorage.setItem('om_current_user', JSON.stringify(updatedUser));
-    localStorage.setItem(`om_profile_${cleanPhone}`, JSON.stringify(updatedUser));
+    // 2. Save customer session & non-address profile metadata locally (addresses live in Supabase when configured)
+    const cachedProfile = isSupabaseConfigured ? { ...updatedUser, addresses: [] } : updatedUser;
+    localStorage.setItem('om_current_user', JSON.stringify(cachedProfile));
+    localStorage.setItem(`om_profile_${cleanPhone}`, JSON.stringify(cachedProfile));
     localStorage.setItem(
       'om_customer_session',
       JSON.stringify({
@@ -3091,23 +3435,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       })
     );
 
-    // 3. Rule 6: Save profile changes to Supabase
-    if (isSupabaseConfigured) {
-      try {
-        await saveCustomerProfileToSupabase(
-          targetUserId,
-          cleanPhone,
-          data.name.trim(),
-          data.fullAddress.trim(),
-          data.landmark.trim(),
-          data.pincode?.trim() || ''
-        );
-      } catch (err) {
-        console.error('Supabase profile save error:', err);
-      }
-    }
-
-    // 4. Rule 7: After profile completion, navigate correctly to Products/Shop page
+    // 3. Navigate to Shop
     setCustomerFlowStep('SHOP');
   };
 
@@ -3197,6 +3525,105 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     // CUSTOMER FLOW:
+    const cleanPhone10 = cleanPhone.slice(-10);
+
+    if (isSupabaseConfigured) {
+      // Establish signed HttpOnly server session cookie + lookup authoritative customer record in DB
+      const serverAuth = await loginCustomerServerSession(cleanPhone10, {
+        name: name?.trim(),
+        isExisting: options?.isExisting,
+      });
+
+      if (!serverAuth.authenticated) {
+        if (options?.isExisting === true || serverAuth.status === 404) {
+          throw new Error(
+            serverAuth.error ||
+              `No registered customer profile found for +91 ${cleanPhone10}. Please switch to New Customer to register.`
+          );
+        }
+        throw new Error(serverAuth.error || 'Unable to authenticate customer session with server.');
+      }
+
+      setAddressesLoading(true);
+      setAddressesError(null);
+      const addrRes = await fetchAddressesFromSupabase();
+      setAddressesLoading(false);
+      if (!addrRes.success) {
+        setAddressesError(addrRes.error || 'Failed to load delivery addresses.');
+      }
+
+      const dbAddresses = addrRes.success ? addrRes.addresses : [];
+      const dbUserProfile = await fetchCustomerProfileFromSupabase(cleanPhone10);
+
+      const resolvedName =
+        serverAuth.user?.name?.trim() || dbUserProfile?.name?.trim() || name?.trim() || '';
+      const resolvedId =
+        serverAuth.customerId || dbUserProfile?.id || `user-${cleanPhone10}`;
+      const resolvedWallet = Math.max(
+        0,
+        Number(dbUserProfile?.walletBalance ?? serverAuth.user?.walletBalance ?? 0)
+      );
+      const resolvedOutstanding = Number(
+        dbUserProfile?.outstandingBalance ??
+          serverAuth.user?.outstandingBalance ??
+          calculateCustomerOutstanding(orders, cleanPhone10)
+      );
+
+      const hasExistingProfileData = Boolean(resolvedName || dbAddresses.length > 0);
+      const shouldEnterShop = options?.isExisting === true || hasExistingProfileData;
+
+      const finalUser: User = {
+        id: resolvedId,
+        name: resolvedName,
+        phone: cleanPhone10,
+        role: Role.CUSTOMER,
+        walletBalance: resolvedWallet,
+        outstandingBalance: resolvedOutstanding,
+        codOrderCount: Number(dbUserProfile?.codOrderCount ?? serverAuth.user?.codOrderCount ?? 0),
+        addresses: dbAddresses,
+        createdAt: dbUserProfile?.createdAt || serverAuth.user?.createdAt || new Date().toISOString(),
+        isDatabaseVerified: true,
+      };
+
+      setCurrentUser(finalUser);
+      setActiveRoleState(Role.CUSTOMER);
+      const defaultAddr = dbAddresses.find((a) => a.isDefault) || dbAddresses[0];
+      setSelectedAddressId(defaultAddr?.id || null);
+      setIsAuthModalOpen(false);
+
+      const customerSavedCart = loadCustomerCart(cleanPhone10);
+      setCart(customerSavedCart);
+
+      const cachedProfile = { ...finalUser, addresses: [] };
+      localStorage.setItem(`om_profile_${cleanPhone10}`, JSON.stringify(cachedProfile));
+      localStorage.setItem(
+        'om_customer_session',
+        JSON.stringify({
+          phone: cleanPhone10,
+          role: Role.CUSTOMER,
+          profileCompleted: shouldEnterShop,
+        })
+      );
+
+      setUsers((prev) => {
+        const exists = prev.some((u) => u.phone === cleanPhone10 || u.id === finalUser.id);
+        if (exists) return prev.map((u) => (u.phone === cleanPhone10 || u.id === finalUser.id ? cachedProfile : u));
+        return [...prev, cachedProfile];
+      });
+
+      fetchCustomerOrdersFromSupabase(finalUser.id, cleanPhone10).then((dbOrders) => {
+        if (dbOrders !== null) {
+          setOrders(dbOrders.length === 0 ? [] : dbOrders);
+        }
+      });
+      refreshProducts();
+      refreshCustomerWallet();
+
+      setCustomerFlowStep(shouldEnterShop ? 'SHOP' : 'PROFILE');
+      notifyShopkeeperCustomerLogin(finalUser);
+      return finalUser;
+    }
+
     const checkCustomerCachedProfile = () => {
       try {
         const cached = localStorage.getItem(`om_profile_${cleanPhone}`);
@@ -3212,36 +3639,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       checkCustomerCachedProfile() ||
       users.some((u) => {
         const uClean = u.phone ? u.phone.replace(/\D/g, '').slice(-10) : '';
-        return u.role === Role.CUSTOMER && uClean === cleanPhone.slice(-10);
+        return u.role === Role.CUSTOMER && uClean === cleanPhone10;
       })
     );
 
-    let treatAsExisting = options?.isExisting === true || (options?.isExisting === undefined && hasLocalProfile);
-
-    // If options?.isExisting was not explicitly true (e.g. submitted from new registration), also check if this mobile is already registered in Supabase
-    if (!treatAsExisting && isSupabaseConfigured) {
-      const existingInDb = await fetchCustomerProfileFromSupabase(cleanPhone);
-      if (existingInDb && existingInDb.role === Role.CUSTOMER) {
-        treatAsExisting = true;
-      }
-    }
+    const treatAsExisting = options?.isExisting === true || (options?.isExisting === undefined && hasLocalProfile);
 
     if (treatAsExisting) {
-      // Existing Customer login: must await database profile lookup before advancing
       let resolvedUser: User | null = null;
-      let isVerifiedFromDb = false;
-
-      if (isSupabaseConfigured) {
-        resolvedUser = await fetchCustomerProfileFromSupabase(cleanPhone);
-        if (resolvedUser && resolvedUser.role === Role.CUSTOMER) {
-          isVerifiedFromDb = true;
-        } else {
-          resolvedUser = null;
-        }
-      }
-
-      // Check local cache if offline or not returned by Supabase (strictly Role.CUSTOMER)
-      if (!resolvedUser && cleanPhone !== '9820123456') {
+      if (cleanPhone !== '9820123456') {
         const phoneKey = `om_profile_${cleanPhone}`;
         const localProfile = localStorage.getItem(phoneKey);
         if (localProfile) {
@@ -3258,11 +3664,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       }
 
-      // If customer record is not found, fallback to checking local users (strictly Role.CUSTOMER)
       if (!resolvedUser) {
         const matchingUser = users.find((u) => {
           const uClean = u.phone ? u.phone.replace(/\D/g, '').slice(-10) : '';
-          return u.role === Role.CUSTOMER && uClean === cleanPhone.slice(-10);
+          return u.role === Role.CUSTOMER && uClean === cleanPhone10;
         });
         if (matchingUser) {
           resolvedUser = matchingUser;
@@ -3273,7 +3678,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       }
 
-      // Ensure persistent wallet balance is accurately preserved from authoritative database
       let resolvedWalletBalance = resolvedUser ? (resolvedUser.walletBalance ?? 0) : 0;
       if (!resolvedUser) {
         try {
@@ -3281,28 +3685,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           if (savedTx) {
             const txList: WalletTransaction[] = JSON.parse(savedTx);
             const userTx = txList.filter(
-              (t) =>
-                t.userPhone && t.userPhone.replace(/\D/g, '').slice(-10) === cleanPhone.slice(-10)
+              (t) => t.userPhone && t.userPhone.replace(/\D/g, '').slice(-10) === cleanPhone10
             );
             if (userTx.length > 0 && typeof userTx[0].balanceAfter === 'number' && userTx[0].balanceAfter >= 0) {
               resolvedWalletBalance = userTx[0].balanceAfter;
             }
           }
         } catch {}
-
-        if (cleanPhone === '9820123456') {
-          resolvedWalletBalance = 0;
-        } else if (resolvedWalletBalance <= 0) {
-          try {
-            const localProfileStr = localStorage.getItem(`om_profile_${cleanPhone}`);
-            if (localProfileStr) {
-              const parsed = JSON.parse(localProfileStr);
-              if (typeof parsed.walletBalance === 'number' && parsed.walletBalance > 0) {
-                resolvedWalletBalance = parsed.walletBalance;
-              }
-            }
-          } catch {}
-        }
       }
 
       const userDebt = Number(
@@ -3320,7 +3709,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         codOrderCount: resolvedUser?.codOrderCount || 0,
         addresses: resolvedUser?.addresses || [],
         createdAt: resolvedUser?.createdAt || new Date().toISOString(),
-        isDatabaseVerified: isVerifiedFromDb,
+        isDatabaseVerified: false,
       };
 
       setCurrentUser(finalUser);
@@ -3348,46 +3737,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return [...prev, finalUser];
       });
 
-      if (isSupabaseConfigured) {
-        fetchCustomerOrdersFromSupabase(finalUser.id, cleanPhone).then((dbOrders) => {
-          if (dbOrders !== null) {
-            if (dbOrders.length === 0) {
-              setOrders([]);
-            } else {
-              setOrders(dbOrders);
-            }
-          }
-        });
-        refreshProducts();
-        refreshCustomerWallet();
-      }
-
       setCustomerFlowStep('SHOP');
       notifyShopkeeperCustomerLogin(finalUser);
       return finalUser;
     }
 
-    // NEW CUSTOMER FLOW:
-    // Every new customer must start with Wallet Balance = ₹0
-    let initialNewWalletBalance = 0;
-    try {
-      const localProfileStr = localStorage.getItem(`om_profile_${cleanPhone}`);
-      if (localProfileStr) {
-        const parsed = JSON.parse(localProfileStr);
-        if (typeof parsed.walletBalance === 'number') {
-          initialNewWalletBalance = parsed.walletBalance;
-        }
-      }
-    } catch {}
-
+    // NEW CUSTOMER FLOW (offline/dev fallback):
     const finalUser: User = {
       id: `user-${cleanPhone}`,
       name: name?.trim() || '',
       phone: cleanPhone,
       role: Role.CUSTOMER,
-      walletBalance: initialNewWalletBalance,
+      walletBalance: 0,
       codOrderCount: 0,
-      addresses: [], // Strictly blank for new customers!
+      addresses: [],
       createdAt: new Date().toISOString(),
       isDatabaseVerified: false,
     };
@@ -3416,10 +3779,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const logout = () => {
     localStorage.removeItem('om_customer_session');
+    logoutCustomerServerSession();
     setCurrentUser(BLANK_CUSTOMER);
     setCart([]);
     setActiveRoleState(Role.CUSTOMER);
     setSelectedAddressId(null);
+    setAddressesError(null);
+    setAddressesLoading(false);
     setCustomerFlowStep('AUTH');
     setIsAuthModalOpen(false);
     refreshProducts();
@@ -3476,7 +3842,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updateOrderStatus,
         recordCodCollection,
         userAddresses,
+        addressesLoading,
+        addressesError,
+        refreshAddresses,
         addAddress,
+        updateAddress,
+        deleteAddress,
         setDefaultAddress,
         selectedAddressId,
         setSelectedAddressId,

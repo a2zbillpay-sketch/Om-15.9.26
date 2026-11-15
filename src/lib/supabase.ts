@@ -552,18 +552,6 @@ export async function saveCustomerProfileToSupabase(
       }
     }
 
-    // Best-effort insert into public.addresses (permitted by RLS FOR INSERT policy)
-    const finalAddressObj: Address = {
-      id: `addr-${targetUser?.id || userId}`,
-      userId: targetUser?.id || userId,
-      fullAddress: fullAddress.trim(),
-      landmark: landmark.trim(),
-      pincode: pincode.trim(),
-      isDefault: true,
-    };
-
-    saveAddressToSupabase(finalAddressObj).catch(() => {});
-
     const dbOutstanding = Number(targetUser?.outstanding_balance || 0);
     const ledgerCredits = await getCustomerWalletBalanceFromLedger(targetUser?.id || userId, cleanPhone);
     const dbCredits = Math.max(Number(targetUser?.wallet_balance || 0), ledgerCredits);
@@ -576,7 +564,7 @@ export async function saveCustomerProfileToSupabase(
       walletBalance: dbCredits,
       outstandingBalance: dbOutstanding,
       codOrderCount: 0,
-      addresses: [finalAddressObj],
+      addresses: [],
       createdAt: targetUser?.updated_at || new Date().toISOString(),
       isDatabaseVerified: true,
     };
@@ -586,40 +574,302 @@ export async function saveCustomerProfileToSupabase(
   }
 }
 
+export async function loginCustomerServerSession(
+  phone: string,
+  options?: { name?: string; isExisting?: boolean; customerId?: string }
+): Promise<{
+  authenticated: boolean;
+  customerId?: string;
+  phone?: string;
+  user?: Partial<User> | null;
+  error?: string;
+  status?: number;
+}> {
+  try {
+    const resp = await fetch('/api/auth/customer-login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        phone,
+        name: options?.name,
+        isExisting: options?.isExisting,
+        customerId: options?.customerId,
+      }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      return {
+        authenticated: false,
+        error: data?.error || 'Customer authentication failed.',
+        status: resp.status,
+      };
+    }
+    return {
+      authenticated: Boolean(data?.authenticated),
+      customerId: data?.customerId,
+      phone: data?.phone,
+      user: data?.user || null,
+      status: resp.status,
+    };
+  } catch (err: any) {
+    return {
+      authenticated: false,
+      error: err?.message || 'Network error while establishing customer session.',
+    };
+  }
+}
+
+export async function logoutCustomerServerSession(): Promise<void> {
+  try {
+    await fetch('/api/auth/customer-logout', {
+      method: 'POST',
+      credentials: 'include',
+    });
+  } catch {
+    // ignore network errors
+  }
+}
+
+export async function checkCustomerServerSession(): Promise<{
+  authenticated: boolean;
+  customerId?: string;
+  phone?: string;
+}> {
+  try {
+    const resp = await fetch('/api/auth/customer-me', {
+      method: 'GET',
+      credentials: 'include',
+    });
+    if (!resp.ok) return { authenticated: false };
+    const data = await resp.json().catch(() => ({}));
+    return {
+      authenticated: Boolean(data?.authenticated),
+      customerId: data?.customerId,
+      phone: data?.phone,
+    };
+  } catch {
+    return { authenticated: false };
+  }
+}
+
 /**
- * Inserts a newly added delivery address row into public.addresses (matches RLS INSERT policy).
+ * Fetches all delivery addresses belonging to the authenticated customer from Supabase public.addresses via /api/addresses.
+ */
+export async function fetchAddressesFromSupabase(): Promise<{
+  success: boolean;
+  addresses: Address[];
+  error?: string;
+  status?: number;
+}> {
+  try {
+    const resp = await fetch('/api/addresses', {
+      method: 'GET',
+      credentials: 'include',
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || !data?.success) {
+      return {
+        success: false,
+        addresses: [],
+        error: data?.error || 'Failed to load delivery addresses from database.',
+        status: resp.status,
+      };
+    }
+    return {
+      success: true,
+      addresses: Array.isArray(data.addresses) ? data.addresses : [],
+      status: resp.status,
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      addresses: [],
+      error: err?.message || 'Network error loading delivery addresses.',
+    };
+  }
+}
+
+export async function createAddressInSupabase(
+  address: Omit<Address, 'id' | 'userId'> & { allowEmptyPincode?: boolean }
+): Promise<{
+  success: boolean;
+  address?: Address;
+  addresses: Address[];
+  error?: string;
+}> {
+  try {
+    const resp = await fetch('/api/addresses', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        label: address.label?.trim() || undefined,
+        fullAddress: address.fullAddress.trim(),
+        landmark: address.landmark?.trim() || '',
+        pincode: address.pincode?.trim() || '',
+        isDefault: Boolean(address.isDefault),
+        googleLocation: address.googleLocation,
+        allowEmptyPincode: address.allowEmptyPincode === true,
+      }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || !data?.success) {
+      return {
+        success: false,
+        addresses: [],
+        error: data?.error || 'Failed to save delivery address.',
+      };
+    }
+    return {
+      success: true,
+      address: data.address,
+      addresses: Array.isArray(data.addresses) ? data.addresses : [],
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      addresses: [],
+      error: err?.message || 'Network error saving delivery address.',
+    };
+  }
+}
+
+export async function updateAddressInSupabase(
+  id: string,
+  updates: Partial<Address> & { allowEmptyPincode?: boolean }
+): Promise<{
+  success: boolean;
+  address?: Address;
+  addresses: Address[];
+  error?: string;
+}> {
+  try {
+    const resp = await fetch('/api/addresses', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        id,
+        ...(updates.label !== undefined ? { label: updates.label } : {}),
+        ...(updates.fullAddress !== undefined ? { fullAddress: updates.fullAddress } : {}),
+        ...(updates.landmark !== undefined ? { landmark: updates.landmark } : {}),
+        ...(updates.pincode !== undefined ? { pincode: updates.pincode } : {}),
+        ...(updates.isDefault !== undefined ? { isDefault: updates.isDefault } : {}),
+        ...(updates.googleLocation !== undefined ? { googleLocation: updates.googleLocation } : {}),
+        ...(updates.allowEmptyPincode !== undefined ? { allowEmptyPincode: updates.allowEmptyPincode } : {}),
+      }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || !data?.success) {
+      return {
+        success: false,
+        addresses: [],
+        error: data?.error || 'Failed to update delivery address.',
+      };
+    }
+    return {
+      success: true,
+      address: data.address,
+      addresses: Array.isArray(data.addresses) ? data.addresses : [],
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      addresses: [],
+      error: err?.message || 'Network error updating delivery address.',
+    };
+  }
+}
+
+export async function deleteAddressInSupabase(id: string): Promise<{
+  success: boolean;
+  addresses: Address[];
+  error?: string;
+}> {
+  try {
+    const resp = await fetch(`/api/addresses?id=${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ id }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || !data?.success) {
+      return {
+        success: false,
+        addresses: [],
+        error: data?.error || 'Failed to delete delivery address.',
+      };
+    }
+    return {
+      success: true,
+      addresses: Array.isArray(data.addresses) ? data.addresses : [],
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      addresses: [],
+      error: err?.message || 'Network error deleting delivery address.',
+    };
+  }
+}
+
+export async function setDefaultAddressInSupabase(id: string): Promise<{
+  success: boolean;
+  address?: Address;
+  addresses: Address[];
+  error?: string;
+}> {
+  try {
+    const resp = await fetch('/api/addresses', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ id, action: 'set_default' }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || !data?.success) {
+      return {
+        success: false,
+        addresses: [],
+        error: data?.error || 'Failed to update default delivery address.',
+      };
+    }
+    return {
+      success: true,
+      address: data.address,
+      addresses: Array.isArray(data.addresses) ? data.addresses : [],
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      addresses: [],
+      error: err?.message || 'Network error updating default delivery address.',
+    };
+  }
+}
+
+/**
+ * Inserts a newly added delivery address row via the authenticated /api/addresses endpoint.
  */
 export async function saveAddressToSupabase(address: Address): Promise<boolean> {
-  if (!supabase) return false;
-  if (!address.userId || !address.fullAddress || !address.fullAddress.trim()) return false;
-
-  try {
-    const { error } = await supabase.from('addresses').insert({
-      id: address.id || `addr-${Date.now()}`,
-      user_id: address.userId,
-      full_address: address.fullAddress.trim(),
-      landmark: address.landmark?.trim() || null,
-      pincode: address.pincode?.trim() || '422001',
-      is_default: Boolean(address.isDefault),
-      google_location: address.googleLocation || null,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    });
-
-    if (error) {
-      // Duplicate primary key or RLS notice handled non-destructively
-      return false;
-    }
-    return true;
-  } catch {
-    return false;
-  }
+  if (!address.fullAddress || !address.fullAddress.trim()) return false;
+  const res = await createAddressInSupabase({
+    label: address.label,
+    fullAddress: address.fullAddress.trim(),
+    landmark: address.landmark?.trim() || '',
+    pincode: address.pincode?.trim() || '',
+    isDefault: Boolean(address.isDefault),
+    googleLocation: address.googleLocation,
+    allowEmptyPincode: true,
+  });
+  return res.success;
 }
 
 /**
  * Fetch customer profile (Name, Address, Landmark, Contact Number) from Supabase by phone.
  * Queries public.users filtering strictly by phone AND role = CUSTOMER.
- * Does not query non-existent public.addresses table.
  */
 export async function fetchCustomerProfileFromSupabase(phone: string): Promise<User | null> {
   if (!supabase) return null;
@@ -647,34 +897,9 @@ export async function fetchCustomerProfileFromSupabase(phone: string): Promise<U
 
     const dbUser = userRows[0];
 
-    // 2. Read the saved customer address directly from users.address
-    let { fullAddress, landmark, pincode } = parseCustomerAddress(dbUser.address);
+    // 2. Read fallback address metadata from users.address only if needed (public.addresses is authoritative)
+    const { fullAddress, landmark, pincode } = parseCustomerAddress(dbUser.address);
 
-    // 3. Fallback: If users.address is empty, optionally use the most recent valid orders.delivery_address
-    if (!fullAddress) {
-      try {
-        const { data: recentOrders } = await supabase
-          .from('orders')
-          .select('delivery_address')
-          .or(`customer_id.eq.${dbUser.id},customer_phone.eq.${cleanPhone}`)
-          .not('delivery_address', 'is', null)
-          .order('created_at', { ascending: false })
-          .limit(1);
-
-        if (recentOrders && recentOrders.length > 0 && recentOrders[0].delivery_address) {
-          const fallbackParsed = parseCustomerAddress(recentOrders[0].delivery_address);
-          if (fallbackParsed.fullAddress) {
-            fullAddress = fallbackParsed.fullAddress;
-            if (!landmark) landmark = fallbackParsed.landmark;
-            if (!pincode) pincode = fallbackParsed.pincode;
-          }
-        }
-      } catch (orderErr) {
-        console.warn('Fallback order delivery_address lookup failed:', orderErr);
-      }
-    }
-
-    // Do NOT query the non-existent addresses table
     // Do NOT invent or hard-code a customer pincode. If not stored, leave blank.
     const formattedAddresses: Address[] = fullAddress
       ? [
@@ -683,7 +908,7 @@ export async function fetchCustomerProfileFromSupabase(phone: string): Promise<U
             userId: dbUser.id,
             fullAddress,
             landmark,
-            pincode, // Blank if not stored!
+            pincode,
             isDefault: true,
           },
         ]

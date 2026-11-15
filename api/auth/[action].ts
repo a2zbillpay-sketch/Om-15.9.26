@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'http';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import {
   setAdminSessionCookie,
   clearAdminSessionCookie,
@@ -6,6 +7,11 @@ import {
   SESSION_MAX_AGE_MS,
   AdminSession,
   getSessionSecret,
+  setCustomerSessionCookie,
+  clearCustomerSessionCookie,
+  verifyCustomerSession,
+  CUSTOMER_SESSION_MAX_AGE_MS,
+  CustomerSession,
 } from './_verify.js';
 import {
   verifyAdminPassword,
@@ -87,6 +93,19 @@ function getAction(req: IncomingMessage): string {
   return '';
 }
 
+function getServerSupabaseClient(): SupabaseClient | null {
+  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (url && key && url !== 'https://your-project.supabase.co' && key !== 'your-service-role-key') {
+    try {
+      return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
 /**
  * Consolidated Auth Endpoint: Combines login, logout, me, forgot-password,
  * verify-reset, and reset-password into a single handler to respect Vercel's
@@ -109,6 +128,24 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
     return sendJson(res, 200, { authenticated: false });
   }
 
+  // 1b. CUSTOMER SESSION CHECK (GET)
+  if (action === 'customer-me') {
+    if (method !== 'GET') {
+      res.setHeader('Allow', 'GET');
+      return sendJson(res, 405, { error: 'Method Not Allowed' });
+    }
+    const customerSession = verifyCustomerSession(req);
+    if (customerSession && customerSession.role === 'CUSTOMER') {
+      return sendJson(res, 200, {
+        authenticated: true,
+        role: 'CUSTOMER',
+        customerId: customerSession.customerId,
+        phone: customerSession.phone,
+      });
+    }
+    return sendJson(res, 200, { authenticated: false });
+  }
+
   // 2. LOGOUT (POST)
   if (action === 'logout') {
     if (method !== 'POST') {
@@ -117,6 +154,144 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
     }
     clearAdminSessionCookie(res);
     return sendJson(res, 200, { success: true });
+  }
+
+  // 2b. CUSTOMER LOGOUT (POST)
+  if (action === 'customer-logout') {
+    if (method !== 'POST') {
+      res.setHeader('Allow', 'POST');
+      return sendJson(res, 405, { error: 'Method Not Allowed' });
+    }
+    clearCustomerSessionCookie(res);
+    return sendJson(res, 200, { success: true });
+  }
+
+  // 2c. CUSTOMER LOGIN (POST) - issues signed HttpOnly om_customer_session cookie
+  if (action === 'customer-login') {
+    if (method !== 'POST') {
+      res.setHeader('Allow', 'POST');
+      return sendJson(res, 405, { error: 'Method Not Allowed' });
+    }
+
+    try {
+      const body = await readJsonBody(req);
+      const rawPhone = String(body?.phone || '');
+      const cleanPhone = rawPhone.replace(/\D/g, '').slice(-10);
+      if (cleanPhone.length !== 10) {
+        return sendJson(res, 400, { error: 'Valid 10-digit mobile number is required.' });
+      }
+
+      const requestedName = typeof body?.name === 'string' ? body.name.trim() : '';
+      const isExistingRequested = body?.isExisting === true;
+
+      let resolvedUser: any = null;
+      let customerId = `user-${cleanPhone}`;
+
+      const supabase = getServerSupabaseClient();
+      if (supabase) {
+        const { data: userRows, error: userErr } = await supabase
+          .from('users')
+          .select('*')
+          .eq('phone', cleanPhone)
+          .eq('role', 'CUSTOMER')
+          .order('updated_at', { ascending: false })
+          .limit(1);
+
+        if (userErr) {
+          return sendJson(res, 500, { error: userErr.message || 'Database lookup failed.' });
+        }
+
+        if (userRows && userRows.length > 0) {
+          resolvedUser = userRows[0];
+          customerId = resolvedUser.id;
+        } else {
+          if (isExistingRequested) {
+            return sendJson(res, 404, {
+              error: `No registered customer profile found for +91 ${cleanPhone}. Please switch to New Customer to register.`,
+            });
+          }
+
+          const newCustomerId = `usr_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`;
+          const newCustomerPayload = {
+            id: newCustomerId,
+            phone: cleanPhone,
+            name: requestedName,
+            role: 'CUSTOMER',
+            shop_name: requestedName ? `${requestedName}'s Kirana Store` : '',
+            address: '',
+            outstanding_balance: 0,
+            wallet_balance: 0,
+            updated_at: new Date().toISOString(),
+          };
+
+          const { data: insertedUser, error: insertErr } = await supabase
+            .from('users')
+            .upsert(newCustomerPayload, { onConflict: 'id' })
+            .select()
+            .single();
+
+          if (insertErr) {
+            const { data: retryRows } = await supabase
+              .from('users')
+              .select('*')
+              .eq('phone', cleanPhone)
+              .eq('role', 'CUSTOMER')
+              .order('updated_at', { ascending: false })
+              .limit(1);
+
+            if (retryRows && retryRows.length > 0) {
+              resolvedUser = retryRows[0];
+              customerId = resolvedUser.id;
+            } else {
+              return sendJson(res, 500, { error: insertErr.message || 'Failed to initialize customer record.' });
+            }
+          } else if (insertedUser) {
+            resolvedUser = insertedUser;
+            customerId = insertedUser.id;
+          }
+        }
+      } else if (typeof body?.customerId === 'string' && body.customerId.trim()) {
+        customerId = body.customerId.trim();
+      }
+
+      const now = Date.now();
+      const session: CustomerSession = {
+        role: 'CUSTOMER',
+        customerId,
+        phone: cleanPhone,
+        issuedAt: now,
+        expiresAt: now + CUSTOMER_SESSION_MAX_AGE_MS,
+      };
+
+      const cookieSet = setCustomerSessionCookie(res, session);
+      if (!cookieSet) {
+        return sendJson(res, 503, {
+          error: 'Server authentication configuration error: CUSTOMER_SESSION_SECRET / ADMIN_SESSION_SECRET is not configured.',
+        });
+      }
+
+      return sendJson(res, 200, {
+        authenticated: true,
+        role: 'CUSTOMER',
+        customerId,
+        phone: cleanPhone,
+        user: resolvedUser
+          ? {
+              id: resolvedUser.id,
+              name: resolvedUser.name || '',
+              phone: resolvedUser.phone,
+              role: resolvedUser.role || 'CUSTOMER',
+              walletBalance: Number(resolvedUser.wallet_balance || 0),
+              outstandingBalance: Number(resolvedUser.outstanding_balance || 0),
+              codOrderCount: Number(resolvedUser.cod_order_count || 0),
+              createdAt: resolvedUser.updated_at || resolvedUser.created_at || new Date().toISOString(),
+              isDatabaseVerified: true,
+            }
+          : null,
+      });
+    } catch {
+      return sendJson(res, 500, { error: 'Customer authentication failed' });
+    }
   }
 
   // 3. LOGIN (POST)

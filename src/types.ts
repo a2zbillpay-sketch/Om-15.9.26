@@ -50,6 +50,7 @@ export interface GoogleLocation {
 export interface Address {
   id: string;
   userId: string;
+  label?: string;
   fullAddress: string;
   landmark?: string;
   pincode: string;

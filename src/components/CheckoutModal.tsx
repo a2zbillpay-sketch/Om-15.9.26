@@ -13,6 +13,8 @@ import {
   AlertTriangle,
   Navigation,
   ExternalLink,
+  Loader2,
+  RefreshCw,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { Address, PaymentMethod, Order, GoogleLocation } from '../types';
@@ -33,7 +35,11 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   const {
     currentUser,
     userAddresses,
+    addressesLoading,
+    addressesError,
+    refreshAddresses,
     addAddress,
+    updateAddress,
     selectedAddressId,
     setSelectedAddressId,
     checkoutBreakdown,
@@ -45,10 +51,13 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   const [isDualPaymentOpen, setIsDualPaymentOpen] = useState(false);
   const [isAddingNewAddress, setIsAddingNewAddress] = useState(false);
   const [newAddressForm, setNewAddressForm] = useState({
+    label: 'Home',
     fullAddress: '',
     landmark: '',
-    pincode: '400705',
+    pincode: '',
   });
+  const [isSavingAddress, setIsSavingAddress] = useState(false);
+  const [addressFormError, setAddressFormError] = useState<string | null>(null);
 
   const tomorrow = new Date(Date.now() + 24 * 3600 * 1000).toISOString().split('T')[0];
   const [deliveryDate, setDeliveryDate] = useState(tomorrow);
@@ -72,27 +81,52 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   useEffect(() => {
     if (isOpen && currentSelectedAddress?.googleLocation) {
       setSelectedGoogleLocation(currentSelectedAddress.googleLocation);
+    } else if (isOpen && !currentSelectedAddress?.googleLocation) {
+      setSelectedGoogleLocation(null);
     }
   }, [isOpen, currentSelectedAddress?.id, currentSelectedAddress?.googleLocation]);
 
   if (!isOpen) return null;
 
-  const handleSaveNewAddress = (e: React.FormEvent) => {
+  const handleSaveNewAddress = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newAddressForm.fullAddress.trim() || !newAddressForm.pincode.trim()) {
+    setAddressFormError(null);
+    const cleanFull = newAddressForm.fullAddress.trim();
+    const cleanPin = newAddressForm.pincode.trim();
+
+    if (!cleanFull) {
+      setAddressFormError('Please enter complete delivery address.');
       return;
     }
-    addAddress({
-      ...newAddressForm,
-      googleLocation: selectedGoogleLocation || undefined,
-    });
-    setIsAddingNewAddress(false);
-    setNewAddressForm({ fullAddress: '', landmark: '', pincode: '400705' });
+    if (!cleanPin || !/^\d{6}$/.test(cleanPin)) {
+      setAddressFormError('Please enter a valid 6-digit pincode.');
+      return;
+    }
+
+    setIsSavingAddress(true);
+    try {
+      const res = await addAddress({
+        label: newAddressForm.label.trim() || 'Home',
+        fullAddress: cleanFull,
+        landmark: newAddressForm.landmark.trim(),
+        pincode: cleanPin,
+        isDefault: userAddresses.length === 0,
+        googleLocation: selectedGoogleLocation || undefined,
+      });
+      if (!res.success) {
+        setAddressFormError(res.error || 'Failed to save delivery address.');
+        return;
+      }
+      setIsAddingNewAddress(false);
+      setNewAddressForm({ label: 'Home', fullAddress: '', landmark: '', pincode: '' });
+    } finally {
+      setIsSavingAddress(false);
+    }
   };
 
   const handleProceedToPayment = () => {
     if (!currentSelectedAddress) {
-      alert('Please select or add a delivery address.');
+      setWalletErrorMessage('Please select or add a delivery address before proceeding.');
       return;
     }
     setWalletErrorMessage(null);
@@ -253,9 +287,43 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                 )}
               </div>
 
+              {addressesError && !isAddingNewAddress && (
+                <div className="mb-2 p-2.5 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl flex items-center justify-between gap-2">
+                  <span>{addressesError}</span>
+                  <button
+                    type="button"
+                    onClick={() => refreshAddresses()}
+                    className="font-bold underline flex items-center gap-1 shrink-0"
+                  >
+                    <RefreshCw size={11} /> Retry
+                  </button>
+                </div>
+              )}
+
               {isAddingNewAddress ? (
                 <form onSubmit={handleSaveNewAddress} className="bg-gray-50 p-3.5 rounded-xl border border-gray-300 space-y-3">
                   <div className="text-xs font-bold text-gray-800">New Delivery Location</div>
+                  {addressFormError && (
+                    <div className="p-2 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-[11px] font-semibold">
+                      {addressFormError}
+                    </div>
+                  )}
+                  <div className="flex items-center gap-2">
+                    {(['Home', 'Shop', 'Office'] as const).map((lbl) => (
+                      <button
+                        key={lbl}
+                        type="button"
+                        onClick={() => setNewAddressForm({ ...newAddressForm, label: lbl })}
+                        className={`px-2.5 py-1 rounded-lg border text-[11px] font-bold transition ${
+                          newAddressForm.label === lbl
+                            ? 'bg-[#0F2C59] text-white border-[#0F2C59]'
+                            : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-100'
+                        }`}
+                      >
+                        {lbl}
+                      </button>
+                    ))}
+                  </div>
                   <textarea
                     required
                     placeholder="House / Shop #, Building Name, Street / Road Area"
@@ -275,28 +343,52 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                     <input
                       type="text"
                       required
-                      placeholder="Pincode (e.g. 400705)"
+                      maxLength={6}
+                      placeholder="Enter 6-digit pincode"
                       value={newAddressForm.pincode}
-                      onChange={(e) => setNewAddressForm({ ...newAddressForm, pincode: e.target.value })}
+                      onChange={(e) =>
+                        setNewAddressForm({ ...newAddressForm, pincode: e.target.value.replace(/\D/g, '') })
+                      }
                       className="p-2 text-xs border border-gray-300 rounded-lg bg-white outline-none font-mono"
                     />
                   </div>
                   <div className="flex justify-end gap-2 pt-1">
                     <button
                       type="button"
-                      onClick={() => setIsAddingNewAddress(false)}
+                      disabled={isSavingAddress}
+                      onClick={() => {
+                        setIsAddingNewAddress(false);
+                        setAddressFormError(null);
+                      }}
                       className="px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-200 rounded-lg"
                     >
                       Cancel
                     </button>
                     <button
                       type="submit"
-                      className="px-3 py-1.5 text-xs bg-[#0F2C59] text-white font-bold rounded-lg"
+                      disabled={isSavingAddress}
+                      className="px-3 py-1.5 text-xs bg-[#0F2C59] text-white font-bold rounded-lg disabled:opacity-50"
                     >
-                      Save Address
+                      {isSavingAddress ? 'Saving...' : 'Save Address'}
                     </button>
                   </div>
                 </form>
+              ) : addressesLoading && userAddresses.length === 0 ? (
+                <div className="p-4 rounded-xl border border-gray-200 bg-gray-50 flex items-center justify-center gap-2 text-xs text-gray-500">
+                  <Loader2 size={15} className="animate-spin text-[#0F2C59]" />
+                  <span>Loading your delivery addresses...</span>
+                </div>
+              ) : userAddresses.length === 0 ? (
+                <div className="p-4 rounded-xl border border-dashed border-gray-300 bg-gray-50 text-center text-xs text-gray-500 space-y-1.5">
+                  <p className="font-semibold text-gray-700">No saved delivery address found.</p>
+                  <button
+                    type="button"
+                    onClick={() => setIsAddingNewAddress(true)}
+                    className="inline-flex items-center gap-1 font-bold text-[#0F2C59] underline"
+                  >
+                    <Plus size={12} /> Add Delivery Address
+                  </button>
+                </div>
               ) : (
                 <div className="space-y-2">
                   {userAddresses.map((addr) => (
@@ -310,11 +402,25 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                       }`}
                     >
                       <div>
+                        <div className="flex items-center gap-1.5 flex-wrap mb-0.5">
+                          {addr.label && (
+                            <span className="text-[9px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded bg-[#0F2C59]/10 text-[#0F2C59]">
+                              {addr.label}
+                            </span>
+                          )}
+                          {addr.isDefault && (
+                            <span className="text-[9px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-200">
+                              Default
+                            </span>
+                          )}
+                        </div>
                         <p className="font-semibold text-gray-800">{addr.fullAddress}</p>
                         {addr.landmark && (
                           <p className="text-[11px] text-gray-500">Landmark: {addr.landmark}</p>
                         )}
-                        <p className="text-[11px] font-mono font-bold text-gray-600">Pincode: {addr.pincode}</p>
+                        <p className="text-[11px] font-mono font-bold text-gray-600">
+                          {addr.pincode ? `Pincode: ${addr.pincode}` : 'Pincode: Not provided'}
+                        </p>
                       </div>
                       {selectedAddressId === addr.id && (
                         <CheckCircle2 size={16} className="text-[#0F2C59] shrink-0 mt-0.5" />
@@ -655,7 +761,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
         onSelectLocation={(loc) => {
           setSelectedGoogleLocation(loc);
           if (currentSelectedAddress) {
-            currentSelectedAddress.googleLocation = loc;
+            updateAddress(currentSelectedAddress.id, { googleLocation: loc });
           }
         }}
         initialLocation={selectedGoogleLocation}

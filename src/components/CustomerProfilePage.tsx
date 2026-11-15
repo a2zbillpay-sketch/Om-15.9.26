@@ -16,7 +16,7 @@ export const CustomerProfilePage: React.FC<CustomerProfilePageProps> = ({
   canCancel = false,
   onCancel,
 }) => {
-  const { currentUser, saveCustomerProfile, logout, isSupabaseConfigured } = useApp();
+  const { currentUser, saveCustomerProfile, logout, isSupabaseConfigured, addressesLoading } = useApp();
 
   // Primary / default delivery address record
   const primaryAddress =
@@ -101,6 +101,7 @@ export const CustomerProfilePage: React.FC<CustomerProfilePageProps> = ({
         fullAddress: address.trim(),
         landmark: landmark.trim(),
         pincode: pincode.trim(),
+        label: primaryAddress?.label,
       });
 
       setSuccessMessage('Profile saved successfully! Proceeding to shop...');
@@ -250,7 +251,7 @@ export const CustomerProfilePage: React.FC<CustomerProfilePageProps> = ({
               placeholder="Enter complete address in Nashik (e.g. Shop #4, Modern Kirana Stores, MG Road or Flat 402, Shanti Heights)"
               className="w-full px-3.5 py-2.5 border border-gray-300 rounded-xl text-sm font-medium text-gray-800 placeholder:text-gray-400 focus:ring-2 focus:ring-[#0F2C59] focus:border-transparent outline-none transition resize-none"
             />
-            {isNewCustomer && !address && (
+            {isNewCustomer && !address && !addressesLoading && (
               <p className="text-[11px] text-amber-700 font-medium">
                 &bull; Address is initially blank for new customers. Please enter your primary delivery location.
               </p>
@@ -282,7 +283,7 @@ export const CustomerProfilePage: React.FC<CustomerProfilePageProps> = ({
                 maxLength={6}
                 value={pincode}
                 onChange={(e) => setPincode(e.target.value.replace(/\D/g, ''))}
-                placeholder="422001"
+                placeholder="6-digit pincode"
                 className="w-full px-3.5 py-2.5 border border-gray-300 rounded-xl text-sm font-mono font-bold text-gray-800 focus:ring-2 focus:ring-[#0F2C59] focus:border-transparent outline-none transition"
               />
             </div>
