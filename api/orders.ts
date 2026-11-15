@@ -609,22 +609,28 @@ export async function processCreateOrderRequest(
     .eq('phone', cleanPhone)
     .maybeSingle();
 
-  // Load authoritative settings from database (with standard Om Distributors defaults)
-  let advanceDiscountPct = 5.0; // 5% advance payment discount
+  // Load authoritative settings from database (advance discount strictly defaults to 0.00%)
+  let advanceDiscountPct = 0.0; // 0.00% safe default advance payment discount
   let codBaseCharge = 0.0;      // ₹0 initial COD fee
   let freeShippingMin = 249.0;  // ₹249 free delivery threshold
   let baseDeliveryFee = 11.0;   // ₹11 standard delivery fee
 
   try {
-    const { data: storeSettings } = await supabase
+    const { data: storeSettings, error: storeSettingsError } = await supabase
       .from('store_settings')
       .select('*')
       .eq('id', 'global_settings')
       .maybeSingle();
 
-    if (storeSettings) {
-      if (storeSettings.advance_discount_percentage !== undefined) {
-        advanceDiscountPct = Number(storeSettings.advance_discount_percentage);
+    if (!storeSettingsError && storeSettings) {
+      const rawDiscount = storeSettings.advance_discount_percentage;
+      if (
+        rawDiscount !== undefined &&
+        rawDiscount !== null &&
+        String(rawDiscount).trim() !== '' &&
+        Number.isFinite(Number(rawDiscount))
+      ) {
+        advanceDiscountPct = Math.max(0, Math.round(Number(rawDiscount) * 100) / 100);
       }
       if (storeSettings.cod_base_charge !== undefined) {
         codBaseCharge = Number(storeSettings.cod_base_charge);
@@ -637,7 +643,8 @@ export async function processCreateOrderRequest(
       }
     }
   } catch {
-    // Fall back to constants
+    // Fall back safely to defaults (advanceDiscountPct remains 0.0)
+    advanceDiscountPct = 0.0;
   }
 
   // Query products, variants, and wholesale slabs from database to authoritatively verify stock, limits, and prices
@@ -939,8 +946,9 @@ export async function processCreateOrderRequest(
   const codCharge = !isAdvance ? Math.max(0, Number(codBaseCharge) || 0) : 0;
 
   // Authoritative Advance Payment Discount
+  const safeAdvanceDiscountPct = Math.max(0, Number(advanceDiscountPct) || 0);
   const advanceDiscountAmount = isAdvance
-    ? Math.round((verifiedEligibleSubtotal * advanceDiscountPct) / 100)
+    ? Math.round((verifiedEligibleSubtotal * safeAdvanceDiscountPct) / 100)
     : 0;
 
   const orderFinalAmount = isAdvance
