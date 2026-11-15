@@ -13,12 +13,15 @@ import {
   PaymentMethod,
   PaymentStatus,
   Address,
+  AddressLabel,
   GoogleLocation,
   WalletTransaction,
   AdminNotification,
   ProductRequest,
   RepeatOrderNotice,
   RepeatOrderResult,
+  formatFullAddress,
+  normalizeAddressLabel,
 } from '../types';
 import {
   INITIAL_SETTINGS,
@@ -65,6 +68,9 @@ import {
   saveCategoryToSupabase,
   deleteCategoryFromSupabase,
   reorderCategoriesInSupabase,
+  DUPLICATE_CUSTOMER_MESSAGE,
+  normalizeIndianMobile,
+  getIndianMobileVariants,
 } from '../lib/supabase';
 
 import { reorderProductsInDb } from '../lib/product-service';
@@ -153,9 +159,15 @@ interface AppContextType {
   setCustomerFlowStep: (step: CustomerFlowStep) => void;
   saveCustomerProfile: (data: {
     name: string;
-    fullAddress: string;
+    addressLine1: string;
+    addressLine2?: string;
     landmark: string;
-    pincode?: string;
+    city: string;
+    state: string;
+    pincode: string;
+    label?: string;
+    addressLabel?: AddressLabel | string;
+    fullAddress?: string;
   }) => Promise<void>;
   settings: SystemSetting;
   updateSettings: (newSettings: Partial<SystemSetting>) => void;
@@ -251,7 +263,7 @@ interface AppContextType {
     phone: string,
     role: Role,
     name?: string,
-    options?: { isExisting?: boolean }
+    options?: { isExisting?: boolean; isNewRegistration?: boolean }
   ) => Promise<User>;
   logout: () => void;
   isSupabaseConfigured: boolean;
@@ -3031,7 +3043,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const ensureCustomerSessionCookie = useCallback(
     async (phoneOverride?: string, nameOverride?: string, customerIdOverride?: string): Promise<boolean> => {
       if (!isSupabaseConfigured) return true;
-      const cleanPhone = (phoneOverride || currentUser.phone || '').replace(/\D/g, '').slice(-10);
+      const cleanPhone = normalizeIndianMobile(phoneOverride || currentUser.phone);
       if (cleanPhone.length !== 10) return false;
 
       const check = await checkCustomerServerSession();
@@ -3042,10 +3054,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const loginRes = await loginCustomerServerSession(cleanPhone, {
         name: nameOverride ?? currentUser.name,
         customerId: customerIdOverride ?? currentUser.id,
+        isExisting: currentUser.isDatabaseVerified ? true : undefined,
       });
       return loginRes.authenticated;
     },
-    [currentUser.id, currentUser.name, currentUser.phone]
+    [currentUser.id, currentUser.isDatabaseVerified, currentUser.name, currentUser.phone]
   );
 
   const refreshAddresses = useCallback(async (): Promise<Address[]> => {
@@ -3121,21 +3134,61 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const addAddress = async (
     addressData: Omit<Address, 'id' | 'userId'>
   ): Promise<{ success: boolean; error?: string; address?: Address }> => {
-    if (!addressData.fullAddress || !addressData.fullAddress.trim()) {
-      return { success: false, error: 'Full delivery address is required.' };
+    const cleanLine1 = (addressData.addressLine1 ?? addressData.fullAddress ?? '').trim();
+    const cleanLine2 = (addressData.addressLine2 ?? '').trim();
+    const cleanLandmark = (addressData.landmark ?? '').trim();
+    const cleanCity = (addressData.city ?? '').trim();
+    const cleanState = (addressData.state ?? '').trim();
+    const cleanPincode = (addressData.pincode ?? '').trim();
+    const cleanRecipientName = (addressData.recipientName ?? currentUser.name ?? '').trim();
+    const cleanRecipientPhone = (addressData.recipientPhone ?? currentUser.phone ?? '')
+      .replace(/\D/g, '')
+      .slice(-10);
+    const resolvedLabel = normalizeAddressLabel(addressData.addressLabel ?? addressData.label);
+
+    if (!cleanRecipientName) {
+      return { success: false, error: 'Recipient name is required.' };
     }
-    if (!addressData.pincode || !addressData.pincode.trim()) {
-      return { success: false, error: 'Pincode is required.' };
+    if (!cleanRecipientPhone || cleanRecipientPhone.length !== 10) {
+      return { success: false, error: 'Valid 10-digit recipient phone number is required.' };
     }
+    if (!cleanLine1) {
+      return { success: false, error: 'Address line 1 is required.' };
+    }
+    if (!cleanCity) {
+      return { success: false, error: 'City is required.' };
+    }
+    if (!cleanState) {
+      return { success: false, error: 'State is required.' };
+    }
+    if (!cleanPincode || !/^\d{6}$/.test(cleanPincode)) {
+      return { success: false, error: 'Please enter a valid 6-digit pincode.' };
+    }
+
+    const derivedFullAddress = formatFullAddress({
+      addressLine1: cleanLine1,
+      addressLine2: cleanLine2,
+      landmark: cleanLandmark,
+      city: cleanCity,
+      state: cleanState,
+      pincode: cleanPincode,
+    });
 
     if (!isSupabaseConfigured) {
       const shouldBeDefault = Boolean(addressData.isDefault) || userAddresses.length === 0;
       const newAddress: Address = {
         ...addressData,
-        label: addressData.label?.trim() || undefined,
-        fullAddress: addressData.fullAddress.trim(),
-        landmark: addressData.landmark?.trim() || '',
-        pincode: addressData.pincode.trim(),
+        label: resolvedLabel,
+        addressLabel: resolvedLabel,
+        recipientName: cleanRecipientName,
+        recipientPhone: cleanRecipientPhone,
+        addressLine1: cleanLine1,
+        addressLine2: cleanLine2,
+        fullAddress: derivedFullAddress,
+        landmark: cleanLandmark,
+        city: cleanCity,
+        state: cleanState,
+        pincode: cleanPincode,
         id: `addr-${Date.now()}`,
         userId: currentUser.id,
         isDefault: shouldBeDefault,
@@ -3160,7 +3213,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     const res = await createAddressInSupabase({
-      ...addressData,
+      label: resolvedLabel,
+      addressLabel: resolvedLabel,
+      recipientName: cleanRecipientName,
+      recipientPhone: cleanRecipientPhone,
+      addressLine1: cleanLine1,
+      addressLine2: cleanLine2,
+      fullAddress: derivedFullAddress,
+      landmark: cleanLandmark,
+      city: cleanCity,
+      state: cleanState,
+      pincode: cleanPincode,
       isDefault: Boolean(addressData.isDefault) || userAddresses.length === 0,
     });
 
@@ -3193,11 +3256,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const shouldBeDefault = updates.isDefault === true;
       const updatedAddresses = userAddresses.map((a) => {
         if (a.id === addressId) {
-          return {
+          const merged: Address = {
             ...a,
             ...updates,
+            ...(updates.addressLabel !== undefined || updates.label !== undefined
+              ? {
+                  label: normalizeAddressLabel(updates.addressLabel ?? updates.label),
+                  addressLabel: normalizeAddressLabel(updates.addressLabel ?? updates.label),
+                }
+              : {}),
             isDefault: updates.isDefault !== undefined ? updates.isDefault : a.isDefault,
           };
+          merged.fullAddress = formatFullAddress(merged) || merged.fullAddress;
+          return merged;
         }
         return shouldBeDefault ? { ...a, isDefault: false } : a;
       });
@@ -3310,17 +3381,51 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Customer profile save (Rule 1, 2, 6, 7, 8 — preserves additional delivery addresses & labels in public.addresses)
   const saveCustomerProfile = async (data: {
     name: string;
-    fullAddress: string;
+    addressLine1: string;
+    addressLine2?: string;
     landmark: string;
-    pincode?: string;
+    city: string;
+    state: string;
+    pincode: string;
     label?: string;
+    addressLabel?: AddressLabel | string;
+    fullAddress?: string;
   }): Promise<void> => {
     // Sourced strictly from authenticated customer record (Rule 1 & 2)
     const cleanPhone = currentUser.phone.replace(/\D/g, '').slice(-10) || currentUser.phone.replace(/\D/g, '');
     const targetUserId = currentUser.id || `user-${cleanPhone}`;
     const existingDefault = currentUser.addresses.find((a) => a.isDefault) || currentUser.addresses[0];
-    const preservedLabel = data.label?.trim() || existingDefault?.label;
-    const cleanPincode = data.pincode?.trim() || '';
+    const preservedLabel = normalizeAddressLabel(
+      data.addressLabel ?? data.label ?? existingDefault?.addressLabel ?? existingDefault?.label
+    );
+    const cleanLine1 = (data.addressLine1 ?? data.fullAddress ?? '').trim();
+    const cleanLine2 = (data.addressLine2 ?? '').trim();
+    const cleanLandmark = (data.landmark ?? '').trim();
+    const cleanCity = (data.city ?? existingDefault?.city ?? '').trim();
+    const cleanState = (data.state ?? existingDefault?.state ?? '').trim();
+    const cleanPincode = (data.pincode ?? existingDefault?.pincode ?? '').trim();
+
+    if (!cleanLine1) {
+      throw new Error('Please enter your delivery address (Address Line 1).');
+    }
+    if (!cleanCity) {
+      throw new Error('Please enter your city.');
+    }
+    if (!cleanState) {
+      throw new Error('Please enter your state.');
+    }
+    if (!cleanPincode || !/^\d{6}$/.test(cleanPincode)) {
+      throw new Error('Please enter a valid 6-digit pincode.');
+    }
+
+    const derivedFullAddress = formatFullAddress({
+      addressLine1: cleanLine1,
+      addressLine2: cleanLine2,
+      landmark: cleanLandmark,
+      city: cleanCity,
+      state: cleanState,
+      pincode: cleanPincode,
+    });
 
     let resolvedUserId = targetUserId;
     let authoritativeAddresses: Address[] = currentUser.addresses || [];
@@ -3330,8 +3435,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         targetUserId,
         cleanPhone,
         data.name.trim(),
-        data.fullAddress.trim(),
-        data.landmark.trim(),
+        derivedFullAddress,
+        cleanLandmark,
         cleanPincode
       );
       if (savedProfileUser?.id) {
@@ -3349,24 +3454,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       if (dbDefault) {
         const updRes = await updateAddressInSupabase(dbDefault.id, {
-          fullAddress: data.fullAddress.trim(),
-          landmark: data.landmark.trim(),
+          addressLabel: preservedLabel,
+          label: preservedLabel,
+          recipientName: data.name.trim(),
+          recipientPhone: cleanPhone,
+          addressLine1: cleanLine1,
+          addressLine2: cleanLine2,
+          landmark: cleanLandmark,
+          city: cleanCity,
+          state: cleanState,
           pincode: cleanPincode,
-          label: preservedLabel ?? dbDefault.label,
           isDefault: true,
-          allowEmptyPincode: true,
         });
         if (!updRes.success) {
           throw new Error(updRes.error || 'Failed to update default address in database.');
         }
       } else {
         const crtRes = await createAddressInSupabase({
-          label: preservedLabel || 'Home',
-          fullAddress: data.fullAddress.trim(),
-          landmark: data.landmark.trim(),
+          addressLabel: preservedLabel,
+          label: preservedLabel,
+          recipientName: data.name.trim(),
+          recipientPhone: cleanPhone,
+          addressLine1: cleanLine1,
+          addressLine2: cleanLine2,
+          fullAddress: derivedFullAddress,
+          landmark: cleanLandmark,
+          city: cleanCity,
+          state: cleanState,
           pincode: cleanPincode,
           isDefault: true,
-          allowEmptyPincode: true,
         });
         if (!crtRes.success) {
           throw new Error(crtRes.error || 'Failed to save delivery address to database.');
@@ -3383,9 +3499,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const updatedDefaultAddress: Address = {
         id: targetAddrId,
         userId: targetUserId,
-        ...(preservedLabel ? { label: preservedLabel } : {}),
-        fullAddress: data.fullAddress.trim(),
-        landmark: data.landmark.trim(),
+        label: preservedLabel,
+        addressLabel: preservedLabel,
+        recipientName: data.name.trim(),
+        recipientPhone: cleanPhone,
+        addressLine1: cleanLine1,
+        addressLine2: cleanLine2,
+        fullAddress: derivedFullAddress,
+        landmark: cleanLandmark,
+        city: cleanCity,
+        state: cleanState,
         pincode: cleanPincode,
         isDefault: true,
       };
@@ -3503,7 +3626,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     phone: string,
     role: Role,
     name?: string,
-    options?: { isExisting?: boolean }
+    options?: { isExisting?: boolean; isNewRegistration?: boolean }
   ): Promise<User> => {
     const cleanPhone = phone.replace(/\D/g, '');
 
@@ -3525,17 +3648,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     // CUSTOMER FLOW:
-    const cleanPhone10 = cleanPhone.slice(-10);
+    const cleanPhone10 = normalizeIndianMobile(phone);
+    if (!cleanPhone10) {
+      throw new Error('Please enter a valid 10-digit Indian mobile number.');
+    }
+
+    const isNewRegistration = options?.isNewRegistration === true || options?.isExisting === false;
+    const isExistingRequested = options?.isExisting === true && !isNewRegistration;
 
     if (isSupabaseConfigured) {
-      // Establish signed HttpOnly server session cookie + lookup authoritative customer record in DB
+      // Establish signed HttpOnly server session cookie + lookup/register authoritative customer record in DB
       const serverAuth = await loginCustomerServerSession(cleanPhone10, {
         name: name?.trim(),
-        isExisting: options?.isExisting,
+        isExisting: isExistingRequested ? true : isNewRegistration ? false : undefined,
+        isNewRegistration,
+        mode: isNewRegistration ? 'NEW' : isExistingRequested ? 'EXISTING' : undefined,
       });
 
       if (!serverAuth.authenticated) {
-        if (options?.isExisting === true || serverAuth.status === 404) {
+        if (serverAuth.code === 'DUPLICATE_CUSTOMER' || serverAuth.status === 409) {
+          const dupErr: any = new Error(serverAuth.error || DUPLICATE_CUSTOMER_MESSAGE);
+          dupErr.code = 'DUPLICATE_CUSTOMER';
+          dupErr.redirectToLogin = true;
+          dupErr.normalizedPhone = cleanPhone10;
+          throw dupErr;
+        }
+        if (isExistingRequested || serverAuth.status === 404) {
           throw new Error(
             serverAuth.error ||
               `No registered customer profile found for +91 ${cleanPhone10}. Please switch to New Customer to register.`
@@ -3570,7 +3708,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       );
 
       const hasExistingProfileData = Boolean(resolvedName || dbAddresses.length > 0);
-      const shouldEnterShop = options?.isExisting === true || hasExistingProfileData;
+      const shouldEnterShop = isExistingRequested || hasExistingProfileData;
 
       const finalUser: User = {
         id: resolvedId,
@@ -3606,8 +3744,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       );
 
       setUsers((prev) => {
-        const exists = prev.some((u) => u.phone === cleanPhone10 || u.id === finalUser.id);
-        if (exists) return prev.map((u) => (u.phone === cleanPhone10 || u.id === finalUser.id ? cachedProfile : u));
+        const exists = prev.some(
+          (u) => normalizeIndianMobile(u.phone) === cleanPhone10 || u.id === finalUser.id
+        );
+        if (exists) {
+          return prev.map((u) =>
+            normalizeIndianMobile(u.phone) === cleanPhone10 || u.id === finalUser.id
+              ? cachedProfile
+              : u
+          );
+        }
         return [...prev, cachedProfile];
       });
 
@@ -3624,58 +3770,49 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return finalUser;
     }
 
-    const checkCustomerCachedProfile = () => {
+    const findCachedLocalProfile = (): User | null => {
       try {
-        const cached = localStorage.getItem(`om_profile_${cleanPhone}`);
-        if (!cached) return false;
-        const parsed = JSON.parse(cached);
-        return Boolean(parsed && parsed.role === Role.CUSTOMER && parsed.id !== 'user-shopkeeper');
+        const variants = getIndianMobileVariants(cleanPhone10);
+        for (const keySuffix of [cleanPhone10, ...variants]) {
+          const cached = localStorage.getItem(`om_profile_${keySuffix}`);
+          if (!cached) continue;
+          const parsed = JSON.parse(cached);
+          if (parsed && parsed.role === Role.CUSTOMER && parsed.id !== 'user-shopkeeper') {
+            return parsed;
+          }
+        }
+        return null;
       } catch {
-        return false;
+        return null;
       }
     };
 
-    const hasLocalProfile = Boolean(
-      checkCustomerCachedProfile() ||
-      users.some((u) => {
-        const uClean = u.phone ? u.phone.replace(/\D/g, '').slice(-10) : '';
-        return u.role === Role.CUSTOMER && uClean === cleanPhone10;
-      })
-    );
+    const cachedLocalUser = findCachedLocalProfile();
+    const matchingLocalUser = users.find((u) => {
+      const uClean = normalizeIndianMobile(u.phone);
+      return u.role === Role.CUSTOMER && uClean === cleanPhone10;
+    });
 
-    const treatAsExisting = options?.isExisting === true || (options?.isExisting === undefined && hasLocalProfile);
+    const hasLocalProfile = Boolean(cachedLocalUser || matchingLocalUser);
+
+    if (isNewRegistration && hasLocalProfile) {
+      const dupErr: any = new Error(DUPLICATE_CUSTOMER_MESSAGE);
+      dupErr.code = 'DUPLICATE_CUSTOMER';
+      dupErr.redirectToLogin = true;
+      dupErr.normalizedPhone = cleanPhone10;
+      throw dupErr;
+    }
+
+    const treatAsExisting =
+      isExistingRequested || (!isNewRegistration && options?.isExisting === undefined && hasLocalProfile);
 
     if (treatAsExisting) {
-      let resolvedUser: User | null = null;
-      if (cleanPhone !== '9820123456') {
-        const phoneKey = `om_profile_${cleanPhone}`;
-        const localProfile = localStorage.getItem(phoneKey);
-        if (localProfile) {
-          try {
-            const parsed = JSON.parse(localProfile);
-            if (parsed && parsed.role === Role.CUSTOMER && parsed.id !== 'user-shopkeeper') {
-              resolvedUser = parsed;
-            } else {
-              localStorage.removeItem(phoneKey);
-            }
-          } catch {
-            resolvedUser = null;
-          }
-        }
-      }
+      let resolvedUser: User | null = cachedLocalUser || matchingLocalUser || null;
 
-      if (!resolvedUser) {
-        const matchingUser = users.find((u) => {
-          const uClean = u.phone ? u.phone.replace(/\D/g, '').slice(-10) : '';
-          return u.role === Role.CUSTOMER && uClean === cleanPhone10;
-        });
-        if (matchingUser) {
-          resolvedUser = matchingUser;
-        } else if (options?.isExisting === true) {
-          throw new Error(
-            `No registered customer profile found for +91 ${cleanPhone}. Please switch to New Customer to register.`
-          );
-        }
+      if (!resolvedUser && isExistingRequested) {
+        throw new Error(
+          `No registered customer profile found for +91 ${cleanPhone10}. Please switch to New Customer to register.`
+        );
       }
 
       let resolvedWalletBalance = resolvedUser ? (resolvedUser.walletBalance ?? 0) : 0;
@@ -3685,7 +3822,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           if (savedTx) {
             const txList: WalletTransaction[] = JSON.parse(savedTx);
             const userTx = txList.filter(
-              (t) => t.userPhone && t.userPhone.replace(/\D/g, '').slice(-10) === cleanPhone10
+              (t) => normalizeIndianMobile(t.userPhone) === cleanPhone10
             );
             if (userTx.length > 0 && typeof userTx[0].balanceAfter === 'number' && userTx[0].balanceAfter >= 0) {
               resolvedWalletBalance = userTx[0].balanceAfter;
@@ -3695,14 +3832,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
 
       const userDebt = Number(
-        resolvedUser?.outstandingBalance ?? calculateCustomerOutstanding(orders, cleanPhone)
+        resolvedUser?.outstandingBalance ?? calculateCustomerOutstanding(orders, cleanPhone10)
       );
 
       const finalUser: User = {
         ...(resolvedUser || {}),
-        id: resolvedUser?.id || `user-${cleanPhone}`,
+        id: resolvedUser?.id || `user-${cleanPhone10}`,
         name: resolvedUser?.name || name?.trim() || '',
-        phone: cleanPhone,
+        phone: cleanPhone10,
         role: Role.CUSTOMER,
         walletBalance: resolvedWalletBalance >= 0 ? resolvedWalletBalance : 0,
         outstandingBalance: userDebt,
@@ -3718,22 +3855,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setSelectedAddressId(defaultAddr?.id || null);
       setIsAuthModalOpen(false);
 
-      const customerSavedCart = loadCustomerCart(cleanPhone);
+      const customerSavedCart = loadCustomerCart(cleanPhone10);
       setCart(customerSavedCart);
 
-      localStorage.setItem(`om_profile_${cleanPhone}`, JSON.stringify(finalUser));
+      localStorage.setItem(`om_profile_${cleanPhone10}`, JSON.stringify(finalUser));
       localStorage.setItem(
         'om_customer_session',
         JSON.stringify({
-          phone: cleanPhone,
+          phone: cleanPhone10,
           role: Role.CUSTOMER,
           profileCompleted: true,
         })
       );
 
       setUsers((prev) => {
-        const exists = prev.some((u) => u.phone === cleanPhone || u.id === finalUser.id);
-        if (exists) return prev.map((u) => (u.phone === cleanPhone || u.id === finalUser.id ? finalUser : u));
+        const exists = prev.some(
+          (u) => normalizeIndianMobile(u.phone) === cleanPhone10 || u.id === finalUser.id
+        );
+        if (exists) {
+          return prev.map((u) =>
+            normalizeIndianMobile(u.phone) === cleanPhone10 || u.id === finalUser.id ? finalUser : u
+          );
+        }
         return [...prev, finalUser];
       });
 
@@ -3744,9 +3887,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // NEW CUSTOMER FLOW (offline/dev fallback):
     const finalUser: User = {
-      id: `user-${cleanPhone}`,
+      id: `user-${cleanPhone10}`,
       name: name?.trim() || '',
-      phone: cleanPhone,
+      phone: cleanPhone10,
       role: Role.CUSTOMER,
       walletBalance: 0,
       codOrderCount: 0,
@@ -3760,17 +3903,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setSelectedAddressId(null);
     setIsAuthModalOpen(false);
 
-    const customerSavedCart = loadCustomerCart(cleanPhone);
+    const customerSavedCart = loadCustomerCart(cleanPhone10);
     setCart(customerSavedCart);
 
+    localStorage.setItem(`om_profile_${cleanPhone10}`, JSON.stringify(finalUser));
     localStorage.setItem(
       'om_customer_session',
       JSON.stringify({
-        phone: cleanPhone,
+        phone: cleanPhone10,
         role: Role.CUSTOMER,
         profileCompleted: false,
       })
     );
+    setUsers((prev) => {
+      const exists = prev.some(
+        (u) => normalizeIndianMobile(u.phone) === cleanPhone10 || u.id === finalUser.id
+      );
+      if (exists) return prev;
+      return [...prev, finalUser];
+    });
 
     setCustomerFlowStep('PROFILE');
     notifyShopkeeperCustomerLogin(finalUser);

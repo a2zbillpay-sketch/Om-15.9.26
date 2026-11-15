@@ -605,7 +605,7 @@ export async function processCreateOrderRequest(
   // Check customer active status in database
   const { data: dbCustomer } = await supabase
     .from('users')
-    .select('id, name, phone, role, shop_name, wallet_balance, outstanding_balance')
+    .select('*')
     .eq('phone', cleanPhone)
     .maybeSingle();
 
@@ -998,16 +998,116 @@ export async function processCreateOrderRequest(
     .map((it, idx) => `${idx + 1}. ${it.productName} (${it.variantName || it.packSize}) - ${it.quantity} Qty @ ₹${it.unitPrice} = ₹${it.price}`)
     .join('\n');
 
-  const deliveryAddress =
-    typeof body.address === 'string'
-      ? body.address
-      : body.address?.fullAddress || body.deliveryAddress || 'Address not specified';
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const cleanStr = (val: unknown) => (typeof val === 'string' ? val.trim() : '');
+  const normalizeOrderLabel = (val: unknown): 'HOME' | 'SHOP' | 'OFFICE' | 'OTHER' => {
+    const upper = typeof val === 'string' ? val.trim().toUpperCase() : '';
+    if (upper === 'HOME' || upper === 'SHOP' || upper === 'OFFICE' || upper === 'OTHER') {
+      return upper;
+    }
+    return 'HOME';
+  };
 
   const customerId = isShopkeeper
     ? (body.customerId || dbCustomer?.id || `usr_${cleanPhone}`)
     : (customerSession!.customerId || dbCustomer?.id || `usr_${cleanPhone}`);
-  const customerName = body.customerName || dbCustomer?.name || `Customer (${cleanPhone.slice(-4)})`;
+  const customerName = body.customerName || dbCustomer?.full_name || dbCustomer?.name || `Customer (${cleanPhone.slice(-4)})`;
   const shopName = body.shopName || dbCustomer?.shop_name || customerName;
+
+  const bodyAddr = body.address && typeof body.address === 'object' ? body.address : null;
+  const rawAddressId = cleanStr(body.addressId || bodyAddr?.id);
+  let verifiedAddressId: string | null = null;
+  let dbAddressRow: any = null;
+
+  if (rawAddressId && UUID_RE.test(rawAddressId)) {
+    const { data: foundAddr, error: addrLookupErr } = await supabase
+      .from('addresses')
+      .select('id, user_id, address_label, recipient_name, recipient_phone, address_line1, address_line2, landmark, city, state, pincode')
+      .eq('id', rawAddressId)
+      .maybeSingle();
+
+    if (!addrLookupErr && foundAddr) {
+      if (!isShopkeeper && customerSession) {
+        const allowedOwnerIds = new Set<string>(
+          [customerSession.customerId, dbCustomer?.id, cleanPhone, `user-${cleanPhone}`, `usr_${cleanPhone}`]
+            .filter(Boolean)
+            .map(String)
+        );
+        if (!allowedOwnerIds.has(String(foundAddr.user_id))) {
+          const { data: phoneUsers } = await supabase
+            .from('users')
+            .select('id')
+            .in('phone', [cleanPhone, `+91${cleanPhone}`])
+            .eq('role', 'CUSTOMER');
+          for (const pu of phoneUsers || []) {
+            if (pu?.id) allowedOwnerIds.add(String(pu.id));
+          }
+        }
+        if (!allowedOwnerIds.has(String(foundAddr.user_id))) {
+          return {
+            statusCode: 403,
+            payload: {
+              success: false,
+              error: 'Forbidden: You can only place an order using your own saved delivery address.',
+            },
+          };
+        }
+      }
+      verifiedAddressId = String(foundAddr.id);
+      dbAddressRow = foundAddr;
+    }
+  }
+
+  const addrLabel = normalizeOrderLabel(
+    bodyAddr?.addressLabel ?? bodyAddr?.label ?? dbAddressRow?.address_label
+  );
+  const recipientName =
+    cleanStr(bodyAddr?.recipientName) || cleanStr(dbAddressRow?.recipient_name) || customerName;
+  const recipientPhone =
+    cleanStr(bodyAddr?.recipientPhone) || cleanStr(dbAddressRow?.recipient_phone) || cleanPhone;
+  const addressLine1 =
+    cleanStr(bodyAddr?.addressLine1) ||
+    cleanStr(dbAddressRow?.address_line1) ||
+    (typeof body.address === 'string' ? body.address.trim() : cleanStr(bodyAddr?.fullAddress)) ||
+    cleanStr(body.deliveryAddress);
+  const addressLine2 =
+    cleanStr(bodyAddr?.addressLine2) || cleanStr(dbAddressRow?.address_line2);
+  const addrLandmark =
+    cleanStr(bodyAddr?.landmark) || cleanStr(dbAddressRow?.landmark);
+  const addrCity = cleanStr(bodyAddr?.city) || cleanStr(dbAddressRow?.city);
+  const addrState = cleanStr(bodyAddr?.state) || cleanStr(dbAddressRow?.state);
+  const addrPincode = cleanStr(bodyAddr?.pincode) || cleanStr(dbAddressRow?.pincode);
+
+  const cityState = [addrCity, addrState].filter(Boolean).join(', ');
+  const cityStatePin = addrPincode
+    ? cityState
+      ? `${cityState} - ${addrPincode}`
+      : addrPincode
+    : cityState;
+  const formattedFullAddress =
+    [addressLine1, addressLine2, addrLandmark ? `Near ${addrLandmark}` : '', cityStatePin]
+      .filter(Boolean)
+      .join(', ') ||
+    cleanStr(bodyAddr?.fullAddress) ||
+    cleanStr(body.deliveryAddress) ||
+    'Address not specified';
+
+  const resolvedGoogleLoc = body.googleLocation || bodyAddr?.googleLocation || undefined;
+
+  const deliveryAddressJsonb: Record<string, any> = {
+    ...(verifiedAddressId ? { id: verifiedAddressId } : {}),
+    address_label: addrLabel,
+    recipient_name: recipientName,
+    recipient_phone: recipientPhone,
+    address_line1: addressLine1,
+    ...(addressLine2 ? { address_line2: addressLine2 } : {}),
+    ...(addrLandmark ? { landmark: addrLandmark } : {}),
+    ...(addrCity ? { city: addrCity } : {}),
+    ...(addrState ? { state: addrState } : {}),
+    ...(addrPincode ? { pincode: addrPincode } : {}),
+    full_address: formattedFullAddress,
+    ...(resolvedGoogleLoc ? { google_location: resolvedGoogleLoc } : {}),
+  };
 
   // 1. Insert into public.orders table
   const insertPayload = {
@@ -1025,7 +1125,8 @@ export async function processCreateOrderRequest(
     payment_method: isAdvance ? 'ADVANCE_ONLINE' : 'COD',
     payment_status: isAdvance && finalPayable === 0 ? 'RECEIVED' : 'PENDING',
     is_paid: isAdvance && finalPayable === 0,
-    delivery_address: deliveryAddress,
+    address_id: verifiedAddressId,
+    delivery_address: deliveryAddressJsonb,
     preferred_slot: body.deliveryDate || body.preferredSlot || new Date().toISOString().split('T')[0],
     notes: `Order #${orderNumber} | COD_META:${metaPayload}`,
     weight_kg: Number(body.weightKg) || null,

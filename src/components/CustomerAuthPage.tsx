@@ -4,6 +4,17 @@ import { useApp } from '../context/AppContext';
 import { Role } from '../types';
 import { BrandLogo } from './BrandLogo';
 import { AdminLoginModal } from './AdminLoginModal';
+import { DUPLICATE_CUSTOMER_MESSAGE, normalizeIndianMobile } from '../lib/supabase';
+
+function normalizeMobileInput(raw: string): string {
+  const normalized = normalizeIndianMobile(raw);
+  if (normalized) return normalized;
+  const digits = raw.replace(/\D/g, '');
+  if (digits.startsWith('0091')) return digits.slice(4, 14);
+  if (digits.length > 10 && digits.startsWith('91')) return digits.slice(2, 12);
+  if (digits.length > 10 && digits.startsWith('0')) return digits.slice(1, 11);
+  return digits.slice(0, 10);
+}
 
 interface CustomerAuthPageProps {
   onSuccess?: () => void;
@@ -25,9 +36,9 @@ export const CustomerAuthPage: React.FC<CustomerAuthPageProps> = ({ onSuccess })
   const handleCustomerLogin = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     setError('');
-    const cleanPhone = phone.replace(/\D/g, '');
+    const cleanPhone = normalizeIndianMobile(phone);
 
-    if (!cleanPhone || cleanPhone.length !== 10) {
+    if (!cleanPhone) {
       setError('Please enter a valid 10-digit mobile number.');
       return;
     }
@@ -44,11 +55,26 @@ export const CustomerAuthPage: React.FC<CustomerAuthPageProps> = ({ onSuccess })
         cleanPhone,
         Role.CUSTOMER,
         customerMode === 'NEW' ? name.trim() : undefined,
-        { isExisting: customerMode === 'EXISTING' }
+        {
+          isExisting: customerMode === 'EXISTING',
+          isNewRegistration: customerMode === 'NEW',
+        }
       );
       if (onSuccess && customerMode === 'NEW') onSuccess();
     } catch (err: any) {
-      setError(err.message || 'Authentication error. Please try again.');
+      const isDuplicate =
+        err?.code === 'DUPLICATE_CUSTOMER' ||
+        err?.redirectToLogin === true ||
+        String(err?.message || '').includes('आधीपासून नोंदणीकृत');
+
+      if (isDuplicate) {
+        setError(DUPLICATE_CUSTOMER_MESSAGE);
+        setCustomerMode('EXISTING');
+        setName('');
+        setPhone(err?.normalizedPhone || cleanPhone);
+      } else {
+        setError(err?.message || 'Authentication error. Please try again.');
+      }
     } finally {
       setIsLoading(false);
     }
@@ -225,10 +251,10 @@ export const CustomerAuthPage: React.FC<CustomerAuthPageProps> = ({ onSuccess })
                           <input
                             type="tel"
                             id="new-customer-mobile-input"
-                            maxLength={10}
+                            maxLength={16}
                             required
                             value={phone}
-                            onChange={(e) => setPhone(e.target.value.replace(/\D/g, ''))}
+                            onChange={(e) => setPhone(normalizeMobileInput(e.target.value))}
                             placeholder="Enter your 10-digit mobile"
                             className="w-full pl-9 pr-3.5 py-2.5 border border-gray-300 rounded-xl text-sm font-mono font-bold text-gray-800 placeholder:text-gray-400 focus:ring-2 focus:ring-[#FF6B00] focus:border-transparent outline-none transition"
                           />
@@ -286,10 +312,10 @@ export const CustomerAuthPage: React.FC<CustomerAuthPageProps> = ({ onSuccess })
                           <input
                             type="tel"
                             id="existing-customer-mobile-input"
-                            maxLength={10}
+                            maxLength={16}
                             required
                             value={phone}
-                            onChange={(e) => setPhone(e.target.value.replace(/\D/g, ''))}
+                            onChange={(e) => setPhone(normalizeMobileInput(e.target.value))}
                             placeholder="Enter saved 10-digit mobile"
                             className="w-full pl-9 pr-3.5 py-2.5 border border-gray-300 rounded-xl text-sm font-mono font-bold text-gray-800 placeholder:text-gray-400 focus:ring-2 focus:ring-[#0F2C59] focus:border-transparent outline-none transition"
                           />

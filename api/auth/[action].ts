@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'http';
+import crypto from 'crypto';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import {
   setAdminSessionCookie,
@@ -106,6 +107,303 @@ function getServerSupabaseClient(): SupabaseClient | null {
   return null;
 }
 
+export const DUPLICATE_CUSTOMER_MESSAGE =
+  '🙏 हा मोबाईल नंबर आधीपासून नोंदणीकृत आहे. आपण विद्यमान ग्राहक आहात. कृपया आपल्या जुन्या Customer Account मधून Login करा.';
+
+export function normalizeIndianMobile(raw: unknown): string {
+  if (typeof raw !== 'string' && typeof raw !== 'number') return '';
+  let digits = String(raw).replace(/\D/g, '');
+  if (digits.length === 14 && digits.startsWith('0091')) {
+    digits = digits.slice(4);
+  } else if (digits.length === 12 && digits.startsWith('91')) {
+    digits = digits.slice(2);
+  } else if (digits.length === 11 && digits.startsWith('0')) {
+    digits = digits.slice(1);
+  }
+  return digits.length === 10 ? digits : '';
+}
+
+export function getIndianMobileVariants(cleanPhone10: string): string[] {
+  if (!cleanPhone10 || cleanPhone10.length !== 10) return [];
+  return Array.from(
+    new Set([
+      cleanPhone10,
+      `+91${cleanPhone10}`,
+      `+91 ${cleanPhone10}`,
+      `91${cleanPhone10}`,
+      `0${cleanPhone10}`,
+    ])
+  );
+}
+
+// Per-mobile in-process queue to prevent simultaneous duplicate registration races
+const phoneRegistrationQueues = new Map<string, Promise<any>>();
+
+async function withPhoneRegistrationLock<T>(cleanPhone: string, task: () => Promise<T>): Promise<T> {
+  const previous = phoneRegistrationQueues.get(cleanPhone) || Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const chained = previous.catch(() => {}).then(() => current);
+  phoneRegistrationQueues.set(cleanPhone, chained);
+
+  await previous.catch(() => {});
+  try {
+    return await task();
+  } finally {
+    release();
+    if (phoneRegistrationQueues.get(cleanPhone) === chained) {
+      phoneRegistrationQueues.delete(cleanPhone);
+    }
+  }
+}
+
+function isUniqueViolationError(err: any): boolean {
+  if (!err) return false;
+  const code = String(err.code || '').trim();
+  const msg = String(err.message || '').toLowerCase();
+  return code === '23505' || msg.includes('duplicate key') || msg.includes('unique constraint');
+}
+
+export interface CustomerLoginProcessResult {
+  statusCode: number;
+  payload: any;
+  sessionToSet?: CustomerSession;
+}
+
+export async function processCustomerLoginRequest(
+  supabase: SupabaseClient | null,
+  body: any
+): Promise<CustomerLoginProcessResult> {
+  const cleanPhone = normalizeIndianMobile(body?.phone);
+  if (cleanPhone.length !== 10) {
+    return {
+      statusCode: 400,
+      payload: { error: 'Valid 10-digit mobile number is required.' },
+    };
+  }
+
+  const requestedName = typeof body?.name === 'string' ? body.name.trim() : '';
+  const isNewRegistration =
+    body?.isNewRegistration === true ||
+    String(body?.mode || '').toUpperCase() === 'NEW' ||
+    body?.isExisting === false;
+  const isExistingRequested =
+    !isNewRegistration &&
+    (body?.isExisting === true || String(body?.mode || '').toUpperCase() === 'EXISTING');
+
+  if (isNewRegistration && !requestedName) {
+    return {
+      statusCode: 400,
+      payload: { error: 'Full name is required for new customer registration.' },
+    };
+  }
+
+  const execute = async (): Promise<CustomerLoginProcessResult> => {
+    let resolvedUser: any = null;
+    let customerId = `user-${cleanPhone}`;
+
+    if (supabase) {
+      const phoneVariants = getIndianMobileVariants(cleanPhone);
+      const { data: userRows, error: userErr } = await supabase
+        .from('users')
+        .select('*')
+        .in('phone', phoneVariants)
+        .eq('role', 'CUSTOMER')
+        .order('created_at', { ascending: true })
+        .limit(1);
+
+      if (userErr) {
+        return {
+          statusCode: 500,
+          payload: { error: userErr.message || 'Database lookup failed.' },
+        };
+      }
+
+      if (userRows && userRows.length > 0) {
+        if (isNewRegistration) {
+          return {
+            statusCode: 409,
+            payload: {
+              authenticated: false,
+              code: 'DUPLICATE_CUSTOMER',
+              redirectToLogin: true,
+              phone: cleanPhone,
+              error: DUPLICATE_CUSTOMER_MESSAGE,
+            },
+          };
+        }
+
+        resolvedUser = userRows[0];
+        if (resolvedUser.status && String(resolvedUser.status).toUpperCase() !== 'ACTIVE') {
+          return {
+            statusCode: 403,
+            payload: {
+              error: `Customer account is ${String(resolvedUser.status).toLowerCase()}${
+                resolvedUser.inactive_reason ? `: ${resolvedUser.inactive_reason}` : '.'
+              }`,
+            },
+          };
+        }
+        customerId = String(resolvedUser.id);
+      } else {
+        if (isExistingRequested) {
+          return {
+            statusCode: 404,
+            payload: {
+              error: `No registered customer profile found for +91 ${cleanPhone}. Please switch to New Customer to register.`,
+            },
+          };
+        }
+
+        const newCustomerId = crypto.randomUUID();
+        const nowIso = new Date().toISOString();
+        const primaryPayload = {
+          id: newCustomerId,
+          full_name: requestedName,
+          phone: cleanPhone,
+          role: 'CUSTOMER',
+          status: 'ACTIVE',
+          created_at: nowIso,
+          updated_at: nowIso,
+        };
+
+        let insertedUser: any = null;
+        let insertErr: any = null;
+
+        const primaryRes = await supabase
+          .from('users')
+          .insert(primaryPayload)
+          .select()
+          .single();
+        insertedUser = primaryRes.data;
+        insertErr = primaryRes.error;
+
+        if (
+          insertErr &&
+          !isUniqueViolationError(insertErr) &&
+          (insertErr.code === 'PGRST204' ||
+            insertErr.code === '42703' ||
+            /full_name|status/i.test(String(insertErr.message || '')))
+        ) {
+          const legacyRes = await supabase
+            .from('users')
+            .insert({
+              id: newCustomerId,
+              phone: cleanPhone,
+              name: requestedName,
+              role: 'CUSTOMER',
+              updated_at: nowIso,
+            })
+            .select()
+            .single();
+          insertedUser = legacyRes.data;
+          insertErr = legacyRes.error;
+        }
+
+        if (insertErr) {
+          const { data: retryRows } = await supabase
+            .from('users')
+            .select('*')
+            .in('phone', phoneVariants)
+            .eq('role', 'CUSTOMER')
+            .order('created_at', { ascending: true })
+            .limit(1);
+
+          if (retryRows && retryRows.length > 0) {
+            if (isNewRegistration) {
+              return {
+                statusCode: 409,
+                payload: {
+                  authenticated: false,
+                  code: 'DUPLICATE_CUSTOMER',
+                  redirectToLogin: true,
+                  phone: cleanPhone,
+                  error: DUPLICATE_CUSTOMER_MESSAGE,
+                },
+              };
+            }
+
+            resolvedUser = retryRows[0];
+            if (resolvedUser.status && String(resolvedUser.status).toUpperCase() !== 'ACTIVE') {
+              return {
+                statusCode: 403,
+                payload: {
+                  error: `Customer account is ${String(resolvedUser.status).toLowerCase()}${
+                    resolvedUser.inactive_reason ? `: ${resolvedUser.inactive_reason}` : '.'
+                  }`,
+                },
+              };
+            }
+            customerId = String(resolvedUser.id);
+          } else if (isUniqueViolationError(insertErr)) {
+            return {
+              statusCode: 409,
+              payload: {
+                authenticated: false,
+                code: 'DUPLICATE_CUSTOMER',
+                redirectToLogin: true,
+                phone: cleanPhone,
+                error: DUPLICATE_CUSTOMER_MESSAGE,
+              },
+            };
+          } else {
+            return {
+              statusCode: 500,
+              payload: { error: insertErr.message || 'Failed to initialize customer record.' },
+            };
+          }
+        } else if (insertedUser) {
+          resolvedUser = insertedUser;
+          customerId = String(insertedUser.id);
+        }
+      }
+    } else if (typeof body?.customerId === 'string' && body.customerId.trim()) {
+      customerId = body.customerId.trim();
+    }
+
+    const now = Date.now();
+    const session: CustomerSession = {
+      role: 'CUSTOMER',
+      customerId,
+      phone: cleanPhone,
+      issuedAt: now,
+      expiresAt: now + CUSTOMER_SESSION_MAX_AGE_MS,
+    };
+
+    return {
+      statusCode: 200,
+      sessionToSet: session,
+      payload: {
+        authenticated: true,
+        role: 'CUSTOMER',
+        customerId,
+        phone: cleanPhone,
+        user: resolvedUser
+          ? {
+              id: resolvedUser.id,
+              name: resolvedUser.full_name ?? resolvedUser.name ?? '',
+              phone: resolvedUser.phone,
+              role: resolvedUser.role || 'CUSTOMER',
+              status: resolvedUser.status || 'ACTIVE',
+              walletBalance: Number(resolvedUser.wallet_balance || 0),
+              outstandingBalance: Number(resolvedUser.outstanding_balance || 0),
+              codOrderCount: Number(resolvedUser.cod_order_count || 0),
+              createdAt: resolvedUser.updated_at || resolvedUser.created_at || new Date().toISOString(),
+              isDatabaseVerified: true,
+            }
+          : null,
+      },
+    };
+  };
+
+  if (isNewRegistration) {
+    return withPhoneRegistrationLock(cleanPhone, execute);
+  }
+  return execute();
+}
+
 /**
  * Consolidated Auth Endpoint: Combines login, logout, me, forgot-password,
  * verify-reset, and reset-password into a single handler to respect Vercel's
@@ -175,120 +473,19 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
 
     try {
       const body = await readJsonBody(req);
-      const rawPhone = String(body?.phone || '');
-      const cleanPhone = rawPhone.replace(/\D/g, '').slice(-10);
-      if (cleanPhone.length !== 10) {
-        return sendJson(res, 400, { error: 'Valid 10-digit mobile number is required.' });
-      }
-
-      const requestedName = typeof body?.name === 'string' ? body.name.trim() : '';
-      const isExistingRequested = body?.isExisting === true;
-
-      let resolvedUser: any = null;
-      let customerId = `user-${cleanPhone}`;
-
       const supabase = getServerSupabaseClient();
-      if (supabase) {
-        const { data: userRows, error: userErr } = await supabase
-          .from('users')
-          .select('*')
-          .eq('phone', cleanPhone)
-          .eq('role', 'CUSTOMER')
-          .order('updated_at', { ascending: false })
-          .limit(1);
+      const result = await processCustomerLoginRequest(supabase, body);
 
-        if (userErr) {
-          return sendJson(res, 500, { error: userErr.message || 'Database lookup failed.' });
+      if (result.sessionToSet) {
+        const cookieSet = setCustomerSessionCookie(res, result.sessionToSet);
+        if (!cookieSet) {
+          return sendJson(res, 503, {
+            error: 'Server authentication configuration error: CUSTOMER_SESSION_SECRET / ADMIN_SESSION_SECRET is not configured.',
+          });
         }
-
-        if (userRows && userRows.length > 0) {
-          resolvedUser = userRows[0];
-          customerId = resolvedUser.id;
-        } else {
-          if (isExistingRequested) {
-            return sendJson(res, 404, {
-              error: `No registered customer profile found for +91 ${cleanPhone}. Please switch to New Customer to register.`,
-            });
-          }
-
-          const newCustomerId = `usr_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`;
-          const newCustomerPayload = {
-            id: newCustomerId,
-            phone: cleanPhone,
-            name: requestedName,
-            role: 'CUSTOMER',
-            shop_name: requestedName ? `${requestedName}'s Kirana Store` : '',
-            address: '',
-            outstanding_balance: 0,
-            wallet_balance: 0,
-            updated_at: new Date().toISOString(),
-          };
-
-          const { data: insertedUser, error: insertErr } = await supabase
-            .from('users')
-            .upsert(newCustomerPayload, { onConflict: 'id' })
-            .select()
-            .single();
-
-          if (insertErr) {
-            const { data: retryRows } = await supabase
-              .from('users')
-              .select('*')
-              .eq('phone', cleanPhone)
-              .eq('role', 'CUSTOMER')
-              .order('updated_at', { ascending: false })
-              .limit(1);
-
-            if (retryRows && retryRows.length > 0) {
-              resolvedUser = retryRows[0];
-              customerId = resolvedUser.id;
-            } else {
-              return sendJson(res, 500, { error: insertErr.message || 'Failed to initialize customer record.' });
-            }
-          } else if (insertedUser) {
-            resolvedUser = insertedUser;
-            customerId = insertedUser.id;
-          }
-        }
-      } else if (typeof body?.customerId === 'string' && body.customerId.trim()) {
-        customerId = body.customerId.trim();
       }
 
-      const now = Date.now();
-      const session: CustomerSession = {
-        role: 'CUSTOMER',
-        customerId,
-        phone: cleanPhone,
-        issuedAt: now,
-        expiresAt: now + CUSTOMER_SESSION_MAX_AGE_MS,
-      };
-
-      const cookieSet = setCustomerSessionCookie(res, session);
-      if (!cookieSet) {
-        return sendJson(res, 503, {
-          error: 'Server authentication configuration error: CUSTOMER_SESSION_SECRET / ADMIN_SESSION_SECRET is not configured.',
-        });
-      }
-
-      return sendJson(res, 200, {
-        authenticated: true,
-        role: 'CUSTOMER',
-        customerId,
-        phone: cleanPhone,
-        user: resolvedUser
-          ? {
-              id: resolvedUser.id,
-              name: resolvedUser.name || '',
-              phone: resolvedUser.phone,
-              role: resolvedUser.role || 'CUSTOMER',
-              walletBalance: Number(resolvedUser.wallet_balance || 0),
-              outstandingBalance: Number(resolvedUser.outstanding_balance || 0),
-              codOrderCount: Number(resolvedUser.cod_order_count || 0),
-              createdAt: resolvedUser.updated_at || resolvedUser.created_at || new Date().toISOString(),
-              isDatabaseVerified: true,
-            }
-          : null,
-      });
+      return sendJson(res, result.statusCode, result.payload);
     } catch {
       return sendJson(res, 500, { error: 'Customer authentication failed' });
     }

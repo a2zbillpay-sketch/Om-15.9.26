@@ -3,13 +3,15 @@ import { UserCheck, MapPin, Phone, Lock, ArrowRight, ShieldCheck, LogOut, Shoppi
 import { useApp } from '../context/AppContext';
 import { BrandLogo } from './BrandLogo';
 import { fetchCustomerProfileFromSupabase } from '../lib/supabase';
-import { Role } from '../types';
+import { AddressLabel, Role, normalizeAddressLabel } from '../types';
 
 interface CustomerProfilePageProps {
   onProfileSaved?: () => void;
   canCancel?: boolean;
   onCancel?: () => void;
 }
+
+const PROFILE_ADDRESS_LABELS: readonly AddressLabel[] = ['HOME', 'SHOP', 'OFFICE', 'OTHER'];
 
 export const CustomerProfilePage: React.FC<CustomerProfilePageProps> = ({
   onProfileSaved,
@@ -25,8 +27,16 @@ export const CustomerProfilePage: React.FC<CustomerProfilePageProps> = ({
       : null;
 
   const [name, setName] = useState(currentUser.name || '');
-  const [address, setAddress] = useState(primaryAddress?.fullAddress || '');
+  const [addressLabel, setAddressLabel] = useState<AddressLabel>(() =>
+    normalizeAddressLabel(primaryAddress?.addressLabel ?? primaryAddress?.label)
+  );
+  const [addressLine1, setAddressLine1] = useState(
+    primaryAddress?.addressLine1 || primaryAddress?.fullAddress || ''
+  );
+  const [addressLine2, setAddressLine2] = useState(primaryAddress?.addressLine2 || '');
   const [landmark, setLandmark] = useState(primaryAddress?.landmark || '');
+  const [city, setCity] = useState(primaryAddress?.city || '');
+  const [state, setState] = useState(primaryAddress?.state || '');
   const [pincode, setPincode] = useState(primaryAddress?.pincode || '');
   const [isSaving, setIsSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
@@ -42,8 +52,12 @@ export const CustomerProfilePage: React.FC<CustomerProfilePageProps> = ({
       currentUser.addresses && currentUser.addresses.length > 0
         ? currentUser.addresses.find((a) => a.isDefault) || currentUser.addresses[0]
         : null;
-    setAddress(currentPrimary?.fullAddress || '');
+    setAddressLabel(normalizeAddressLabel(currentPrimary?.addressLabel ?? currentPrimary?.label));
+    setAddressLine1(currentPrimary?.addressLine1 || currentPrimary?.fullAddress || '');
+    setAddressLine2(currentPrimary?.addressLine2 || '');
     setLandmark(currentPrimary?.landmark || '');
+    setCity(currentPrimary?.city || '');
+    setState(currentPrimary?.state || '');
     setPincode(currentPrimary?.pincode || '');
     setErrorMessage('');
     setSuccessMessage('');
@@ -76,7 +90,8 @@ export const CustomerProfilePage: React.FC<CustomerProfilePageProps> = ({
     };
   }, [currentUser.id, currentUser.phone, currentUser.role, currentUser.isDatabaseVerified, isSupabaseConfigured]);
 
-  const isNewCustomer = !primaryAddress || !primaryAddress.fullAddress.trim();
+  const isNewCustomer =
+    !primaryAddress || !(primaryAddress.addressLine1?.trim() || primaryAddress.fullAddress?.trim());
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -88,8 +103,23 @@ export const CustomerProfilePage: React.FC<CustomerProfilePageProps> = ({
       return;
     }
 
-    if (!address.trim()) {
-      setErrorMessage('Please enter your delivery street address or shop details in Nashik.');
+    if (!addressLine1.trim()) {
+      setErrorMessage('Please enter Address Line 1 (House / Shop / Building / Street).');
+      return;
+    }
+
+    if (!city.trim()) {
+      setErrorMessage('Please enter your city.');
+      return;
+    }
+
+    if (!state.trim()) {
+      setErrorMessage('Please enter your state.');
+      return;
+    }
+
+    if (!pincode.trim() || !/^\d{6}$/.test(pincode.trim())) {
+      setErrorMessage('Please enter a valid 6-digit pincode.');
       return;
     }
 
@@ -98,10 +128,14 @@ export const CustomerProfilePage: React.FC<CustomerProfilePageProps> = ({
     try {
       await saveCustomerProfile({
         name: name.trim(),
-        fullAddress: address.trim(),
+        addressLabel,
+        label: addressLabel,
+        addressLine1: addressLine1.trim(),
+        addressLine2: addressLine2.trim(),
         landmark: landmark.trim(),
+        city: city.trim(),
+        state: state.trim(),
         pincode: pincode.trim(),
-        label: primaryAddress?.label,
       });
 
       setSuccessMessage('Profile saved successfully! Proceeding to shop...');
@@ -147,7 +181,7 @@ export const CustomerProfilePage: React.FC<CustomerProfilePageProps> = ({
           </div>
 
           <p className="text-xs text-gray-300 mt-3 leading-relaxed">
-            Please confirm your delivery details. We deliver directly to shops and residences across Nashik city.
+            Please confirm your delivery details for accurate billing and doorstep dispatch.
           </p>
 
           {/* Account Status Badge */}
@@ -234,31 +268,68 @@ export const CustomerProfilePage: React.FC<CustomerProfilePageProps> = ({
             />
           </div>
 
-          {/* 3. Delivery Address */}
+          {/* 3. Address Label */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-black text-gray-700 uppercase tracking-wider block">
+              Address Label
+            </label>
+            <div className="flex flex-wrap items-center gap-2">
+              {PROFILE_ADDRESS_LABELS.map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  onClick={() => setAddressLabel(option)}
+                  className={`px-3 py-1.5 rounded-lg border text-xs font-bold transition ${
+                    addressLabel === option
+                      ? 'bg-[#0F2C59] text-white border-[#0F2C59]'
+                      : 'bg-gray-50 text-gray-700 border-gray-300 hover:bg-gray-100'
+                  }`}
+                >
+                  {option}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* 4. Address Line 1 */}
           <div className="space-y-1.5">
             <label className="text-xs font-black text-gray-700 uppercase tracking-wider flex items-center justify-between">
               <span className="flex items-center gap-1.5">
                 <MapPin size={13} className="text-[#FF6B00]" />
-                <span>Delivery Address (Street / Shop / Building)</span>
+                <span>Address Line 1 (House / Shop / Street)</span>
               </span>
               <span className="text-rose-500">*</span>
             </label>
-            <textarea
+            <input
+              type="text"
               required
-              rows={3}
-              value={address}
-              onChange={(e) => setAddress(e.target.value)}
-              placeholder="Enter complete address in Nashik (e.g. Shop #4, Modern Kirana Stores, MG Road or Flat 402, Shanti Heights)"
-              className="w-full px-3.5 py-2.5 border border-gray-300 rounded-xl text-sm font-medium text-gray-800 placeholder:text-gray-400 focus:ring-2 focus:ring-[#0F2C59] focus:border-transparent outline-none transition resize-none"
+              value={addressLine1}
+              onChange={(e) => setAddressLine1(e.target.value)}
+              placeholder="e.g. Shop #4, Mahavir Kirana Stores, MG Road"
+              className="w-full px-3.5 py-2.5 border border-gray-300 rounded-xl text-sm font-medium text-gray-800 placeholder:text-gray-400 focus:ring-2 focus:ring-[#0F2C59] focus:border-transparent outline-none transition"
             />
-            {isNewCustomer && !address && !addressesLoading && (
+            {isNewCustomer && !addressLine1 && !addressesLoading && (
               <p className="text-[11px] text-amber-700 font-medium">
                 &bull; Address is initially blank for new customers. Please enter your primary delivery location.
               </p>
             )}
           </div>
 
-          {/* 4. Landmark */}
+          {/* 5. Address Line 2 */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-black text-gray-700 uppercase tracking-wider block">
+              Address Line 2 (Locality / Area / Building)
+            </label>
+            <input
+              type="text"
+              value={addressLine2}
+              onChange={(e) => setAddressLine2(e.target.value)}
+              placeholder="Area, colony, complex, or floor (optional)"
+              className="w-full px-3.5 py-2.5 border border-gray-300 rounded-xl text-sm font-medium text-gray-800 placeholder:text-gray-400 focus:ring-2 focus:ring-[#0F2C59] focus:border-transparent outline-none transition"
+            />
+          </div>
+
+          {/* 6. Landmark & Pincode */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div className="sm:col-span-2 space-y-1.5">
               <label className="text-xs font-black text-gray-700 uppercase tracking-wider flex items-center gap-1.5">
@@ -269,22 +340,54 @@ export const CustomerProfilePage: React.FC<CustomerProfilePageProps> = ({
                 type="text"
                 value={landmark}
                 onChange={(e) => setLandmark(e.target.value)}
-                placeholder="e.g. Near Ganpati Mandir, Opp. D-Mart"
+                placeholder="e.g. Near Ganpati Mandir, Opp. Market"
                 className="w-full px-3.5 py-2.5 border border-gray-300 rounded-xl text-sm font-medium text-gray-800 placeholder:text-gray-400 focus:ring-2 focus:ring-[#0F2C59] focus:border-transparent outline-none transition"
               />
             </div>
 
             <div className="space-y-1.5">
               <label className="text-xs font-black text-gray-700 uppercase tracking-wider block">
-                Pincode
+                Pincode <span className="text-rose-500">*</span>
               </label>
               <input
                 type="text"
+                required
                 maxLength={6}
                 value={pincode}
                 onChange={(e) => setPincode(e.target.value.replace(/\D/g, ''))}
                 placeholder="6-digit pincode"
                 className="w-full px-3.5 py-2.5 border border-gray-300 rounded-xl text-sm font-mono font-bold text-gray-800 focus:ring-2 focus:ring-[#0F2C59] focus:border-transparent outline-none transition"
+              />
+            </div>
+          </div>
+
+          {/* 7. City & State */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <label className="text-xs font-black text-gray-700 uppercase tracking-wider block">
+                City <span className="text-rose-500">*</span>
+              </label>
+              <input
+                type="text"
+                required
+                value={city}
+                onChange={(e) => setCity(e.target.value)}
+                placeholder="Enter city"
+                className="w-full px-3.5 py-2.5 border border-gray-300 rounded-xl text-sm font-medium text-gray-800 placeholder:text-gray-400 focus:ring-2 focus:ring-[#0F2C59] focus:border-transparent outline-none transition"
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-xs font-black text-gray-700 uppercase tracking-wider block">
+                State <span className="text-rose-500">*</span>
+              </label>
+              <input
+                type="text"
+                required
+                value={state}
+                onChange={(e) => setState(e.target.value)}
+                placeholder="Enter state"
+                className="w-full px-3.5 py-2.5 border border-gray-300 rounded-xl text-sm font-medium text-gray-800 placeholder:text-gray-400 focus:ring-2 focus:ring-[#0F2C59] focus:border-transparent outline-none transition"
               />
             </div>
           </div>

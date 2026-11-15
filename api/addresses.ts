@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'http';
+import crypto from 'crypto';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import {
   verifyAdminSession,
@@ -12,22 +13,23 @@ export interface AddressAuthContext {
   customerSession: CustomerSession | null;
 }
 
-export interface ApiGoogleLocation {
-  latitude: number;
-  longitude: number;
-  mapsUrl: string;
-  formattedAddress?: string;
-}
+export type AddressLabel = 'HOME' | 'SHOP' | 'OFFICE' | 'OTHER';
 
 export interface ApiAddress {
   id: string;
   userId: string;
-  label?: string;
+  label: AddressLabel;
+  addressLabel: AddressLabel;
+  recipientName: string;
+  recipientPhone: string;
+  addressLine1: string;
+  addressLine2: string;
   fullAddress: string;
   landmark: string;
+  city: string;
+  state: string;
   pincode: string;
   isDefault: boolean;
-  googleLocation?: ApiGoogleLocation;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -84,79 +86,126 @@ function sendJson(res: ServerResponse, statusCode: number, data: any) {
   res.end(JSON.stringify(data));
 }
 
-function normalizeLabel(raw: unknown): string | undefined {
-  if (typeof raw !== 'string') return undefined;
-  const trimmed = raw.trim();
-  return trimmed ? trimmed : undefined;
+function cleanText(raw: unknown): string {
+  return typeof raw === 'string' ? raw.trim() : '';
 }
 
-function extractRealGoogleLocation(raw: any): ApiGoogleLocation | undefined {
-  if (!raw || typeof raw !== 'object') return undefined;
-  const hasCoords =
-    typeof raw.latitude === 'number' &&
-    !Number.isNaN(raw.latitude) &&
-    typeof raw.longitude === 'number' &&
-    !Number.isNaN(raw.longitude);
-  const hasMapsUrl = typeof raw.mapsUrl === 'string' && raw.mapsUrl.trim().length > 0;
-
-  if (!hasCoords && !hasMapsUrl) return undefined;
-
-  return {
-    latitude: hasCoords ? raw.latitude : 0,
-    longitude: hasCoords ? raw.longitude : 0,
-    mapsUrl: hasMapsUrl
-      ? raw.mapsUrl.trim()
-      : `https://www.google.com/maps?q=${raw.latitude},${raw.longitude}`,
-    ...(typeof raw.formattedAddress === 'string' && raw.formattedAddress.trim()
-      ? { formattedAddress: raw.formattedAddress.trim() }
-      : {}),
-  };
+function cleanPhone10(raw: unknown): string {
+  if (typeof raw !== 'string' && typeof raw !== 'number') return '';
+  const digits = String(raw).replace(/\D/g, '').slice(-10);
+  return digits.length === 10 ? digits : '';
 }
 
-function buildGoogleLocationColumnValue(
-  googleLocation?: ApiGoogleLocation | null,
-  label?: string
-): Record<string, any> | null {
-  const realLoc = extractRealGoogleLocation(googleLocation);
-  const cleanLabel = normalizeLabel(label);
-
-  if (!realLoc && !cleanLabel) {
-    return null;
+export function normalizeAddressLabel(raw: unknown): AddressLabel {
+  const upper = typeof raw === 'string' ? raw.trim().toUpperCase() : '';
+  if (upper === 'HOME' || upper === 'SHOP' || upper === 'OFFICE' || upper === 'OTHER') {
+    return upper;
   }
+  return 'HOME';
+}
 
-  return {
-    ...(realLoc || {}),
-    ...(cleanLabel ? { label: cleanLabel } : {}),
-  };
+function isValidProvidedLabel(raw: unknown): boolean {
+  if (raw === undefined || raw === null) return true;
+  if (typeof raw !== 'string') return false;
+  const upper = raw.trim().toUpperCase();
+  if (!upper) return true;
+  return upper === 'HOME' || upper === 'SHOP' || upper === 'OFFICE' || upper === 'OTHER';
+}
+
+export function formatFullAddressFromComponents(parts: {
+  addressLine1?: string;
+  addressLine2?: string;
+  landmark?: string;
+  city?: string;
+  state?: string;
+  pincode?: string;
+}): string {
+  const line1 = (parts.addressLine1 || '').trim();
+  const line2 = (parts.addressLine2 || '').trim();
+  const landmark = (parts.landmark || '').trim();
+  const city = (parts.city || '').trim();
+  const state = (parts.state || '').trim();
+  const pincode = (parts.pincode || '').trim();
+
+  const cityState = [city, state].filter(Boolean).join(', ');
+  const cityStatePin = pincode
+    ? cityState
+      ? `${cityState} - ${pincode}`
+      : pincode
+    : cityState;
+
+  return [line1, line2, landmark ? `Near ${landmark}` : '', cityStatePin]
+    .filter(Boolean)
+    .join(', ');
 }
 
 export function mapAddressRow(row: any): ApiAddress {
-  const rawMeta =
-    row?.google_location && typeof row.google_location === 'object' ? row.google_location : null;
-  const label =
-    normalizeLabel(row?.label) ||
-    normalizeLabel(rawMeta?.label);
-  const googleLocation = extractRealGoogleLocation(rawMeta);
+  const addressLabel = normalizeAddressLabel(row?.address_label);
+  const recipientName = cleanText(row?.recipient_name);
+  const recipientPhone = cleanText(row?.recipient_phone);
+  const addressLine1 = cleanText(row?.address_line1);
+  const addressLine2 = cleanText(row?.address_line2);
+  const landmark = cleanText(row?.landmark);
+  const city = cleanText(row?.city);
+  const state = cleanText(row?.state);
+  const pincode =
+    row?.pincode !== null && row?.pincode !== undefined ? String(row.pincode).trim() : '';
+
+  const fullAddress = formatFullAddressFromComponents({
+    addressLine1,
+    addressLine2,
+    landmark,
+    city,
+    state,
+    pincode,
+  });
 
   return {
     id: String(row.id),
     userId: String(row.user_id),
-    ...(label ? { label } : {}),
-    fullAddress: String(row.full_address || ''),
-    landmark: row.landmark ? String(row.landmark) : '',
-    pincode: row.pincode !== null && row.pincode !== undefined ? String(row.pincode) : '',
+    label: addressLabel,
+    addressLabel,
+    recipientName,
+    recipientPhone,
+    addressLine1,
+    addressLine2,
+    fullAddress,
+    landmark,
+    city,
+    state,
+    pincode,
     isDefault: Boolean(row.is_default),
-    ...(googleLocation ? { googleLocation } : {}),
     ...(row.created_at ? { createdAt: String(row.created_at) } : {}),
     ...(row.updated_at ? { updatedAt: String(row.updated_at) } : {}),
   };
 }
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isUuid(value?: string | null): boolean {
+  return Boolean(value && UUID_REGEX.test(value.trim()));
+}
+
+function isUuidSyntaxError(error: any): boolean {
+  if (!error) return false;
+  return (
+    error.code === '22P02' ||
+    /invalid input syntax for type uuid/i.test(String(error.message || ''))
+  );
+}
+
 async function resolveCustomerIdentity(
   supabase: SupabaseClient,
   phone: string,
-  sessionCustomerId?: string
-): Promise<{ aliases: string[]; canonicalUserId: string }> {
+  sessionCustomerId?: string,
+  options?: { ensureDbUser?: boolean; fallbackFullName?: string }
+): Promise<{
+  aliases: string[];
+  canonicalUserId: string;
+  userFullName?: string;
+  isInactive?: boolean;
+  inactiveReason?: string;
+}> {
   const cleanPhone = phone.replace(/\D/g, '').slice(-10);
   const aliasSet = new Set<string>();
 
@@ -170,11 +219,15 @@ async function resolveCustomerIdentity(
   }
 
   let dbUserId: string | null = null;
+  let userFullName: string | undefined;
+  let isInactive = false;
+  let inactiveReason: string | undefined;
+
   if (cleanPhone) {
     const { data: userRows } = await supabase
       .from('users')
-      .select('id, updated_at')
-      .eq('phone', cleanPhone)
+      .select('*')
+      .in('phone', [cleanPhone, `+91${cleanPhone}`])
       .eq('role', 'CUSTOMER')
       .order('updated_at', { ascending: false });
 
@@ -186,9 +239,62 @@ async function resolveCustomerIdentity(
             dbUserId = String(u.id);
           }
         }
+        const candidateName = cleanText(u?.full_name ?? u?.name);
+        if (!userFullName && candidateName) {
+          userFullName = candidateName;
+        }
       }
       if (!dbUserId && userRows[0]?.id) {
         dbUserId = String(userRows[0].id);
+      }
+      if (userRows[0]?.status && String(userRows[0].status).toUpperCase() !== 'ACTIVE') {
+        isInactive = true;
+        inactiveReason = userRows[0].inactive_reason || undefined;
+      }
+    } else if (options?.ensureDbUser) {
+      const nowIso = new Date().toISOString();
+      const newUserId = isUuid(sessionCustomerId) ? sessionCustomerId!.trim() : crypto.randomUUID();
+      const seedName = cleanText(options?.fallbackFullName);
+      const primaryRes = await supabase
+        .from('users')
+        .insert({
+          id: newUserId,
+          full_name: seedName,
+          phone: cleanPhone,
+          role: 'CUSTOMER',
+          status: 'ACTIVE',
+          created_at: nowIso,
+          updated_at: nowIso,
+        })
+        .select('id')
+        .single();
+
+      if (!primaryRes.error && primaryRes.data?.id) {
+        dbUserId = String(primaryRes.data.id);
+        aliasSet.add(dbUserId);
+        if (seedName) userFullName = seedName;
+      } else if (
+        primaryRes.error &&
+        (primaryRes.error.code === 'PGRST204' ||
+          primaryRes.error.code === '42703' ||
+          /full_name|status/i.test(String(primaryRes.error.message || '')))
+      ) {
+        const legacyRes = await supabase
+          .from('users')
+          .insert({
+            id: newUserId,
+            name: seedName,
+            phone: cleanPhone,
+            role: 'CUSTOMER',
+            updated_at: nowIso,
+          })
+          .select('id')
+          .single();
+        if (!legacyRes.error && legacyRes.data?.id) {
+          dbUserId = String(legacyRes.data.id);
+          aliasSet.add(dbUserId);
+          if (seedName) userFullName = seedName;
+        }
       }
     }
   }
@@ -201,6 +307,9 @@ async function resolveCustomerIdentity(
   return {
     aliases: Array.from(aliasSet),
     canonicalUserId,
+    userFullName,
+    isInactive,
+    inactiveReason,
   };
 }
 
@@ -212,12 +321,27 @@ async function fetchSortedCustomerAddresses(
     return { addresses: [] };
   }
 
-  const { data, error } = await supabase
+  let { data, error } = await supabase
     .from('addresses')
     .select('*')
     .in('user_id', aliases)
     .order('is_default', { ascending: false })
     .order('created_at', { ascending: true });
+
+  if (error && isUuidSyntaxError(error)) {
+    const uuidAliases = aliases.filter(isUuid);
+    if (uuidAliases.length === 0) {
+      return { addresses: [] };
+    }
+    const retry = await supabase
+      .from('addresses')
+      .select('*')
+      .in('user_id', uuidAliases)
+      .order('is_default', { ascending: false })
+      .order('created_at', { ascending: true });
+    data = retry.data;
+    error = retry.error;
+  }
 
   if (error) {
     return { addresses: [], error: error.message };
@@ -241,34 +365,28 @@ async function fetchSortedCustomerAddresses(
   return { addresses: normalized };
 }
 
-async function syncPrimaryAddressToUsersTable(
+async function updateAddressesForUserIds(
   supabase: SupabaseClient,
-  canonicalUserId: string,
-  addresses: ApiAddress[]
-): Promise<void> {
-  if (!canonicalUserId) return;
-  try {
-    const primary = addresses.find((a) => a.isDefault) || addresses[0] || null;
-    let formatted = '';
-    if (primary) {
-      formatted = primary.fullAddress.trim();
-      if (primary.landmark?.trim()) {
-        formatted = `${formatted} (Landmark: ${primary.landmark.trim()})`;
-      }
-      if (primary.pincode?.trim()) {
-        formatted = `${formatted} - ${primary.pincode.trim()}`;
-      }
-    }
-    await supabase
-      .from('users')
-      .update({
-        address: formatted,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', canonicalUserId);
-  } catch {
-    // Non-critical backward-compatibility mirror; public.addresses remains single source of truth
+  aliases: string[],
+  fields: Record<string, any>,
+  excludeId?: string
+): Promise<{ error: any }> {
+  if (aliases.length === 0) return { error: null };
+
+  let q = supabase.from('addresses').update(fields).in('user_id', aliases);
+  if (excludeId) q = q.neq('id', excludeId);
+  let { error } = await q;
+
+  if (error && isUuidSyntaxError(error)) {
+    const uuidAliases = aliases.filter(isUuid);
+    if (uuidAliases.length === 0) return { error: null };
+    let rq = supabase.from('addresses').update(fields).in('user_id', uuidAliases);
+    if (excludeId) rq = rq.neq('id', excludeId);
+    const retry = await rq;
+    error = retry.error;
   }
+
+  return { error };
 }
 
 export async function processAddressesRequest(
@@ -297,6 +415,8 @@ export async function processAddressesRequest(
   // Resolve authorized customer identity scope
   let aliases: string[] = [];
   let canonicalUserId = '';
+  let resolvedUserFullName = '';
+  let resolvedUserPhone = '';
 
   if (customerSession) {
     const requestedPhone = (query?.phone || body?.phone || '').toString().trim();
@@ -316,10 +436,25 @@ export async function processAddressesRequest(
     const identity = await resolveCustomerIdentity(
       supabase,
       customerSession.phone,
-      customerSession.customerId
+      customerSession.customerId,
+      {
+        ensureDbUser: method === 'POST',
+        fallbackFullName: cleanText(body?.recipientName),
+      }
     );
+    if (identity.isInactive) {
+      return {
+        statusCode: 403,
+        payload: {
+          success: false,
+          error: `Customer account is inactive${identity.inactiveReason ? `: ${identity.inactiveReason}` : '.'}`,
+        },
+      };
+    }
     aliases = identity.aliases;
     canonicalUserId = identity.canonicalUserId;
+    resolvedUserFullName = identity.userFullName || '';
+    resolvedUserPhone = customerSession.phone;
 
     const requestedUserId = (query?.userId || body?.userId || '').toString().trim();
     if (requestedUserId && !aliases.includes(requestedUserId)) {
@@ -335,19 +470,32 @@ export async function processAddressesRequest(
     const targetPhone = (query?.phone || body?.phone || '').toString().trim();
     const targetUserId = (query?.userId || body?.userId || '').toString().trim();
     if (targetPhone) {
-      const identity = await resolveCustomerIdentity(supabase, targetPhone, targetUserId || undefined);
+      const identity = await resolveCustomerIdentity(supabase, targetPhone, targetUserId || undefined, {
+        ensureDbUser: method === 'POST',
+        fallbackFullName: cleanText(body?.recipientName),
+      });
       aliases = identity.aliases;
       canonicalUserId = identity.canonicalUserId;
+      resolvedUserFullName = identity.userFullName || '';
+      resolvedUserPhone = cleanPhone10(targetPhone);
     } else if (targetUserId) {
-      const { data: userRow } = await supabase
-        .from('users')
-        .select('id, phone')
-        .eq('id', targetUserId)
-        .limit(1);
-      if (userRow && userRow.length > 0 && userRow[0].phone) {
-        const identity = await resolveCustomerIdentity(supabase, userRow[0].phone, targetUserId);
-        aliases = identity.aliases;
-        canonicalUserId = identity.canonicalUserId;
+      if (isUuid(targetUserId)) {
+        const { data: userRow } = await supabase
+          .from('users')
+          .select('*')
+          .eq('id', targetUserId)
+          .limit(1);
+        if (userRow && userRow.length > 0 && userRow[0].phone) {
+          const identity = await resolveCustomerIdentity(supabase, userRow[0].phone, targetUserId);
+          aliases = identity.aliases;
+          canonicalUserId = identity.canonicalUserId;
+          resolvedUserFullName =
+            identity.userFullName || cleanText(userRow[0].full_name ?? userRow[0].name);
+          resolvedUserPhone = cleanPhone10(userRow[0].phone);
+        } else {
+          aliases = [targetUserId];
+          canonicalUserId = targetUserId;
+        }
       } else {
         aliases = [targetUserId];
         canonicalUserId = targetUserId;
@@ -381,28 +529,67 @@ export async function processAddressesRequest(
 
   // 2. POST — Add a new delivery address
   if (method === 'POST') {
-    const fullAddress = typeof body?.fullAddress === 'string' ? body.fullAddress.trim() : '';
-    const landmark = typeof body?.landmark === 'string' ? body.landmark.trim() : '';
-    const pincode = typeof body?.pincode === 'string' ? body.pincode.trim() : '';
-    const allowEmptyPincode = body?.allowEmptyPincode === true;
-    const label = normalizeLabel(body?.label);
-    const googleLocation = extractRealGoogleLocation(body?.googleLocation);
-
-    if (!fullAddress) {
+    const rawLabel = body?.addressLabel ?? body?.address_label ?? body?.label;
+    if (!isValidProvidedLabel(rawLabel)) {
       return {
         statusCode: 400,
-        payload: { success: false, error: 'Full delivery address is required.' },
+        payload: {
+          success: false,
+          error: 'Address label must be one of HOME, SHOP, OFFICE, or OTHER.',
+        },
       };
     }
 
-    if (!pincode && !allowEmptyPincode) {
+    const addressLabel = normalizeAddressLabel(rawLabel);
+    const recipientName =
+      cleanText(body?.recipientName ?? body?.recipient_name) || resolvedUserFullName;
+    const recipientPhone =
+      cleanPhone10(body?.recipientPhone ?? body?.recipient_phone) || resolvedUserPhone;
+    const addressLine1 =
+      cleanText(body?.addressLine1 ?? body?.address_line1) ||
+      cleanText(body?.fullAddress ?? body?.full_address);
+    const addressLine2 = cleanText(body?.addressLine2 ?? body?.address_line2);
+    const landmark = cleanText(body?.landmark);
+    const city = cleanText(body?.city);
+    const state = cleanText(body?.state);
+    const pincode = cleanText(body?.pincode);
+
+    if (!recipientName) {
       return {
         statusCode: 400,
-        payload: { success: false, error: 'Pincode is required.' },
+        payload: { success: false, error: 'Recipient name is required.' },
       };
     }
 
-    if (pincode && !/^\d{6}$/.test(pincode)) {
+    if (!recipientPhone || recipientPhone.length !== 10) {
+      return {
+        statusCode: 400,
+        payload: { success: false, error: 'Valid 10-digit recipient phone number is required.' },
+      };
+    }
+
+    if (!addressLine1) {
+      return {
+        statusCode: 400,
+        payload: { success: false, error: 'Address line 1 is required.' },
+      };
+    }
+
+    if (!city) {
+      return {
+        statusCode: 400,
+        payload: { success: false, error: 'City is required.' },
+      };
+    }
+
+    if (!state) {
+      return {
+        statusCode: 400,
+        payload: { success: false, error: 'State is required.' },
+      };
+    }
+
+    if (!pincode || !/^\d{6}$/.test(pincode)) {
       return {
         statusCode: 400,
         payload: { success: false, error: 'Please enter a valid 6-digit pincode.' },
@@ -417,14 +604,14 @@ export async function processAddressesRequest(
       return { statusCode: 500, payload: { success: false, error: fetchErr } };
     }
 
-    const shouldBeDefault = Boolean(body?.isDefault) || existingAddresses.length === 0;
+    const shouldBeDefault = Boolean(body?.isDefault ?? body?.is_default) || existingAddresses.length === 0;
     const nowIso = new Date().toISOString();
 
     if (shouldBeDefault && existingAddresses.length > 0) {
-      const { error: clearErr } = await supabase
-        .from('addresses')
-        .update({ is_default: false, updated_at: nowIso })
-        .in('user_id', aliases);
+      const { error: clearErr } = await updateAddressesForUserIds(supabase, aliases, {
+        is_default: false,
+        updated_at: nowIso,
+      });
 
       if (clearErr) {
         return { statusCode: 500, payload: { success: false, error: clearErr.message } };
@@ -432,18 +619,23 @@ export async function processAddressesRequest(
     }
 
     const newId =
-      typeof body?.id === 'string' && body.id.trim()
+      typeof body?.id === 'string' && isUuid(body.id)
         ? body.id.trim()
-        : `addr-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
+        : crypto.randomUUID();
 
     const insertRow = {
       id: newId,
       user_id: canonicalUserId,
-      full_address: fullAddress,
+      address_label: addressLabel,
+      recipient_name: recipientName,
+      recipient_phone: recipientPhone,
+      address_line1: addressLine1,
+      address_line2: addressLine2 || null,
       landmark: landmark || null,
-      pincode: pincode,
+      city,
+      state,
+      pincode,
       is_default: shouldBeDefault,
-      google_location: buildGoogleLocationColumnValue(googleLocation, label),
       created_at: nowIso,
       updated_at: nowIso,
     };
@@ -465,8 +657,6 @@ export async function processAddressesRequest(
     if (refreshErr) {
       return { statusCode: 500, payload: { success: false, error: refreshErr } };
     }
-
-    await syncPrimaryAddressToUsersTable(supabase, canonicalUserId, refreshed);
 
     return {
       statusCode: 201,
@@ -517,15 +707,23 @@ export async function processAddressesRequest(
     // If shopkeeper didn't pass phone/userId on PUT, scope refresh aliases to the row owner
     if (isShopkeeper && aliases.length === 0) {
       const ownerId = String(currentRow.user_id);
-      const { data: ownerUser } = await supabase
-        .from('users')
-        .select('id, phone')
-        .eq('id', ownerId)
-        .limit(1);
-      if (ownerUser && ownerUser.length > 0 && ownerUser[0].phone) {
-        const identity = await resolveCustomerIdentity(supabase, ownerUser[0].phone, ownerId);
-        aliases = identity.aliases;
-        canonicalUserId = identity.canonicalUserId;
+      if (isUuid(ownerId)) {
+        const { data: ownerUser } = await supabase
+          .from('users')
+          .select('*')
+          .eq('id', ownerId)
+          .limit(1);
+        if (ownerUser && ownerUser.length > 0 && ownerUser[0].phone) {
+          const identity = await resolveCustomerIdentity(supabase, ownerUser[0].phone, ownerId);
+          aliases = identity.aliases;
+          canonicalUserId = identity.canonicalUserId;
+          resolvedUserFullName =
+            identity.userFullName || cleanText(ownerUser[0].full_name ?? ownerUser[0].name);
+          resolvedUserPhone = cleanPhone10(ownerUser[0].phone);
+        } else {
+          aliases = [ownerId];
+          canonicalUserId = ownerId;
+        }
       } else {
         aliases = [ownerId];
         canonicalUserId = ownerId;
@@ -536,10 +734,10 @@ export async function processAddressesRequest(
 
     // Case A: Atomic Set Default Address
     if (body?.action === 'set_default' || body?.setDefaultOnly === true) {
-      const { error: clearErr } = await supabase
-        .from('addresses')
-        .update({ is_default: false, updated_at: nowIso })
-        .in('user_id', aliases);
+      const { error: clearErr } = await updateAddressesForUserIds(supabase, aliases, {
+        is_default: false,
+        updated_at: nowIso,
+      });
 
       if (clearErr) {
         return { statusCode: 500, payload: { success: false, error: clearErr.message } };
@@ -564,8 +762,6 @@ export async function processAddressesRequest(
         return { statusCode: 500, payload: { success: false, error: refreshErr } };
       }
 
-      await syncPrimaryAddressToUsersTable(supabase, canonicalUserId, refreshed);
-
       return {
         statusCode: 200,
         payload: {
@@ -576,65 +772,132 @@ export async function processAddressesRequest(
       };
     }
 
-    // Case B: Update address details (preserving label/pincode/landmark/googleLocation if omitted)
+    // Case B: Update address details (reusing existing valid DB columns when omitted)
     const parsedExisting = mapAddressRow(currentRow);
 
-    const nextFullAddress =
-      body?.fullAddress !== undefined
-        ? String(body.fullAddress).trim()
-        : parsedExisting.fullAddress;
-
-    if (!nextFullAddress) {
+    const incomingLabelRaw =
+      body?.addressLabel !== undefined
+        ? body.addressLabel
+        : body?.address_label !== undefined
+        ? body.address_label
+        : body?.label;
+    if (incomingLabelRaw !== undefined && !isValidProvidedLabel(incomingLabelRaw)) {
       return {
         statusCode: 400,
-        payload: { success: false, error: 'Full delivery address cannot be empty.' },
+        payload: {
+          success: false,
+          error: 'Address label must be one of HOME, SHOP, OFFICE, or OTHER.',
+        },
       };
     }
+
+    const nextLabel =
+      incomingLabelRaw !== undefined
+        ? normalizeAddressLabel(incomingLabelRaw)
+        : parsedExisting.addressLabel;
+
+    const rawRecipientName =
+      body?.recipientName !== undefined ? body.recipientName : body?.recipient_name;
+    const nextRecipientName =
+      rawRecipientName !== undefined
+        ? cleanText(rawRecipientName)
+        : parsedExisting.recipientName || resolvedUserFullName;
+
+    if (!nextRecipientName) {
+      return {
+        statusCode: 400,
+        payload: { success: false, error: 'Recipient name cannot be empty.' },
+      };
+    }
+
+    const rawRecipientPhone =
+      body?.recipientPhone !== undefined ? body.recipientPhone : body?.recipient_phone;
+    const nextRecipientPhone =
+      rawRecipientPhone !== undefined
+        ? cleanPhone10(rawRecipientPhone)
+        : parsedExisting.recipientPhone || resolvedUserPhone;
+
+    if (!nextRecipientPhone || nextRecipientPhone.length !== 10) {
+      return {
+        statusCode: 400,
+        payload: { success: false, error: 'Valid 10-digit recipient phone number is required.' },
+      };
+    }
+
+    const rawLine1 =
+      body?.addressLine1 !== undefined
+        ? body.addressLine1
+        : body?.address_line1 !== undefined
+        ? body.address_line1
+        : body?.fullAddress !== undefined
+        ? body.fullAddress
+        : body?.full_address;
+    const nextAddressLine1 =
+      rawLine1 !== undefined ? cleanText(rawLine1) : parsedExisting.addressLine1;
+
+    if (!nextAddressLine1) {
+      return {
+        statusCode: 400,
+        payload: { success: false, error: 'Address line 1 cannot be empty.' },
+      };
+    }
+
+    const rawLine2 =
+      body?.addressLine2 !== undefined ? body.addressLine2 : body?.address_line2;
+    const nextAddressLine2 =
+      rawLine2 !== undefined ? cleanText(rawLine2) : parsedExisting.addressLine2;
 
     const nextLandmark =
-      body?.landmark !== undefined ? String(body.landmark || '').trim() : parsedExisting.landmark;
+      body?.landmark !== undefined ? cleanText(body.landmark) : parsedExisting.landmark;
 
-    const nextPincode =
-      body?.pincode !== undefined ? String(body.pincode || '').trim() : parsedExisting.pincode;
+    const nextCity =
+      body?.city !== undefined ? cleanText(body.city) : parsedExisting.city;
 
-    const allowEmptyPincode = body?.allowEmptyPincode === true;
-    if (body?.pincode !== undefined && !nextPincode && !allowEmptyPincode) {
+    if (!nextCity) {
       return {
         statusCode: 400,
-        payload: { success: false, error: 'Pincode is required.' },
+        payload: { success: false, error: 'City is required and cannot be empty.' },
       };
     }
 
-    if (nextPincode && !/^\d{6}$/.test(nextPincode)) {
+    const nextState =
+      body?.state !== undefined ? cleanText(body.state) : parsedExisting.state;
+
+    if (!nextState) {
+      return {
+        statusCode: 400,
+        payload: { success: false, error: 'State is required and cannot be empty.' },
+      };
+    }
+
+    const nextPincode =
+      body?.pincode !== undefined ? cleanText(body.pincode) : parsedExisting.pincode;
+
+    if (!nextPincode || !/^\d{6}$/.test(nextPincode)) {
       return {
         statusCode: 400,
         payload: { success: false, error: 'Please enter a valid 6-digit pincode.' },
       };
     }
 
-    const nextLabel =
-      body?.label !== undefined ? normalizeLabel(body.label) : parsedExisting.label;
-
-    const nextGoogleLocation =
-      body?.googleLocation !== undefined
-        ? extractRealGoogleLocation(body.googleLocation)
-        : parsedExisting.googleLocation;
-
     const { addresses: existingAll } = await fetchSortedCustomerAddresses(supabase, aliases);
 
+    const rawIsDefault =
+      body?.isDefault !== undefined ? body.isDefault : body?.is_default;
     let nextIsDefault =
-      body?.isDefault !== undefined ? Boolean(body.isDefault) : Boolean(currentRow.is_default);
+      rawIsDefault !== undefined ? Boolean(rawIsDefault) : Boolean(currentRow.is_default);
 
     if (existingAll.length <= 1) {
       nextIsDefault = true;
     }
 
     if (nextIsDefault) {
-      const { error: clearErr } = await supabase
-        .from('addresses')
-        .update({ is_default: false, updated_at: nowIso })
-        .in('user_id', aliases)
-        .neq('id', targetId);
+      const { error: clearErr } = await updateAddressesForUserIds(
+        supabase,
+        aliases,
+        { is_default: false, updated_at: nowIso },
+        targetId
+      );
 
       if (clearErr) {
         return { statusCode: 500, payload: { success: false, error: clearErr.message } };
@@ -653,11 +916,16 @@ export async function processAddressesRequest(
     }
 
     const updateFields = {
-      full_address: nextFullAddress,
+      address_label: nextLabel,
+      recipient_name: nextRecipientName,
+      recipient_phone: nextRecipientPhone,
+      address_line1: nextAddressLine1,
+      address_line2: nextAddressLine2 || null,
       landmark: nextLandmark || null,
+      city: nextCity,
+      state: nextState,
       pincode: nextPincode,
       is_default: nextIsDefault,
-      google_location: buildGoogleLocationColumnValue(nextGoogleLocation, nextLabel),
       updated_at: nowIso,
     };
 
@@ -679,8 +947,6 @@ export async function processAddressesRequest(
     if (refreshErr) {
       return { statusCode: 500, payload: { success: false, error: refreshErr } };
     }
-
-    await syncPrimaryAddressToUsersTable(supabase, canonicalUserId, refreshed);
 
     return {
       statusCode: 200,
@@ -730,15 +996,20 @@ export async function processAddressesRequest(
 
     if (isShopkeeper && aliases.length === 0) {
       const ownerId = String(currentRow.user_id);
-      const { data: ownerUser } = await supabase
-        .from('users')
-        .select('id, phone')
-        .eq('id', ownerId)
-        .limit(1);
-      if (ownerUser && ownerUser.length > 0 && ownerUser[0].phone) {
-        const identity = await resolveCustomerIdentity(supabase, ownerUser[0].phone, ownerId);
-        aliases = identity.aliases;
-        canonicalUserId = identity.canonicalUserId;
+      if (isUuid(ownerId)) {
+        const { data: ownerUser } = await supabase
+          .from('users')
+          .select('id, phone')
+          .eq('id', ownerId)
+          .limit(1);
+        if (ownerUser && ownerUser.length > 0 && ownerUser[0].phone) {
+          const identity = await resolveCustomerIdentity(supabase, ownerUser[0].phone, ownerId);
+          aliases = identity.aliases;
+          canonicalUserId = identity.canonicalUserId;
+        } else {
+          aliases = [ownerId];
+          canonicalUserId = ownerId;
+        }
       } else {
         aliases = [ownerId];
         canonicalUserId = ownerId;
@@ -779,8 +1050,6 @@ export async function processAddressesRequest(
     if (refreshErr) {
       return { statusCode: 500, payload: { success: false, error: refreshErr } };
     }
-
-    await syncPrimaryAddressToUsersTable(supabase, canonicalUserId, refreshed);
 
     return {
       statusCode: 200,

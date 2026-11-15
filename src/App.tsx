@@ -131,7 +131,7 @@ const MainLayout: React.FC = () => {
     currentUser.name &&
     currentUser.addresses &&
     currentUser.addresses.length > 0 &&
-    currentUser.addresses[0]?.fullAddress?.trim()
+    (currentUser.addresses[0]?.addressLine1?.trim() || currentUser.addresses[0]?.fullAddress?.trim())
   );
 
   return (

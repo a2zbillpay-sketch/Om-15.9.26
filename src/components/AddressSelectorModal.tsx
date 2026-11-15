@@ -1,17 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import { X, MapPin, Plus, Check, Pencil, Trash2, RefreshCw, AlertCircle, Loader2 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { Address } from '../types';
+import { Address, AddressLabel, formatFullAddress, normalizeAddressLabel } from '../types';
 
 interface AddressSelectorModalProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
-const ADDRESS_LABELS = ['Home', 'Shop', 'Office'] as const;
+const ADDRESS_LABELS: readonly AddressLabel[] = ['HOME', 'SHOP', 'OFFICE', 'OTHER'];
 
 export const AddressSelectorModal: React.FC<AddressSelectorModalProps> = ({ isOpen, onClose }) => {
   const {
+    currentUser,
     userAddresses,
     addressesLoading,
     addressesError,
@@ -28,9 +29,14 @@ export const AddressSelectorModal: React.FC<AddressSelectorModalProps> = ({ isOp
   const [editingAddressId, setEditingAddressId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
-  const [label, setLabel] = useState<string>('Home');
-  const [fullAddress, setFullAddress] = useState('');
+  const [addressLabel, setAddressLabel] = useState<AddressLabel>('HOME');
+  const [recipientName, setRecipientName] = useState('');
+  const [recipientPhone, setRecipientPhone] = useState('');
+  const [addressLine1, setAddressLine1] = useState('');
+  const [addressLine2, setAddressLine2] = useState('');
   const [landmark, setLandmark] = useState('');
+  const [city, setCity] = useState('');
+  const [state, setState] = useState('');
   const [pincode, setPincode] = useState('');
   const [makeDefault, setMakeDefault] = useState(false);
 
@@ -55,9 +61,14 @@ export const AddressSelectorModal: React.FC<AddressSelectorModalProps> = ({ isOp
   const resetForm = () => {
     setIsFormOpen(false);
     setEditingAddressId(null);
-    setLabel('Home');
-    setFullAddress('');
+    setAddressLabel('HOME');
+    setRecipientName(currentUser.name || '');
+    setRecipientPhone(currentUser.phone || '');
+    setAddressLine1('');
+    setAddressLine2('');
     setLandmark('');
+    setCity('');
+    setState('');
     setPincode('');
     setMakeDefault(false);
     setFormError(null);
@@ -65,9 +76,14 @@ export const AddressSelectorModal: React.FC<AddressSelectorModalProps> = ({ isOp
 
   const openAddForm = () => {
     setEditingAddressId(null);
-    setLabel('Home');
-    setFullAddress('');
+    setAddressLabel('HOME');
+    setRecipientName(currentUser.name || '');
+    setRecipientPhone(currentUser.phone || '');
+    setAddressLine1('');
+    setAddressLine2('');
     setLandmark('');
+    setCity('');
+    setState('');
     setPincode('');
     setMakeDefault(userAddresses.length === 0);
     setFormError(null);
@@ -78,9 +94,14 @@ export const AddressSelectorModal: React.FC<AddressSelectorModalProps> = ({ isOp
 
   const openEditForm = (addr: Address) => {
     setEditingAddressId(addr.id);
-    setLabel(addr.label || 'Home');
-    setFullAddress(addr.fullAddress || '');
+    setAddressLabel(normalizeAddressLabel(addr.addressLabel ?? addr.label));
+    setRecipientName(addr.recipientName || currentUser.name || '');
+    setRecipientPhone(addr.recipientPhone || currentUser.phone || '');
+    setAddressLine1(addr.addressLine1 || addr.fullAddress || '');
+    setAddressLine2(addr.addressLine2 || '');
     setLandmark(addr.landmark || '');
+    setCity(addr.city || '');
+    setState(addr.state || '');
     setPincode(addr.pincode || '');
     setMakeDefault(Boolean(addr.isDefault));
     setFormError(null);
@@ -93,12 +114,33 @@ export const AddressSelectorModal: React.FC<AddressSelectorModalProps> = ({ isOp
     e.preventDefault();
     setFormError(null);
 
-    const cleanFull = fullAddress.trim();
+    const cleanRecipientName = recipientName.trim();
+    const cleanRecipientPhone = recipientPhone.replace(/\D/g, '').slice(-10);
+    const cleanLine1 = addressLine1.trim();
+    const cleanLine2 = addressLine2.trim();
     const cleanLandmark = landmark.trim();
+    const cleanCity = city.trim();
+    const cleanState = state.trim();
     const cleanPin = pincode.trim();
 
-    if (!cleanFull) {
-      setFormError('Please enter your complete delivery address.');
+    if (!cleanRecipientName) {
+      setFormError('Recipient name is required.');
+      return;
+    }
+    if (!cleanRecipientPhone || cleanRecipientPhone.length !== 10) {
+      setFormError('Please enter a valid 10-digit recipient phone number.');
+      return;
+    }
+    if (!cleanLine1) {
+      setFormError('Please enter Address Line 1 (Flat / Shop / Street).');
+      return;
+    }
+    if (!cleanCity) {
+      setFormError('City is required.');
+      return;
+    }
+    if (!cleanState) {
+      setFormError('State is required.');
       return;
     }
     if (!cleanPin || !/^\d{6}$/.test(cleanPin)) {
@@ -106,13 +148,29 @@ export const AddressSelectorModal: React.FC<AddressSelectorModalProps> = ({ isOp
       return;
     }
 
+    const derivedFullAddress = formatFullAddress({
+      addressLine1: cleanLine1,
+      addressLine2: cleanLine2,
+      landmark: cleanLandmark,
+      city: cleanCity,
+      state: cleanState,
+      pincode: cleanPin,
+    });
+
     setIsSubmitting(true);
     try {
       if (editingAddressId) {
         const res = await updateAddress(editingAddressId, {
-          label: label.trim() || undefined,
-          fullAddress: cleanFull,
+          addressLabel,
+          label: addressLabel,
+          recipientName: cleanRecipientName,
+          recipientPhone: cleanRecipientPhone,
+          addressLine1: cleanLine1,
+          addressLine2: cleanLine2,
+          fullAddress: derivedFullAddress,
           landmark: cleanLandmark,
+          city: cleanCity,
+          state: cleanState,
           pincode: cleanPin,
           isDefault: makeDefault,
         });
@@ -122,9 +180,16 @@ export const AddressSelectorModal: React.FC<AddressSelectorModalProps> = ({ isOp
         }
       } else {
         const res = await addAddress({
-          label: label.trim() || 'Home',
-          fullAddress: cleanFull,
+          addressLabel,
+          label: addressLabel,
+          recipientName: cleanRecipientName,
+          recipientPhone: cleanRecipientPhone,
+          addressLine1: cleanLine1,
+          addressLine2: cleanLine2,
+          fullAddress: derivedFullAddress,
           landmark: cleanLandmark,
+          city: cleanCity,
+          state: cleanState,
           pincode: cleanPin,
           isDefault: makeDefault || userAddresses.length === 0,
         });
@@ -169,7 +234,7 @@ export const AddressSelectorModal: React.FC<AddressSelectorModalProps> = ({ isOp
 
   return (
     <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn">
-      <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl p-6 border-t-4 border-[#0F2C59]">
+      <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl p-6 border-t-4 border-[#0F2C59] max-h-[90vh] overflow-y-auto">
         <div className="flex justify-between items-center mb-4">
           <div className="flex items-center gap-2">
             <MapPin size={18} className="text-[#FF6B00]" />
@@ -212,13 +277,15 @@ export const AddressSelectorModal: React.FC<AddressSelectorModalProps> = ({ isOp
             ) : userAddresses.length === 0 ? (
               <div className="py-6 px-4 rounded-xl border border-dashed border-gray-300 bg-gray-50 text-center text-xs text-gray-500 space-y-1">
                 <p className="font-bold text-gray-700">No delivery addresses saved yet</p>
-                <p>Add your home, shop, or office delivery location to continue.</p>
+                <p>Add your home, shop, office, or other delivery location to continue.</p>
               </div>
             ) : (
               <div className="space-y-2 max-h-72 overflow-y-auto pr-0.5">
                 {userAddresses.map((addr) => {
                   const isBusy = busyId === addr.id;
                   const isDeletingConfirm = confirmDeleteId === addr.id;
+                  const displayLabel = normalizeAddressLabel(addr.addressLabel ?? addr.label);
+                  const displayFullAddress = addr.fullAddress || formatFullAddress(addr);
                   return (
                     <div
                       key={addr.id}
@@ -237,18 +304,22 @@ export const AddressSelectorModal: React.FC<AddressSelectorModalProps> = ({ isOp
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-1.5 flex-wrap mb-1">
-                            {addr.label && (
-                              <span className="text-[9px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded bg-[#0F2C59]/10 text-[#0F2C59]">
-                                {addr.label}
-                              </span>
-                            )}
+                            <span className="text-[9px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded bg-[#0F2C59]/10 text-[#0F2C59]">
+                              {displayLabel}
+                            </span>
                             {addr.isDefault && (
                               <span className="text-[9px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-200">
                                 Default
                               </span>
                             )}
                           </div>
-                          <div className="font-bold text-gray-900 break-words">{addr.fullAddress}</div>
+                          {(addr.recipientName || addr.recipientPhone) && (
+                            <div className="text-[11px] font-semibold text-gray-700 mb-0.5">
+                              {addr.recipientName}
+                              {addr.recipientPhone ? ` • +91 ${addr.recipientPhone}` : ''}
+                            </div>
+                          )}
+                          <div className="font-bold text-gray-900 break-words">{displayFullAddress}</div>
                           {addr.landmark && (
                             <div className="text-[11px] text-gray-500 font-normal mt-0.5">
                               Landmark: {addr.landmark}
@@ -345,14 +416,14 @@ export const AddressSelectorModal: React.FC<AddressSelectorModalProps> = ({ isOp
 
             <div>
               <label className="font-bold text-gray-700 block mb-1">Address Label</label>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 {ADDRESS_LABELS.map((option) => (
                   <button
                     key={option}
                     type="button"
-                    onClick={() => setLabel(option)}
+                    onClick={() => setAddressLabel(option)}
                     className={`px-3 py-1.5 rounded-lg border text-xs font-bold transition ${
-                      label === option
+                      addressLabel === option
                         ? 'bg-[#0F2C59] text-white border-[#0F2C59]'
                         : 'bg-gray-50 text-gray-700 border-gray-200 hover:bg-gray-100'
                     }`}
@@ -363,14 +434,57 @@ export const AddressSelectorModal: React.FC<AddressSelectorModalProps> = ({ isOp
               </div>
             </div>
 
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <div>
+                <label className="font-bold text-gray-700 block mb-1">
+                  Recipient Name <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  required
+                  type="text"
+                  value={recipientName}
+                  onChange={(e) => setRecipientName(e.target.value)}
+                  placeholder="Recipient full name"
+                  className="w-full p-2 border rounded-lg outline-none focus:ring-2 focus:ring-[#0F2C59]"
+                />
+              </div>
+              <div>
+                <label className="font-bold text-gray-700 block mb-1">
+                  Recipient Phone <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  required
+                  type="text"
+                  maxLength={10}
+                  value={recipientPhone}
+                  onChange={(e) => setRecipientPhone(e.target.value.replace(/\D/g, ''))}
+                  placeholder="10-digit mobile"
+                  className="w-full p-2 border rounded-lg outline-none font-mono focus:ring-2 focus:ring-[#0F2C59]"
+                />
+              </div>
+            </div>
+
             <div>
-              <label className="font-bold text-gray-700 block mb-1">Full Address / Flat / Shop #</label>
-              <textarea
+              <label className="font-bold text-gray-700 block mb-1">
+                Address Line 1 (House / Shop / Street) <span className="text-rose-500">*</span>
+              </label>
+              <input
                 required
-                rows={2}
-                value={fullAddress}
-                onChange={(e) => setFullAddress(e.target.value)}
+                type="text"
+                value={addressLine1}
+                onChange={(e) => setAddressLine1(e.target.value)}
                 placeholder="e.g. Shop 12, APMC Market Road"
+                className="w-full p-2 border rounded-lg outline-none focus:ring-2 focus:ring-[#0F2C59]"
+              />
+            </div>
+
+            <div>
+              <label className="font-bold text-gray-700 block mb-1">Address Line 2 (Area / Locality)</label>
+              <input
+                type="text"
+                value={addressLine2}
+                onChange={(e) => setAddressLine2(e.target.value)}
+                placeholder="Colony, building, floor (optional)"
                 className="w-full p-2 border rounded-lg outline-none focus:ring-2 focus:ring-[#0F2C59]"
               />
             </div>
@@ -382,20 +496,51 @@ export const AddressSelectorModal: React.FC<AddressSelectorModalProps> = ({ isOp
                   type="text"
                   value={landmark}
                   onChange={(e) => setLandmark(e.target.value)}
-                  placeholder="Near Gate 2"
+                  placeholder="Near Gate 2 (optional)"
                   className="w-full p-2 border rounded-lg outline-none"
                 />
               </div>
               <div>
-                <label className="font-bold text-gray-700 block mb-1">Pincode</label>
+                <label className="font-bold text-gray-700 block mb-1">
+                  Pincode <span className="text-rose-500">*</span>
+                </label>
                 <input
                   required
                   type="text"
                   maxLength={6}
                   value={pincode}
                   onChange={(e) => setPincode(e.target.value.replace(/\D/g, ''))}
-                  placeholder="Enter 6-digit pincode"
+                  placeholder="6-digit pincode"
                   className="w-full p-2 border rounded-lg outline-none font-mono"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="font-bold text-gray-700 block mb-1">
+                  City <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  required
+                  type="text"
+                  value={city}
+                  onChange={(e) => setCity(e.target.value)}
+                  placeholder="Enter city"
+                  className="w-full p-2 border rounded-lg outline-none focus:ring-2 focus:ring-[#0F2C59]"
+                />
+              </div>
+              <div>
+                <label className="font-bold text-gray-700 block mb-1">
+                  State <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  required
+                  type="text"
+                  value={state}
+                  onChange={(e) => setState(e.target.value)}
+                  placeholder="Enter state"
+                  className="w-full p-2 border rounded-lg outline-none focus:ring-2 focus:ring-[#0F2C59]"
                 />
               </div>
             </div>

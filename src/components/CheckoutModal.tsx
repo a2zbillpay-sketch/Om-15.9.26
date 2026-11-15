@@ -17,7 +17,15 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { Address, PaymentMethod, Order, GoogleLocation } from '../types';
+import {
+  Address,
+  AddressLabel,
+  PaymentMethod,
+  Order,
+  GoogleLocation,
+  formatFullAddress,
+  normalizeAddressLabel,
+} from '../types';
 import { DualPaymentModal } from './DualPaymentModal';
 import { GoogleLocationPickerModal } from './GoogleLocationPickerModal';
 
@@ -39,7 +47,6 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
     addressesError,
     refreshAddresses,
     addAddress,
-    updateAddress,
     selectedAddressId,
     setSelectedAddressId,
     checkoutBreakdown,
@@ -51,9 +58,14 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   const [isDualPaymentOpen, setIsDualPaymentOpen] = useState(false);
   const [isAddingNewAddress, setIsAddingNewAddress] = useState(false);
   const [newAddressForm, setNewAddressForm] = useState({
-    label: 'Home',
-    fullAddress: '',
+    addressLabel: 'HOME' as AddressLabel,
+    recipientName: currentUser.name || '',
+    recipientPhone: currentUser.phone || '',
+    addressLine1: '',
+    addressLine2: '',
     landmark: '',
+    city: '',
+    state: '',
     pincode: '',
   });
   const [isSavingAddress, setIsSavingAddress] = useState(false);
@@ -70,12 +82,14 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
   const [orderErrorMessage, setOrderErrorMessage] = useState<string | null>(null);
 
-  // Google Location Picker state
+  // Google Location Picker state (kept in checkout state and snapshotted into orders.delivery_address JSONB)
   const [isGoogleLocationPickerOpen, setIsGoogleLocationPickerOpen] = useState(false);
   const [selectedGoogleLocation, setSelectedGoogleLocation] = useState<GoogleLocation | null>(null);
 
   const currentSelectedAddress =
-    userAddresses.find((a) => a.id === selectedAddressId) || userAddresses[0];
+    userAddresses.find((a) => a.id === selectedAddressId) ||
+    userAddresses.find((a) => a.isDefault) ||
+    userAddresses[0];
 
   // Sync selected google location with address on change
   useEffect(() => {
@@ -86,16 +100,49 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
     }
   }, [isOpen, currentSelectedAddress?.id, currentSelectedAddress?.googleLocation]);
 
+  // Pre-fill recipient defaults when opening the new address form
+  useEffect(() => {
+    if (isAddingNewAddress) {
+      setNewAddressForm((prev) => ({
+        ...prev,
+        recipientName: prev.recipientName || currentUser.name || '',
+        recipientPhone: prev.recipientPhone || currentUser.phone || '',
+      }));
+    }
+  }, [isAddingNewAddress, currentUser.name, currentUser.phone]);
+
   if (!isOpen) return null;
 
   const handleSaveNewAddress = async (e: React.FormEvent) => {
     e.preventDefault();
     setAddressFormError(null);
-    const cleanFull = newAddressForm.fullAddress.trim();
+    const cleanRecipientName = newAddressForm.recipientName.trim();
+    const cleanRecipientPhone = newAddressForm.recipientPhone.replace(/\D/g, '').slice(-10);
+    const cleanLine1 = newAddressForm.addressLine1.trim();
+    const cleanLine2 = newAddressForm.addressLine2.trim();
+    const cleanLandmark = newAddressForm.landmark.trim();
+    const cleanCity = newAddressForm.city.trim();
+    const cleanState = newAddressForm.state.trim();
     const cleanPin = newAddressForm.pincode.trim();
 
-    if (!cleanFull) {
-      setAddressFormError('Please enter complete delivery address.');
+    if (!cleanRecipientName) {
+      setAddressFormError('Recipient name is required.');
+      return;
+    }
+    if (!cleanRecipientPhone || cleanRecipientPhone.length !== 10) {
+      setAddressFormError('Please enter a valid 10-digit recipient phone number.');
+      return;
+    }
+    if (!cleanLine1) {
+      setAddressFormError('Please enter Address Line 1 (House / Shop / Street).');
+      return;
+    }
+    if (!cleanCity) {
+      setAddressFormError('City is required.');
+      return;
+    }
+    if (!cleanState) {
+      setAddressFormError('State is required.');
       return;
     }
     if (!cleanPin || !/^\d{6}$/.test(cleanPin)) {
@@ -103,22 +150,47 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
       return;
     }
 
+    const derivedFullAddress = formatFullAddress({
+      addressLine1: cleanLine1,
+      addressLine2: cleanLine2,
+      landmark: cleanLandmark,
+      city: cleanCity,
+      state: cleanState,
+      pincode: cleanPin,
+    });
+
     setIsSavingAddress(true);
     try {
       const res = await addAddress({
-        label: newAddressForm.label.trim() || 'Home',
-        fullAddress: cleanFull,
-        landmark: newAddressForm.landmark.trim(),
+        addressLabel: newAddressForm.addressLabel,
+        label: newAddressForm.addressLabel,
+        recipientName: cleanRecipientName,
+        recipientPhone: cleanRecipientPhone,
+        addressLine1: cleanLine1,
+        addressLine2: cleanLine2,
+        fullAddress: derivedFullAddress,
+        landmark: cleanLandmark,
+        city: cleanCity,
+        state: cleanState,
         pincode: cleanPin,
         isDefault: userAddresses.length === 0,
-        googleLocation: selectedGoogleLocation || undefined,
       });
       if (!res.success) {
         setAddressFormError(res.error || 'Failed to save delivery address.');
         return;
       }
       setIsAddingNewAddress(false);
-      setNewAddressForm({ label: 'Home', fullAddress: '', landmark: '', pincode: '' });
+      setNewAddressForm({
+        addressLabel: 'HOME',
+        recipientName: currentUser.name || '',
+        recipientPhone: currentUser.phone || '',
+        addressLine1: '',
+        addressLine2: '',
+        landmark: '',
+        city: '',
+        state: '',
+        pincode: '',
+      });
     } finally {
       setIsSavingAddress(false);
     }
@@ -301,21 +373,21 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
               )}
 
               {isAddingNewAddress ? (
-                <form onSubmit={handleSaveNewAddress} className="bg-gray-50 p-3.5 rounded-xl border border-gray-300 space-y-3">
+                <form onSubmit={handleSaveNewAddress} className="bg-gray-50 p-3.5 rounded-xl border border-gray-300 space-y-2.5">
                   <div className="text-xs font-bold text-gray-800">New Delivery Location</div>
                   {addressFormError && (
                     <div className="p-2 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-[11px] font-semibold">
                       {addressFormError}
                     </div>
                   )}
-                  <div className="flex items-center gap-2">
-                    {(['Home', 'Shop', 'Office'] as const).map((lbl) => (
+                  <div className="flex flex-wrap items-center gap-2">
+                    {(['HOME', 'SHOP', 'OFFICE', 'OTHER'] as const).map((lbl) => (
                       <button
                         key={lbl}
                         type="button"
-                        onClick={() => setNewAddressForm({ ...newAddressForm, label: lbl })}
+                        onClick={() => setNewAddressForm({ ...newAddressForm, addressLabel: lbl })}
                         className={`px-2.5 py-1 rounded-lg border text-[11px] font-bold transition ${
-                          newAddressForm.label === lbl
+                          newAddressForm.addressLabel === lbl
                             ? 'bg-[#0F2C59] text-white border-[#0F2C59]'
                             : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-100'
                         }`}
@@ -324,13 +396,41 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                       </button>
                     ))}
                   </div>
-                  <textarea
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <input
+                      type="text"
+                      required
+                      placeholder="Recipient Name *"
+                      value={newAddressForm.recipientName}
+                      onChange={(e) => setNewAddressForm({ ...newAddressForm, recipientName: e.target.value })}
+                      className="p-2 text-xs border border-gray-300 rounded-lg bg-white outline-none focus:ring-2 focus:ring-[#0F2C59]"
+                    />
+                    <input
+                      type="text"
+                      required
+                      maxLength={10}
+                      placeholder="10-digit Recipient Phone *"
+                      value={newAddressForm.recipientPhone}
+                      onChange={(e) =>
+                        setNewAddressForm({ ...newAddressForm, recipientPhone: e.target.value.replace(/\D/g, '') })
+                      }
+                      className="p-2 text-xs border border-gray-300 rounded-lg bg-white outline-none font-mono focus:ring-2 focus:ring-[#0F2C59]"
+                    />
+                  </div>
+                  <input
+                    type="text"
                     required
-                    placeholder="House / Shop #, Building Name, Street / Road Area"
-                    value={newAddressForm.fullAddress}
-                    onChange={(e) => setNewAddressForm({ ...newAddressForm, fullAddress: e.target.value })}
+                    placeholder="Address Line 1 (House / Shop #, Building, Street) *"
+                    value={newAddressForm.addressLine1}
+                    onChange={(e) => setNewAddressForm({ ...newAddressForm, addressLine1: e.target.value })}
                     className="w-full p-2 text-xs border border-gray-300 rounded-lg bg-white outline-none focus:ring-2 focus:ring-[#0F2C59]"
-                    rows={2}
+                  />
+                  <input
+                    type="text"
+                    placeholder="Address Line 2 (Locality / Area / Floor - Optional)"
+                    value={newAddressForm.addressLine2}
+                    onChange={(e) => setNewAddressForm({ ...newAddressForm, addressLine2: e.target.value })}
+                    className="w-full p-2 text-xs border border-gray-300 rounded-lg bg-white outline-none focus:ring-2 focus:ring-[#0F2C59]"
                   />
                   <div className="grid grid-cols-2 gap-2">
                     <input
@@ -344,12 +444,30 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                       type="text"
                       required
                       maxLength={6}
-                      placeholder="Enter 6-digit pincode"
+                      placeholder="6-digit Pincode *"
                       value={newAddressForm.pincode}
                       onChange={(e) =>
                         setNewAddressForm({ ...newAddressForm, pincode: e.target.value.replace(/\D/g, '') })
                       }
                       className="p-2 text-xs border border-gray-300 rounded-lg bg-white outline-none font-mono"
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <input
+                      type="text"
+                      required
+                      placeholder="City *"
+                      value={newAddressForm.city}
+                      onChange={(e) => setNewAddressForm({ ...newAddressForm, city: e.target.value })}
+                      className="p-2 text-xs border border-gray-300 rounded-lg bg-white outline-none focus:ring-2 focus:ring-[#0F2C59]"
+                    />
+                    <input
+                      type="text"
+                      required
+                      placeholder="State *"
+                      value={newAddressForm.state}
+                      onChange={(e) => setNewAddressForm({ ...newAddressForm, state: e.target.value })}
+                      className="p-2 text-xs border border-gray-300 rounded-lg bg-white outline-none focus:ring-2 focus:ring-[#0F2C59]"
                     />
                   </div>
                   <div className="flex justify-end gap-2 pt-1">
@@ -391,42 +509,51 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                 </div>
               ) : (
                 <div className="space-y-2">
-                  {userAddresses.map((addr) => (
-                    <div
-                      key={addr.id}
-                      onClick={() => setSelectedAddressId(addr.id)}
-                      className={`p-3 rounded-xl border text-xs cursor-pointer transition flex items-start justify-between ${
-                        selectedAddressId === addr.id
-                          ? 'border-[#0F2C59] bg-[#0F2C59]/5 ring-2 ring-[#0F2C59]/20'
-                          : 'border-gray-200 hover:bg-gray-50'
-                      }`}
-                    >
-                      <div>
-                        <div className="flex items-center gap-1.5 flex-wrap mb-0.5">
-                          {addr.label && (
+                  {userAddresses.map((addr) => {
+                    const displayLabel = normalizeAddressLabel(addr.addressLabel ?? addr.label);
+                    const displayFullAddress = addr.fullAddress || formatFullAddress(addr);
+                    const isSelected = currentSelectedAddress?.id === addr.id;
+                    return (
+                      <div
+                        key={addr.id}
+                        onClick={() => setSelectedAddressId(addr.id)}
+                        className={`p-3 rounded-xl border text-xs cursor-pointer transition flex items-start justify-between ${
+                          isSelected
+                            ? 'border-[#0F2C59] bg-[#0F2C59]/5 ring-2 ring-[#0F2C59]/20'
+                            : 'border-gray-200 hover:bg-gray-50'
+                        }`}
+                      >
+                        <div>
+                          <div className="flex items-center gap-1.5 flex-wrap mb-0.5">
                             <span className="text-[9px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded bg-[#0F2C59]/10 text-[#0F2C59]">
-                              {addr.label}
+                              {displayLabel}
                             </span>
+                            {addr.isDefault && (
+                              <span className="text-[9px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                Default
+                              </span>
+                            )}
+                          </div>
+                          {(addr.recipientName || addr.recipientPhone) && (
+                            <p className="text-[11px] font-bold text-gray-700">
+                              {addr.recipientName}
+                              {addr.recipientPhone ? ` • +91 ${addr.recipientPhone}` : ''}
+                            </p>
                           )}
-                          {addr.isDefault && (
-                            <span className="text-[9px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-200">
-                              Default
-                            </span>
+                          <p className="font-semibold text-gray-800">{displayFullAddress}</p>
+                          {addr.landmark && (
+                            <p className="text-[11px] text-gray-500">Landmark: {addr.landmark}</p>
                           )}
+                          <p className="text-[11px] font-mono font-bold text-gray-600">
+                            {addr.pincode ? `Pincode: ${addr.pincode}` : 'Pincode: Not provided'}
+                          </p>
                         </div>
-                        <p className="font-semibold text-gray-800">{addr.fullAddress}</p>
-                        {addr.landmark && (
-                          <p className="text-[11px] text-gray-500">Landmark: {addr.landmark}</p>
+                        {isSelected && (
+                          <CheckCircle2 size={16} className="text-[#0F2C59] shrink-0 mt-0.5" />
                         )}
-                        <p className="text-[11px] font-mono font-bold text-gray-600">
-                          {addr.pincode ? `Pincode: ${addr.pincode}` : 'Pincode: Not provided'}
-                        </p>
                       </div>
-                      {selectedAddressId === addr.id && (
-                        <CheckCircle2 size={16} className="text-[#0F2C59] shrink-0 mt-0.5" />
-                      )}
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
 
@@ -760,9 +887,6 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
         onClose={() => setIsGoogleLocationPickerOpen(false)}
         onSelectLocation={(loc) => {
           setSelectedGoogleLocation(loc);
-          if (currentSelectedAddress) {
-            updateAddress(currentSelectedAddress.id, { googleLocation: loc });
-          }
         }}
         initialLocation={selectedGoogleLocation}
       />

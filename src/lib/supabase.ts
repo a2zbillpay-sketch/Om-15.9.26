@@ -1,5 +1,5 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { User, Order, OrderItem, Address, Role, OrderStatus, PaymentMethod, PaymentStatus, UnitType, Product, ProductVariant, TieredPrice, SystemSetting, WalletTransaction, ProductRequest, Category } from '../types';
+import { User, Order, OrderItem, Address, Role, OrderStatus, PaymentMethod, PaymentStatus, UnitType, Product, ProductVariant, TieredPrice, SystemSetting, WalletTransaction, ProductRequest, Category, GoogleLocation, formatFullAddress, normalizeAddressLabel } from '../types';
 import { INITIAL_SETTINGS } from '../data/seedData';
 import {
   saveProductWithCascadeSync,
@@ -40,12 +40,99 @@ if (isSupabaseConfigured) {
 
 export const supabase = supabaseInstance;
 
-function parseCustomerAddress(rawAddress?: string | null): {
+export const DUPLICATE_CUSTOMER_MESSAGE =
+  '🙏 हा मोबाईल नंबर आधीपासून नोंदणीकृत आहे. आपण विद्यमान ग्राहक आहात. कृपया आपल्या जुन्या Customer Account मधून Login करा.';
+
+export function normalizeIndianMobile(raw: unknown): string {
+  if (typeof raw !== 'string' && typeof raw !== 'number') return '';
+  let digits = String(raw).replace(/\D/g, '');
+  if (digits.length === 14 && digits.startsWith('0091')) {
+    digits = digits.slice(4);
+  } else if (digits.length === 12 && digits.startsWith('91')) {
+    digits = digits.slice(2);
+  } else if (digits.length === 11 && digits.startsWith('0')) {
+    digits = digits.slice(1);
+  }
+  return digits.length === 10 ? digits : '';
+}
+
+export function getIndianMobileVariants(cleanPhone10: string): string[] {
+  if (!cleanPhone10 || cleanPhone10.length !== 10) return [];
+  return Array.from(
+    new Set([
+      cleanPhone10,
+      `+91${cleanPhone10}`,
+      `+91 ${cleanPhone10}`,
+      `91${cleanPhone10}`,
+      `0${cleanPhone10}`,
+    ])
+  );
+}
+
+function parseCustomerAddress(rawAddress?: unknown): {
+  id?: string;
+  addressLabel?: string;
+  recipientName?: string;
+  recipientPhone?: string;
+  addressLine1?: string;
+  addressLine2?: string;
   fullAddress: string;
   landmark: string;
+  city?: string;
+  state?: string;
   pincode: string;
+  googleLocation?: GoogleLocation;
 } {
-  let savedAddressText = (rawAddress || '').trim();
+  const fromObject = (obj: Record<string, any>) => {
+    const addressLine1 = String(obj.address_line1 ?? obj.addressLine1 ?? '').trim();
+    const addressLine2 = String(obj.address_line2 ?? obj.addressLine2 ?? '').trim();
+    const landmark = String(obj.landmark ?? '').trim();
+    const city = String(obj.city ?? '').trim();
+    const state = String(obj.state ?? '').trim();
+    const pincode = obj.pincode !== undefined && obj.pincode !== null ? String(obj.pincode).trim() : '';
+    const rawFull = String(obj.full_address ?? obj.fullAddress ?? obj.address ?? '').trim();
+    const addressLabel =
+      obj.address_label || obj.label ? normalizeAddressLabel(obj.address_label ?? obj.label) : undefined;
+    const recipientName = String(obj.recipient_name ?? obj.recipientName ?? '').trim() || undefined;
+    const recipientPhone = String(obj.recipient_phone ?? obj.recipientPhone ?? '').trim() || undefined;
+    const rawGoogle = obj.google_location ?? obj.googleLocation;
+    const googleLocation: GoogleLocation | undefined =
+      rawGoogle && typeof rawGoogle === 'object' && typeof rawGoogle.latitude === 'number'
+        ? rawGoogle
+        : undefined;
+
+    const derivedFull =
+      formatFullAddress({
+        addressLine1,
+        addressLine2,
+        landmark,
+        city,
+        state,
+        pincode,
+        fullAddress: rawFull,
+      }) || rawFull;
+
+    return {
+      ...(obj.id ? { id: String(obj.id) } : {}),
+      ...(addressLabel ? { addressLabel } : {}),
+      ...(recipientName ? { recipientName } : {}),
+      ...(recipientPhone ? { recipientPhone } : {}),
+      ...(addressLine1 ? { addressLine1 } : {}),
+      ...(addressLine2 ? { addressLine2 } : {}),
+      fullAddress: derivedFull,
+      landmark,
+      ...(city ? { city } : {}),
+      ...(state ? { state } : {}),
+      pincode,
+      ...(googleLocation ? { googleLocation } : {}),
+    };
+  };
+
+  if (rawAddress && typeof rawAddress === 'object') {
+    return fromObject(rawAddress as Record<string, any>);
+  }
+
+  let savedAddressText = typeof rawAddress === 'string' ? rawAddress.trim() : '';
   let savedLandmark = '';
   let savedPincode = '';
 
@@ -56,11 +143,9 @@ function parseCustomerAddress(rawAddress?: string | null): {
   if (savedAddressText.startsWith('{') && savedAddressText.endsWith('}')) {
     try {
       const parsed = JSON.parse(savedAddressText);
-      return {
-        fullAddress: parsed.fullAddress || parsed.address || savedAddressText,
-        landmark: parsed.landmark || '',
-        pincode: parsed.pincode || '',
-      };
+      if (parsed && typeof parsed === 'object') {
+        return fromObject(parsed);
+      }
     } catch {
       // Ignore JSON parse error, treat as raw string
     }
@@ -86,6 +171,23 @@ function parseCustomerAddress(rawAddress?: string | null): {
   };
 }
 
+const SUPABASE_UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isUuid(value?: string | null): boolean {
+  return Boolean(value && SUPABASE_UUID_REGEX.test(value.trim()));
+}
+
+function generateUuid(): string {
+  if (typeof globalThis !== 'undefined' && globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function') {
+    return globalThis.crypto.randomUUID();
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
 /**
  * Safely resolves all known identity aliases for a customer (canonical db ID, phone, synthetic user-ID)
  */
@@ -93,7 +195,7 @@ async function resolveCustomerIdentityAliases(
   customerId?: string,
   phone?: string
 ): Promise<{ canonicalId: string; allIds: string[]; cleanPhone: string }> {
-  let cleanPhone = phone ? phone.replace(/\D/g, '').slice(-10) : '';
+  let cleanPhone = normalizeIndianMobile(phone) || (phone ? phone.replace(/\D/g, '').slice(-10) : '');
   if (!cleanPhone && customerId && customerId.startsWith('user-')) {
     const raw = customerId.slice(5).replace(/\D/g, '').slice(-10);
     if (raw.length === 10) cleanPhone = raw;
@@ -106,15 +208,16 @@ async function resolveCustomerIdentityAliases(
     targetIds.add(`user-${cleanPhone}`);
   }
 
-  let canonicalId = customerId && !customerId.startsWith('user-') ? customerId : '';
+  let canonicalId = customerId && isUuid(customerId) ? customerId : '';
 
   if (supabase) {
     try {
       if (cleanPhone) {
+        const phoneVariants = getIndianMobileVariants(cleanPhone);
         const { data: dbUsers } = await supabase
           .from('users')
           .select('id, phone')
-          .eq('phone', cleanPhone)
+          .in('phone', phoneVariants.length > 0 ? phoneVariants : [cleanPhone, `+91${cleanPhone}`])
           .limit(5);
 
         if (dbUsers && dbUsers.length > 0) {
@@ -125,7 +228,7 @@ async function resolveCustomerIdentityAliases(
             }
           });
         }
-      } else if (customerId && !cleanPhone) {
+      } else if (customerId && isUuid(customerId) && !cleanPhone) {
         const { data: userRow } = await supabase
           .from('users')
           .select('id, phone')
@@ -310,16 +413,18 @@ export async function getOrCreateCustomerByPhone(
 ): Promise<User | null> {
   if (!supabase) return null;
 
-  const cleanPhone = phone.replace(/\D/g, '');
+  const cleanPhone = normalizeIndianMobile(phone) || phone.replace(/\D/g, '').slice(-10);
+  if (!cleanPhone || cleanPhone.length !== 10) return null;
+  const phoneVariants = getIndianMobileVariants(cleanPhone);
 
   try {
     // 1. Check if user with this phone and role exists in Supabase users table
     const { data: existingRows } = await supabase
       .from('users')
       .select('*')
-      .eq('phone', cleanPhone)
+      .in('phone', phoneVariants)
       .eq('role', role)
-      .order('updated_at', { ascending: false })
+      .order('created_at', { ascending: true })
       .limit(1);
 
     const existingUser = existingRows && existingRows.length > 0 ? existingRows[0] : null;
@@ -345,7 +450,7 @@ export async function getOrCreateCustomerByPhone(
 
       return {
         id: existingUser.id,
-        name: existingUser.name || name || '',
+        name: existingUser.full_name ?? existingUser.name ?? name ?? '',
         phone: existingUser.phone,
         role: (existingUser.role as Role) || role,
         walletBalance: dbCredits,
@@ -356,33 +461,54 @@ export async function getOrCreateCustomerByPhone(
       };
     }
 
-    // 2. User does not exist, create deterministic customer record in Supabase users table
-    const newCustomerPayload = {
-      id: `usr_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`,
-      phone: cleanPhone,
-      name: name || (role === Role.SHOPKEEPER ? 'Om Prakash Sharma' : ''),
-      role,
-      shop_name: name ? `${name}'s Kirana Store` : (role === Role.SHOPKEEPER ? 'Om Distributors' : ''),
-      address: '',
-      outstanding_balance: 0,
-      wallet_balance: 0,
-      updated_at: new Date().toISOString(),
-    };
+    // 2. User does not exist, create UUID customer record in Supabase users table
+    const newId = generateUuid();
+    const nowIso = new Date().toISOString();
+    const resolvedFullName = name || (role === Role.SHOPKEEPER ? 'Om Prakash Sharma' : '');
 
-    const { data: insertedUser, error: insertError } = await supabase
+    let { data: insertedUser, error: insertError } = await supabase
       .from('users')
-      .upsert(newCustomerPayload, { onConflict: 'id' })
+      .insert({
+        id: newId,
+        phone: cleanPhone,
+        full_name: resolvedFullName,
+        role,
+        status: 'ACTIVE',
+        created_at: nowIso,
+        updated_at: nowIso,
+      })
       .select()
       .single();
 
+    if (
+      insertError &&
+      insertError.code !== '23505' &&
+      (insertError.code === 'PGRST204' ||
+        insertError.code === '42703' ||
+        /full_name|status/i.test(String(insertError.message || '')))
+    ) {
+      const legacyRes = await supabase
+        .from('users')
+        .insert({
+          id: newId,
+          phone: cleanPhone,
+          name: resolvedFullName,
+          role,
+          updated_at: nowIso,
+        })
+        .select()
+        .single();
+      insertedUser = legacyRes.data;
+      insertError = legacyRes.error;
+    }
+
     if (insertError) {
-      // If error (such as duplicate key or unique constraint), safely fetch existing record
       const { data: fallbackUser } = await supabase
         .from('users')
         .select('*')
-        .eq('phone', cleanPhone)
+        .in('phone', phoneVariants)
         .eq('role', role)
-        .order('updated_at', { ascending: false })
+        .order('created_at', { ascending: true })
         .limit(1);
 
       if (fallbackUser && fallbackUser.length > 0) {
@@ -390,7 +516,7 @@ export async function getOrCreateCustomerByPhone(
         const { fullAddress, landmark, pincode } = parseCustomerAddress(u.address);
         return {
           id: u.id,
-          name: u.name || '',
+          name: u.full_name ?? u.name ?? '',
           phone: u.phone,
           role: u.role as Role,
           walletBalance: Number(u.wallet_balance || 0),
@@ -399,13 +525,13 @@ export async function getOrCreateCustomerByPhone(
           createdAt: u.updated_at || new Date().toISOString(),
         };
       }
-      console.warn('Error in getOrCreateCustomerByPhone upsert:', insertError.message);
+      console.warn('Error in getOrCreateCustomerByPhone insert:', insertError.message);
       return null;
     }
 
     return {
       id: insertedUser.id,
-      name: insertedUser.name || '',
+      name: insertedUser.full_name ?? insertedUser.name ?? '',
       phone: insertedUser.phone,
       role: insertedUser.role as Role,
       walletBalance: 0,
@@ -420,9 +546,8 @@ export async function getOrCreateCustomerByPhone(
 }
 
 /**
- * Saves or updates a customer profile (Name, Address, Landmark, Pincode) in Supabase.
- * Stores address directly in users.address and never queries or touches non-existent addresses table.
- * Uses an UPSERT-safe workflow so an existing user is updated instead of attempting a duplicate insert.
+ * Saves or updates a customer profile name & role in Supabase public.users
+ * (aligned with live public.users schema: id uuid, full_name text NOT NULL, phone, role, status).
  */
 export async function saveCustomerProfileToSupabase(
   userId: string,
@@ -433,7 +558,8 @@ export async function saveCustomerProfileToSupabase(
   pincode: string = ''
 ): Promise<User | null> {
   if (!supabase) return null;
-  const cleanPhone = phone.replace(/\D/g, '');
+  const cleanPhone = normalizeIndianMobile(phone) || phone.replace(/\D/g, '').slice(-10);
+  const phoneVariants = getIndianMobileVariants(cleanPhone);
 
   try {
     let completeAddress = fullAddress.trim();
@@ -444,28 +570,27 @@ export async function saveCustomerProfileToSupabase(
       completeAddress = `${completeAddress} - ${pincode.trim()}`;
     }
 
-    // 1. Locate existing record in users table by ID or phone to prevent duplicate insert on users_pkey
+    // 1. Locate existing record in users table by UUID id or normalized phone variants
     let targetUser: any = null;
 
-    // Check by ID if valid existing user ID provided (excluding temporary client-side IDs like 'user-...')
-    if (userId && !userId.startsWith('user-')) {
+    if (isUuid(userId)) {
       const { data: userById } = await supabase
         .from('users')
         .select('*')
-        .eq('id', userId)
+        .eq('id', userId.trim())
         .limit(1);
       if (userById && userById.length > 0) {
         targetUser = userById[0];
       }
     }
 
-    // Check by phone if not found by ID
     if (!targetUser && cleanPhone) {
       const { data: existingRows } = await supabase
         .from('users')
         .select('*')
-        .eq('phone', cleanPhone)
-        .order('updated_at', { ascending: false })
+        .in('phone', phoneVariants.length > 0 ? phoneVariants : [cleanPhone, `+91${cleanPhone}`])
+        .eq('role', 'CUSTOMER')
+        .order('created_at', { ascending: true })
         .limit(1);
 
       if (existingRows && existingRows.length > 0) {
@@ -473,17 +598,25 @@ export async function saveCustomerProfileToSupabase(
       }
     }
 
+    const nowIso = new Date().toISOString();
+    const cleanName = name.trim();
+
     if (targetUser) {
-      // Update existing customer record in users table
       const updatePayload: Record<string, any> = {
-        address: completeAddress,
-        updated_at: new Date().toISOString(),
+        updated_at: nowIso,
       };
-      if (name.trim()) {
-        updatePayload.name = name.trim();
+      if (cleanName) {
+        if ('full_name' in targetUser) {
+          updatePayload.full_name = cleanName;
+        } else {
+          updatePayload.name = cleanName;
+        }
       }
-      if (!targetUser.shop_name && name.trim()) {
-        updatePayload.shop_name = `${name.trim()}'s Kirana Store`;
+      if ('address' in targetUser) {
+        updatePayload.address = completeAddress;
+      }
+      if ('shop_name' in targetUser && !targetUser.shop_name && cleanName) {
+        updatePayload.shop_name = `${cleanName}'s Kirana Store`;
       }
       if (targetUser.role !== Role.SHOPKEEPER && targetUser.role !== Role.SECONDARY_ADMIN) {
         updatePayload.role = 'CUSTOMER';
@@ -502,70 +635,80 @@ export async function saveCustomerProfileToSupabase(
         targetUser = updated;
       }
     } else {
-      // User not found -> UPSERT-safe insert into users table to prevent users_pkey collisions
-      const newUserId = userId && !userId.startsWith('user-') ? userId : `usr_${Date.now()}`;
-      const insertPayload = {
+      const newUserId = isUuid(userId) ? userId.trim() : generateUuid();
+      const primaryInsertPayload = {
         id: newUserId,
-        name: name.trim() || `Customer (${cleanPhone.slice(-4)})`,
+        full_name: cleanName || `Customer (${cleanPhone.slice(-4)})`,
         phone: cleanPhone,
         role: 'CUSTOMER',
-        shop_name: name.trim() ? `${name.trim()}'s Kirana Store` : `Customer (${cleanPhone.slice(-4)})`,
-        address: completeAddress,
-        outstanding_balance: 0,
-        updated_at: new Date().toISOString(),
+        status: 'ACTIVE',
+        created_at: nowIso,
+        updated_at: nowIso,
       };
 
-      const { data: upserted, error: upsertError } = await supabase
+      let { data: inserted, error: insertError } = await supabase
         .from('users')
-        .upsert(insertPayload, { onConflict: 'id' })
+        .insert(primaryInsertPayload)
         .select()
         .single();
 
-      if (upsertError) {
-        // If users_pkey or duplicate key error occurs, safely update the existing row
-        if (
-          upsertError.message?.includes('users_pkey') ||
-          upsertError.message?.includes('duplicate key') ||
-          (upsertError as any).code === '23505'
-        ) {
-          const updatePayload: Record<string, any> = {
+      if (
+        insertError &&
+        insertError.code !== '23505' &&
+        (insertError.code === 'PGRST204' ||
+          insertError.code === '42703' ||
+          /full_name|status/i.test(String(insertError.message || '')))
+      ) {
+        const legacyInsert = await supabase
+          .from('users')
+          .insert({
+            id: newUserId,
+            name: cleanName || `Customer (${cleanPhone.slice(-4)})`,
+            phone: cleanPhone,
+            role: 'CUSTOMER',
             address: completeAddress,
-            updated_at: new Date().toISOString(),
-          };
-          if (name.trim()) updatePayload.name = name.trim();
+            outstanding_balance: 0,
+            updated_at: nowIso,
+          })
+          .select()
+          .single();
+        inserted = legacyInsert.data;
+        insertError = legacyInsert.error;
+      }
 
-          const { data: fallbackUpdated } = await supabase
-            .from('users')
-            .update(updatePayload)
-            .or(`id.eq.${newUserId},phone.eq.${cleanPhone}`)
-            .select()
-            .limit(1);
-
-          if (fallbackUpdated && fallbackUpdated.length > 0) {
-            targetUser = fallbackUpdated[0];
-          }
+      if (insertError) {
+        const { data: retryRows } = await supabase
+          .from('users')
+          .select('*')
+          .in('phone', phoneVariants.length > 0 ? phoneVariants : [cleanPhone, `+91${cleanPhone}`])
+          .eq('role', 'CUSTOMER')
+          .order('created_at', { ascending: true })
+          .limit(1);
+        if (retryRows && retryRows.length > 0) {
+          targetUser = retryRows[0];
         } else {
-          console.warn('Supabase upsert customer profile warning:', upsertError.message);
+          console.warn('Supabase insert customer profile warning:', insertError.message);
         }
-      } else if (upserted) {
-        targetUser = upserted;
+      } else if (inserted) {
+        targetUser = inserted;
       }
     }
 
+    const resolvedId = targetUser?.id || userId;
     const dbOutstanding = Number(targetUser?.outstanding_balance || 0);
-    const ledgerCredits = await getCustomerWalletBalanceFromLedger(targetUser?.id || userId, cleanPhone);
+    const ledgerCredits = await getCustomerWalletBalanceFromLedger(resolvedId, cleanPhone);
     const dbCredits = Math.max(Number(targetUser?.wallet_balance || 0), ledgerCredits);
 
     return {
-      id: targetUser?.id || userId,
-      name: targetUser?.name || name.trim(),
+      id: resolvedId,
+      name: targetUser?.full_name ?? targetUser?.name ?? cleanName,
       phone: cleanPhone,
       role: Role.CUSTOMER,
       walletBalance: dbCredits,
       outstandingBalance: dbOutstanding,
       codOrderCount: 0,
       addresses: [],
-      createdAt: targetUser?.updated_at || new Date().toISOString(),
+      createdAt: targetUser?.updated_at || nowIso,
       isDatabaseVerified: true,
     };
   } catch (err) {
@@ -576,13 +719,21 @@ export async function saveCustomerProfileToSupabase(
 
 export async function loginCustomerServerSession(
   phone: string,
-  options?: { name?: string; isExisting?: boolean; customerId?: string }
+  options?: {
+    name?: string;
+    isExisting?: boolean;
+    isNewRegistration?: boolean;
+    mode?: 'NEW' | 'EXISTING';
+    customerId?: string;
+  }
 ): Promise<{
   authenticated: boolean;
   customerId?: string;
   phone?: string;
   user?: Partial<User> | null;
   error?: string;
+  code?: string;
+  redirectToLogin?: boolean;
   status?: number;
 }> {
   try {
@@ -594,6 +745,8 @@ export async function loginCustomerServerSession(
         phone,
         name: options?.name,
         isExisting: options?.isExisting,
+        isNewRegistration: options?.isNewRegistration,
+        mode: options?.mode,
         customerId: options?.customerId,
       }),
     });
@@ -602,6 +755,9 @@ export async function loginCustomerServerSession(
       return {
         authenticated: false,
         error: data?.error || 'Customer authentication failed.',
+        code: data?.code,
+        redirectToLogin: Boolean(data?.redirectToLogin),
+        phone: data?.phone,
         status: resp.status,
       };
     }
@@ -691,7 +847,7 @@ export async function fetchAddressesFromSupabase(): Promise<{
 }
 
 export async function createAddressInSupabase(
-  address: Omit<Address, 'id' | 'userId'> & { allowEmptyPincode?: boolean }
+  address: Omit<Address, 'id' | 'userId'>
 ): Promise<{
   success: boolean;
   address?: Address;
@@ -699,18 +855,23 @@ export async function createAddressInSupabase(
   error?: string;
 }> {
   try {
+    const resolvedLabel = normalizeAddressLabel(address.addressLabel ?? address.label);
     const resp = await fetch('/api/addresses', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
       body: JSON.stringify({
-        label: address.label?.trim() || undefined,
-        fullAddress: address.fullAddress.trim(),
+        addressLabel: resolvedLabel,
+        label: resolvedLabel,
+        recipientName: address.recipientName?.trim() || '',
+        recipientPhone: address.recipientPhone?.trim() || '',
+        addressLine1: (address.addressLine1 ?? address.fullAddress ?? '').trim(),
+        addressLine2: address.addressLine2?.trim() || '',
         landmark: address.landmark?.trim() || '',
+        city: address.city?.trim() || '',
+        state: address.state?.trim() || '',
         pincode: address.pincode?.trim() || '',
         isDefault: Boolean(address.isDefault),
-        googleLocation: address.googleLocation,
-        allowEmptyPincode: address.allowEmptyPincode === true,
       }),
     });
     const data = await resp.json().catch(() => ({}));
@@ -737,7 +898,7 @@ export async function createAddressInSupabase(
 
 export async function updateAddressInSupabase(
   id: string,
-  updates: Partial<Address> & { allowEmptyPincode?: boolean }
+  updates: Partial<Address>
 ): Promise<{
   success: boolean;
   address?: Address;
@@ -745,19 +906,27 @@ export async function updateAddressInSupabase(
   error?: string;
 }> {
   try {
+    const resolvedLabel =
+      updates.addressLabel !== undefined || updates.label !== undefined
+        ? normalizeAddressLabel(updates.addressLabel ?? updates.label)
+        : undefined;
+
     const resp = await fetch('/api/addresses', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
       body: JSON.stringify({
         id,
-        ...(updates.label !== undefined ? { label: updates.label } : {}),
-        ...(updates.fullAddress !== undefined ? { fullAddress: updates.fullAddress } : {}),
+        ...(resolvedLabel !== undefined ? { addressLabel: resolvedLabel, label: resolvedLabel } : {}),
+        ...(updates.recipientName !== undefined ? { recipientName: updates.recipientName } : {}),
+        ...(updates.recipientPhone !== undefined ? { recipientPhone: updates.recipientPhone } : {}),
+        ...(updates.addressLine1 !== undefined ? { addressLine1: updates.addressLine1 } : {}),
+        ...(updates.addressLine2 !== undefined ? { addressLine2: updates.addressLine2 } : {}),
         ...(updates.landmark !== undefined ? { landmark: updates.landmark } : {}),
+        ...(updates.city !== undefined ? { city: updates.city } : {}),
+        ...(updates.state !== undefined ? { state: updates.state } : {}),
         ...(updates.pincode !== undefined ? { pincode: updates.pincode } : {}),
         ...(updates.isDefault !== undefined ? { isDefault: updates.isDefault } : {}),
-        ...(updates.googleLocation !== undefined ? { googleLocation: updates.googleLocation } : {}),
-        ...(updates.allowEmptyPincode !== undefined ? { allowEmptyPincode: updates.allowEmptyPincode } : {}),
       }),
     });
     const data = await resp.json().catch(() => ({}));
@@ -854,15 +1023,22 @@ export async function setDefaultAddressInSupabase(id: string): Promise<{
  * Inserts a newly added delivery address row via the authenticated /api/addresses endpoint.
  */
 export async function saveAddressToSupabase(address: Address): Promise<boolean> {
-  if (!address.fullAddress || !address.fullAddress.trim()) return false;
+  const line1 = (address.addressLine1 ?? address.fullAddress ?? '').trim();
+  if (!line1) return false;
+  const resolvedLabel = normalizeAddressLabel(address.addressLabel ?? address.label);
   const res = await createAddressInSupabase({
-    label: address.label,
-    fullAddress: address.fullAddress.trim(),
+    label: resolvedLabel,
+    addressLabel: resolvedLabel,
+    recipientName: address.recipientName?.trim() || '',
+    recipientPhone: address.recipientPhone?.trim() || '',
+    addressLine1: line1,
+    addressLine2: address.addressLine2?.trim() || '',
+    fullAddress: address.fullAddress?.trim() || line1,
     landmark: address.landmark?.trim() || '',
+    city: address.city?.trim() || '',
+    state: address.state?.trim() || '',
     pincode: address.pincode?.trim() || '',
     isDefault: Boolean(address.isDefault),
-    googleLocation: address.googleLocation,
-    allowEmptyPincode: true,
   });
   return res.success;
 }
@@ -873,17 +1049,18 @@ export async function saveAddressToSupabase(address: Address): Promise<boolean> 
  */
 export async function fetchCustomerProfileFromSupabase(phone: string): Promise<User | null> {
   if (!supabase) return null;
-  const cleanPhone = phone.replace(/\D/g, '');
+  const cleanPhone = normalizeIndianMobile(phone) || phone.replace(/\D/g, '').slice(-10);
+  if (!cleanPhone || cleanPhone.length !== 10) return null;
+  const phoneVariants = getIndianMobileVariants(cleanPhone);
 
   try {
-    // 1. Safe query: Filter strictly by phone AND role = 'CUSTOMER'
-    // Order by updated_at descending with limit(1) to avoid PGRST116 if multiple rows exist
+    // 1. Safe query: Filter strictly by phone variants AND role = 'CUSTOMER'
     const { data: userRows, error: userError } = await supabase
       .from('users')
       .select('*')
-      .eq('phone', cleanPhone)
+      .in('phone', phoneVariants)
       .eq('role', 'CUSTOMER')
-      .order('updated_at', { ascending: false })
+      .order('created_at', { ascending: true })
       .limit(1);
 
     if (userError) {
@@ -897,10 +1074,9 @@ export async function fetchCustomerProfileFromSupabase(phone: string): Promise<U
 
     const dbUser = userRows[0];
 
-    // 2. Read fallback address metadata from users.address only if needed (public.addresses is authoritative)
+    // 2. Read fallback address metadata from users.address only if column exists
     const { fullAddress, landmark, pincode } = parseCustomerAddress(dbUser.address);
 
-    // Do NOT invent or hard-code a customer pincode. If not stored, leave blank.
     const formattedAddresses: Address[] = fullAddress
       ? [
           {
@@ -920,14 +1096,14 @@ export async function fetchCustomerProfileFromSupabase(phone: string): Promise<U
 
     return {
       id: dbUser.id,
-      name: dbUser.name || '',
-      phone: dbUser.phone,
+      name: dbUser.full_name ?? dbUser.name ?? '',
+      phone: dbUser.phone || cleanPhone,
       role: Role.CUSTOMER,
       walletBalance: dbCredits,
       outstandingBalance: dbOutstanding,
       codOrderCount: Number(dbUser.cod_order_count || 0),
       addresses: formattedAddresses,
-      createdAt: dbUser.updated_at || new Date().toISOString(),
+      createdAt: dbUser.updated_at || dbUser.created_at || new Date().toISOString(),
       isDatabaseVerified: true,
     };
   } catch (err) {
@@ -1217,15 +1393,29 @@ export function mapDatabaseRowToOrder(o: any, fallbackCustomerId?: string, fallb
     userId: o.customer_id || fallbackCustomerId || '',
     userName: o.customer_name || 'Customer',
     userPhone: o.customer_phone || fallbackPhone || '',
-    addressId: 'addr-' + o.id,
+    addressId: o.address_id || parsedAddress.id || ('addr-' + o.id),
     address: {
-      id: 'addr-' + o.id,
+      id: o.address_id || parsedAddress.id || ('addr-' + o.id),
       userId: o.customer_id || fallbackCustomerId || '',
-      fullAddress: parsedAddress.fullAddress || (o.delivery_address ? String(o.delivery_address).trim() : '') || 'Address not specified',
+      ...(parsedAddress.addressLabel
+        ? { label: parsedAddress.addressLabel, addressLabel: parsedAddress.addressLabel }
+        : {}),
+      ...(parsedAddress.recipientName ? { recipientName: parsedAddress.recipientName } : {}),
+      ...(parsedAddress.recipientPhone ? { recipientPhone: parsedAddress.recipientPhone } : {}),
+      ...(parsedAddress.addressLine1 ? { addressLine1: parsedAddress.addressLine1 } : {}),
+      ...(parsedAddress.addressLine2 ? { addressLine2: parsedAddress.addressLine2 } : {}),
+      fullAddress:
+        parsedAddress.fullAddress ||
+        (typeof o.delivery_address === 'string' ? o.delivery_address.trim() : '') ||
+        'Address not specified',
       landmark: parsedAddress.landmark || '',
+      ...(parsedAddress.city ? { city: parsedAddress.city } : {}),
+      ...(parsedAddress.state ? { state: parsedAddress.state } : {}),
       pincode: parsedAddress.pincode || '',
       isDefault: true,
+      ...(parsedAddress.googleLocation ? { googleLocation: parsedAddress.googleLocation } : {}),
     },
+    ...(parsedAddress.googleLocation ? { googleLocation: parsedAddress.googleLocation } : {}),
     status: (o.status as OrderStatus) || OrderStatus.ORDER_PENDING,
     paymentMethod: (o.payment_method as PaymentMethod) || PaymentMethod.COD,
     paymentStatus,
@@ -1323,7 +1513,9 @@ export async function saveOrderToSupabase(order: Order): Promise<SaveOrderResult
         customerPhone: order.userPhone,
         shopName: order.userName,
         paymentMethod: order.paymentMethod,
+        addressId: order.addressId,
         address: order.address,
+        googleLocation: order.googleLocation || order.address?.googleLocation,
         deliveryDate: order.deliveryDate,
         previousOutstanding: order.previousOutstanding,
         useWallet: (order.walletAmountUsed || 0) > 0,

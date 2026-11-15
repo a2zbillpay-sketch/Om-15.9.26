@@ -4,6 +4,7 @@ import { Role } from '../types';
 import { useApp } from '../context/AppContext';
 import { BrandLogo } from './BrandLogo';
 import { AdminLoginModal } from './AdminLoginModal';
+import { normalizeIndianMobile } from '../lib/supabase';
 
 interface EntryLoginPageProps {
   isOpen: boolean;
@@ -84,18 +85,22 @@ export const EntryLoginPage: React.FC<EntryLoginPageProps> = ({
       }
     }
 
-    const cleanPhone = phone.replace(/\D/g, '');
-    if (!cleanPhone || cleanPhone.length !== 10) {
+    const cleanPhone = normalizeIndianMobile(phone);
+    if (!cleanPhone) {
       setError('Please enter a valid 10-digit mobile number');
       return;
     }
 
-    loginWithPhone(
-      cleanPhone,
-      Role.CUSTOMER,
-      name.trim() || 'Valued Customer'
-    );
-    onClose();
+    try {
+      await loginWithPhone(
+        cleanPhone,
+        Role.CUSTOMER,
+        name.trim() || undefined
+      );
+      onClose();
+    } catch (err: any) {
+      setError(err?.message || 'Unable to log in. Please try again.');
+    }
   };
 
   const handleSelectRole = (role: 'SHOPKEEPER' | 'CUSTOMER') => {
@@ -228,7 +233,7 @@ export const EntryLoginPage: React.FC<EntryLoginPageProps> = ({
                     <input
                       id="whatsapp-phone-input"
                       type="tel"
-                      maxLength={10}
+                      maxLength={16}
                       value={phone}
                       onChange={(e) => setPhone(e.target.value)}
                       placeholder="Enter 10-digit number"

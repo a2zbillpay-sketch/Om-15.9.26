@@ -47,15 +47,66 @@ export interface GoogleLocation {
   placeId?: string;
 }
 
+export type AddressLabel = 'HOME' | 'SHOP' | 'OFFICE' | 'OTHER';
+
 export interface Address {
   id: string;
   userId: string;
   label?: string;
+  addressLabel?: AddressLabel | string;
+  recipientName?: string;
+  recipientPhone?: string;
+  addressLine1?: string;
+  addressLine2?: string;
   fullAddress: string;
   landmark?: string;
+  city?: string;
+  state?: string;
   pincode: string;
   isDefault: boolean;
   googleLocation?: GoogleLocation;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export function normalizeAddressLabel(raw?: unknown): AddressLabel {
+  const upper = typeof raw === 'string' ? raw.trim().toUpperCase() : '';
+  if (upper === 'HOME' || upper === 'SHOP' || upper === 'OFFICE' || upper === 'OTHER') {
+    return upper;
+  }
+  return 'HOME';
+}
+
+export function formatFullAddress(addr: {
+  addressLine1?: string;
+  addressLine2?: string;
+  landmark?: string;
+  city?: string;
+  state?: string;
+  pincode?: string;
+  fullAddress?: string;
+}): string {
+  const line1 = (addr.addressLine1 || '').trim();
+  const line2 = (addr.addressLine2 || '').trim();
+  const landmark = (addr.landmark || '').trim();
+  const city = (addr.city || '').trim();
+  const state = (addr.state || '').trim();
+  const pincode = (addr.pincode || '').trim();
+
+  if (!line1 && !line2 && !city && !state) {
+    return (addr.fullAddress || '').trim();
+  }
+
+  const cityState = [city, state].filter(Boolean).join(', ');
+  const cityStatePin = pincode
+    ? cityState
+      ? `${cityState} - ${pincode}`
+      : pincode
+    : cityState;
+
+  return [line1, line2, landmark ? `Near ${landmark}` : '', cityStatePin]
+    .filter(Boolean)
+    .join(', ');
 }
 
 export interface User {

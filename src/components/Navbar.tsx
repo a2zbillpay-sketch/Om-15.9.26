@@ -180,7 +180,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             <div className="truncate">
               <div className="text-[10px] text-gray-300">Deliver to:</div>
               <div className="font-bold truncate text-white">
-                {currentAddress?.landmark || currentAddress?.pincode || 'Select Address'}
+                {currentAddress?.landmark || currentAddress?.city || currentAddress?.pincode || 'Select Address'}
               </div>
             </div>
           </button>
