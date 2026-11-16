@@ -1,20 +1,28 @@
 import type { IncomingMessage, ServerResponse } from 'http';
-import { createClient } from '@supabase/supabase-js';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { verifyAdminSession } from './auth/_verify.js';
 
-function getServerSupabaseClient() {
-  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
-  const key =
-    process.env.SUPABASE_SERVICE_ROLE_KEY ||
-    process.env.SUPABASE_ANON_KEY ||
-    process.env.VITE_SUPABASE_ANON_KEY;
+function getServerSupabaseClient(): SupabaseClient | null {
+  const url = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').trim();
+  const key = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
 
-  if (url && key && url !== 'https://your-project.supabase.co' && key !== 'your-anon-key') {
-    return createClient(url, key, {
-      auth: { persistSession: false },
-    });
+  if (
+    !url ||
+    !key ||
+    url === 'https://your-project.supabase.co' ||
+    key === 'your-service-role-key' ||
+    key === 'your-anon-key'
+  ) {
+    return null;
   }
-  return null;
+
+  try {
+    return createClient(url, key, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+  } catch {
+    return null;
+  }
 }
 
 export default async function handler(req: IncomingMessage, res: ServerResponse) {

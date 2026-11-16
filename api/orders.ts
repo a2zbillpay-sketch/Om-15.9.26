@@ -17,21 +17,27 @@ export interface OrderAuthContext {
   customerSession: CustomerSession | null;
 }
 
-function getSupabaseClient(): SupabaseClient | null {
-  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
-  const key =
-    process.env.SUPABASE_SERVICE_ROLE_KEY ||
-    process.env.SUPABASE_ANON_KEY ||
-    process.env.VITE_SUPABASE_ANON_KEY;
+function getServerSupabaseClient(): SupabaseClient | null {
+  const url = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').trim();
+  const key = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
 
-  if (url && key && url !== 'https://your-project.supabase.co' && key !== 'your-anon-key') {
-    try {
-      return createClient(url, key, { auth: { persistSession: false } });
-    } catch {
-      return null;
-    }
+  if (
+    !url ||
+    !key ||
+    url === 'https://your-project.supabase.co' ||
+    key === 'your-service-role-key' ||
+    key === 'your-anon-key'
+  ) {
+    return null;
   }
-  return null;
+
+  try {
+    return createClient(url, key, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+  } catch {
+    return null;
+  }
 }
 
 function parseJsonBody(req: IncomingMessage): Promise<any> {
@@ -260,10 +266,13 @@ export async function processGetOrdersRequest(
 export default async function handler(req: IncomingMessage, res: ServerResponse) {
   const method = req.method?.toUpperCase();
   const url = new URL(req.url || '', `http://${req.headers.host || 'localhost'}`);
-  const supabase = getSupabaseClient();
+  const supabase = getServerSupabaseClient();
 
   if (!supabase) {
-    return sendJson(res, 500, { success: false, error: 'Database service is not configured' });
+    return sendJson(res, 500, {
+      success: false,
+      error: 'Database service is not configured or unavailable.',
+    });
   }
 
   // ============================================================================

@@ -132,6 +132,7 @@ export function getIndianMobileVariants(cleanPhone10: string): string[] {
       `+91 ${cleanPhone10}`,
       `91${cleanPhone10}`,
       `0${cleanPhone10}`,
+      `0091${cleanPhone10}`,
     ])
   );
 }

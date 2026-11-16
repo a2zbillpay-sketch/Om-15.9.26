@@ -1,7 +1,7 @@
 import { IncomingMessage, ServerResponse } from 'http';
 import fs from 'node:fs';
 import path from 'node:path';
-import { createClient } from '@supabase/supabase-js';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { verifyAdminSession } from './auth/_verify.js';
 import {
   normalizeAndValidateProduct,
@@ -70,25 +70,31 @@ function parseJsonBody(req: IncomingMessage): Promise<any> {
   });
 }
 
-function getServerSupabaseClient() {
-  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
-  // Prefer service role key for backend writes if available; otherwise use anon key
-  const key =
-    process.env.SUPABASE_SERVICE_ROLE_KEY ||
-    process.env.SUPABASE_ANON_KEY ||
-    process.env.VITE_SUPABASE_ANON_KEY;
+function getServerSupabaseClient(): SupabaseClient | null {
+  const url = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').trim();
+  const key = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
 
-  if (url && key && url !== 'https://your-project.supabase.co' && key !== 'your-anon-key') {
-    return createClient(url, key, {
-      auth: { persistSession: false },
-    });
+  if (
+    !url ||
+    !key ||
+    url === 'https://your-project.supabase.co' ||
+    key === 'your-service-role-key' ||
+    key === 'your-anon-key'
+  ) {
+    return null;
   }
-  return null;
+
+  try {
+    return createClient(url, key, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+  } catch {
+    return null;
+  }
 }
 
 export default async function handler(req: IncomingMessage, res: ServerResponse) {
   const method = req.method?.toUpperCase();
-  const supabase = getServerSupabaseClient();
 
   // Public GET: Fetch persistent products from server storage
   if (method === 'GET') {
@@ -101,6 +107,18 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
   if (!session || session.role !== 'SHOPKEEPER') {
     return sendJson(res, 401, {
       error: 'Unauthorized: Shopkeeper session required. Please log in.',
+    });
+  }
+
+  if (method !== 'POST' && method !== 'PUT' && method !== 'DELETE') {
+    res.setHeader('Allow', 'POST, PUT, DELETE');
+    return sendJson(res, 405, { error: `Method ${method} Not Allowed` });
+  }
+
+  const supabase = getServerSupabaseClient();
+  if (!supabase) {
+    return sendJson(res, 500, {
+      error: 'Database service is not configured or unavailable.',
     });
   }
 
