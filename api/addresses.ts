@@ -374,6 +374,7 @@ async function updateAddressesForUserIds(
   if (aliases.length === 0) return { error: null };
 
   let q = supabase.from('addresses').update(fields).in('user_id', aliases);
+  if (fields.is_default === false) q = q.eq('is_default', true);
   if (excludeId) q = q.neq('id', excludeId);
   let { error } = await q;
 
@@ -381,6 +382,7 @@ async function updateAddressesForUserIds(
     const uuidAliases = aliases.filter(isUuid);
     if (uuidAliases.length === 0) return { error: null };
     let rq = supabase.from('addresses').update(fields).in('user_id', uuidAliases);
+    if (fields.is_default === false) rq = rq.eq('is_default', true);
     if (excludeId) rq = rq.neq('id', excludeId);
     const retry = await rq;
     error = retry.error;
@@ -732,12 +734,17 @@ export async function processAddressesRequest(
 
     const nowIso = new Date().toISOString();
 
-    // Case A: Atomic Set Default Address
+    // Case A: Atomic Set Default Address (clear other active defaults first to respect addresses_one_default_idx)
     if (body?.action === 'set_default' || body?.setDefaultOnly === true) {
-      const { error: clearErr } = await updateAddressesForUserIds(supabase, aliases, {
-        is_default: false,
-        updated_at: nowIso,
-      });
+      const { error: clearErr } = await updateAddressesForUserIds(
+        supabase,
+        aliases,
+        {
+          is_default: false,
+          updated_at: nowIso,
+        },
+        targetId
+      );
 
       if (clearErr) {
         return { statusCode: 500, payload: { success: false, error: clearErr.message } };
@@ -880,7 +887,13 @@ export async function processAddressesRequest(
       };
     }
 
-    const { addresses: existingAll } = await fetchSortedCustomerAddresses(supabase, aliases);
+    const { addresses: existingAll, error: existingFetchErr } = await fetchSortedCustomerAddresses(
+      supabase,
+      aliases
+    );
+    if (existingFetchErr) {
+      return { statusCode: 500, payload: { success: false, error: existingFetchErr } };
+    }
 
     const rawIsDefault =
       body?.isDefault !== undefined ? body.isDefault : body?.is_default;
@@ -891,6 +904,7 @@ export async function processAddressesRequest(
       nextIsDefault = true;
     }
 
+    // Clear other active defaults BEFORE setting this row as default to avoid violating addresses_one_default_idx
     if (nextIsDefault) {
       const { error: clearErr } = await updateAddressesForUserIds(
         supabase,
@@ -901,17 +915,6 @@ export async function processAddressesRequest(
 
       if (clearErr) {
         return { statusCode: 500, payload: { success: false, error: clearErr.message } };
-      }
-    } else if (Boolean(currentRow.is_default)) {
-      // Unsetting default when other addresses exist -> ensure another address remains default
-      const replacement = existingAll.find((a) => a.id !== targetId);
-      if (replacement) {
-        await supabase
-          .from('addresses')
-          .update({ is_default: true, updated_at: nowIso })
-          .eq('id', replacement.id);
-      } else {
-        nextIsDefault = true;
       }
     }
 
@@ -938,6 +941,28 @@ export async function processAddressesRequest(
 
     if (updateErr) {
       return { statusCode: 500, payload: { success: false, error: updateErr.message } };
+    }
+
+    // If unsetting default on the current default row when other addresses exist,
+    // promote a replacement AFTER unsetting targetId so addresses_one_default_idx is never violated.
+    if (!nextIsDefault && Boolean(currentRow.is_default)) {
+      const { addresses: afterUpdate, error: afterErr } = await fetchSortedCustomerAddresses(
+        supabase,
+        aliases
+      );
+      if (afterErr) {
+        return { statusCode: 500, payload: { success: false, error: afterErr } };
+      }
+      if (afterUpdate.length > 0 && !afterUpdate.some((a) => a.isDefault)) {
+        const replacement = afterUpdate.find((a) => a.id !== targetId) || afterUpdate[0];
+        const { error: promoteErr } = await supabase
+          .from('addresses')
+          .update({ is_default: true, updated_at: nowIso })
+          .eq('id', replacement.id);
+        if (promoteErr) {
+          return { statusCode: 500, payload: { success: false, error: promoteErr.message } };
+        }
+      }
     }
 
     const { addresses: refreshed, error: refreshErr } = await fetchSortedCustomerAddresses(
@@ -1016,31 +1041,32 @@ export async function processAddressesRequest(
       }
     }
 
-    const wasDefault = Boolean(currentRow.is_default);
-
-    const { error: deleteErr } = await supabase
+    // Perform primary delete; rely on Master SQL promote_default_address_after_delete trigger
+    const { data: deletedRows, error: deleteErr } = await supabase
       .from('addresses')
       .delete()
-      .eq('id', targetId);
+      .eq('id', targetId)
+      .select('id');
 
     if (deleteErr) {
-      return { statusCode: 500, payload: { success: false, error: deleteErr.message } };
+      const statusCode = deleteErr.code === '23503' ? 409 : 500;
+      return {
+        statusCode,
+        payload: {
+          success: false,
+          error: deleteErr.message || 'Failed to delete delivery address.',
+        },
+      };
     }
 
-    // Check remaining addresses; promote oldest remaining address if deleted address was default
-    const { addresses: remainingBeforePromote, error: remErr } = await fetchSortedCustomerAddresses(
-      supabase,
-      aliases
-    );
-    if (remErr) {
-      return { statusCode: 500, payload: { success: false, error: remErr } };
-    }
-
-    if (wasDefault && remainingBeforePromote.length > 0 && !remainingBeforePromote.some((a) => a.isDefault)) {
-      await supabase
-        .from('addresses')
-        .update({ is_default: true, updated_at: new Date().toISOString() })
-        .eq('id', remainingBeforePromote[0].id);
+    if (!deletedRows || deletedRows.length === 0) {
+      return {
+        statusCode: 404,
+        payload: {
+          success: false,
+          error: 'Address not found or could not be deleted.',
+        },
+      };
     }
 
     const { addresses: refreshed, error: refreshErr } = await fetchSortedCustomerAddresses(
