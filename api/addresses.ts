@@ -92,8 +92,29 @@ function cleanText(raw: unknown): string {
 
 function cleanPhone10(raw: unknown): string {
   if (typeof raw !== 'string' && typeof raw !== 'number') return '';
-  const digits = String(raw).replace(/\D/g, '').slice(-10);
+  let digits = String(raw).replace(/\D/g, '');
+  if (digits.length === 14 && digits.startsWith('0091')) {
+    digits = digits.slice(4);
+  } else if (digits.length === 12 && digits.startsWith('91')) {
+    digits = digits.slice(2);
+  } else if (digits.length === 11 && digits.startsWith('0')) {
+    digits = digits.slice(1);
+  }
   return digits.length === 10 ? digits : '';
+}
+
+function getPhoneVariantsForLookup(phone10: string): string[] {
+  if (!phone10 || phone10.length !== 10) return [];
+  return Array.from(
+    new Set([
+      phone10,
+      `+91${phone10}`,
+      `+91 ${phone10}`,
+      `91${phone10}`,
+      `0${phone10}`,
+      `0091${phone10}`,
+    ])
+  );
 }
 
 export function normalizeAddressLabel(raw: unknown): AddressLabel {
@@ -206,7 +227,9 @@ async function resolveCustomerIdentity(
   isInactive?: boolean;
   inactiveReason?: string;
 }> {
-  const cleanPhone = phone.replace(/\D/g, '').slice(-10);
+  const cleanPhone = cleanPhone10(phone) || phone.replace(/\D/g, '').slice(-10);
+  const phoneNormalized = cleanPhone.length === 10 ? `+91${cleanPhone}` : '';
+  const phoneVariants = getPhoneVariantsForLookup(cleanPhone);
   const aliasSet = new Set<string>();
 
   if (sessionCustomerId && sessionCustomerId.trim()) {
@@ -223,15 +246,31 @@ async function resolveCustomerIdentity(
   let isInactive = false;
   let inactiveReason: string | undefined;
 
-  if (cleanPhone) {
-    const { data: userRows } = await supabase
+  const lookupCustomerRows = async (): Promise<any[]> => {
+    if (phoneNormalized) {
+      const byNorm = await supabase
+        .from('users')
+        .select('*')
+        .eq('phone_normalized', phoneNormalized)
+        .eq('role', 'CUSTOMER')
+        .order('created_at', { ascending: true });
+      if (!byNorm.error && byNorm.data && byNorm.data.length > 0) {
+        return byNorm.data;
+      }
+    }
+    const byVars = await supabase
       .from('users')
       .select('*')
-      .in('phone', [cleanPhone, `+91${cleanPhone}`])
+      .in('phone', phoneVariants.length > 0 ? phoneVariants : [cleanPhone, `+91${cleanPhone}`])
       .eq('role', 'CUSTOMER')
       .order('updated_at', { ascending: false });
+    return byVars.data || [];
+  };
 
-    if (userRows && userRows.length > 0) {
+  if (cleanPhone) {
+    const userRows = await lookupCustomerRows();
+
+    if (userRows.length > 0) {
       for (const u of userRows) {
         if (u?.id) {
           aliasSet.add(String(u.id));
@@ -255,12 +294,13 @@ async function resolveCustomerIdentity(
       const nowIso = new Date().toISOString();
       const newUserId = isUuid(sessionCustomerId) ? sessionCustomerId!.trim() : crypto.randomUUID();
       const seedName = cleanText(options?.fallbackFullName);
-      const primaryRes = await supabase
+      let insertRes = await supabase
         .from('users')
         .insert({
           id: newUserId,
           full_name: seedName,
           phone: cleanPhone,
+          phone_normalized: phoneNormalized,
           role: 'CUSTOMER',
           status: 'ACTIVE',
           created_at: nowIso,
@@ -269,15 +309,44 @@ async function resolveCustomerIdentity(
         .select('id')
         .single();
 
-      if (!primaryRes.error && primaryRes.data?.id) {
-        dbUserId = String(primaryRes.data.id);
+      if (
+        insertRes.error &&
+        insertRes.error.code !== '23505' &&
+        (insertRes.error.code === 'PGRST204' || insertRes.error.code === '42703') &&
+        /phone_normalized/i.test(String(insertRes.error.message || ''))
+      ) {
+        insertRes = await supabase
+          .from('users')
+          .insert({
+            id: newUserId,
+            full_name: seedName,
+            phone: cleanPhone,
+            role: 'CUSTOMER',
+            status: 'ACTIVE',
+            created_at: nowIso,
+            updated_at: nowIso,
+          })
+          .select('id')
+          .single();
+      }
+
+      if (!insertRes.error && insertRes.data?.id) {
+        dbUserId = String(insertRes.data.id);
         aliasSet.add(dbUserId);
         if (seedName) userFullName = seedName;
+      } else if (insertRes.error && insertRes.error.code === '23505') {
+        const raceRows = await lookupCustomerRows();
+        if (raceRows[0]?.id) {
+          dbUserId = String(raceRows[0].id);
+          aliasSet.add(dbUserId);
+          const candidateName = cleanText(raceRows[0]?.full_name ?? raceRows[0]?.name);
+          if (candidateName) userFullName = candidateName;
+        }
       } else if (
-        primaryRes.error &&
-        (primaryRes.error.code === 'PGRST204' ||
-          primaryRes.error.code === '42703' ||
-          /full_name|status/i.test(String(primaryRes.error.message || '')))
+        insertRes.error &&
+        (insertRes.error.code === 'PGRST204' ||
+          insertRes.error.code === '42703' ||
+          /full_name|status/i.test(String(insertRes.error.message || '')))
       ) {
         const legacyRes = await supabase
           .from('users')

@@ -123,6 +123,11 @@ export function normalizeIndianMobile(raw: unknown): string {
   return digits.length === 10 ? digits : '';
 }
 
+export function normalizeIndianMobileE164(raw: unknown): string {
+  const clean10 = normalizeIndianMobile(raw);
+  return clean10 ? `+91${clean10}` : '';
+}
+
 export function getIndianMobileVariants(cleanPhone10: string): string[] {
   if (!cleanPhone10 || cleanPhone10.length !== 10) return [];
   return Array.from(
@@ -135,6 +140,53 @@ export function getIndianMobileVariants(cleanPhone10: string): string[] {
       `0091${cleanPhone10}`,
     ])
   );
+}
+
+function isMissingColumnError(err: any, columnName: string): boolean {
+  if (!err) return false;
+  const code = String(err.code || '').trim();
+  const msg = String(err.message || '');
+  return (
+    (code === 'PGRST204' || code === '42703' || msg.toLowerCase().includes('schema cache')) &&
+    new RegExp(columnName, 'i').test(msg)
+  );
+}
+
+async function findExistingCustomerByPhone(
+  supabase: SupabaseClient,
+  cleanPhone10: string,
+  phoneNormalized: string
+): Promise<{ user: any | null; error: any | null }> {
+  if (phoneNormalized) {
+    const byNorm = await supabase
+      .from('users')
+      .select('*')
+      .eq('phone_normalized', phoneNormalized)
+      .eq('role', 'CUSTOMER')
+      .order('created_at', { ascending: true })
+      .limit(1);
+
+    if (!byNorm.error && byNorm.data && byNorm.data.length > 0) {
+      return { user: byNorm.data[0], error: null };
+    }
+    if (byNorm.error && !isMissingColumnError(byNorm.error, 'phone_normalized')) {
+      return { user: null, error: byNorm.error };
+    }
+  }
+
+  const phoneVariants = getIndianMobileVariants(cleanPhone10);
+  const byVariants = await supabase
+    .from('users')
+    .select('*')
+    .in('phone', phoneVariants)
+    .eq('role', 'CUSTOMER')
+    .order('created_at', { ascending: true })
+    .limit(1);
+
+  if (byVariants.error) {
+    return { user: null, error: byVariants.error };
+  }
+  return { user: byVariants.data?.[0] || null, error: null };
 }
 
 // Per-mobile in-process queue to prevent simultaneous duplicate registration races
@@ -178,7 +230,8 @@ export async function processCustomerLoginRequest(
   body: any
 ): Promise<CustomerLoginProcessResult> {
   const cleanPhone = normalizeIndianMobile(body?.phone);
-  if (cleanPhone.length !== 10) {
+  const phoneNormalized = normalizeIndianMobileE164(body?.phone);
+  if (cleanPhone.length !== 10 || !phoneNormalized) {
     return {
       statusCode: 400,
       payload: { error: 'Valid 10-digit mobile number is required.' },
@@ -206,14 +259,11 @@ export async function processCustomerLoginRequest(
     let customerId = `user-${cleanPhone}`;
 
     if (supabase) {
-      const phoneVariants = getIndianMobileVariants(cleanPhone);
-      const { data: userRows, error: userErr } = await supabase
-        .from('users')
-        .select('*')
-        .in('phone', phoneVariants)
-        .eq('role', 'CUSTOMER')
-        .order('created_at', { ascending: true })
-        .limit(1);
+      const { user: existingCustomer, error: userErr } = await findExistingCustomerByPhone(
+        supabase,
+        cleanPhone,
+        phoneNormalized
+      );
 
       if (userErr) {
         return {
@@ -222,7 +272,7 @@ export async function processCustomerLoginRequest(
         };
       }
 
-      if (userRows && userRows.length > 0) {
+      if (existingCustomer) {
         if (isNewRegistration) {
           return {
             statusCode: 409,
@@ -231,12 +281,13 @@ export async function processCustomerLoginRequest(
               code: 'DUPLICATE_CUSTOMER',
               redirectToLogin: true,
               phone: cleanPhone,
+              phoneNormalized,
               error: DUPLICATE_CUSTOMER_MESSAGE,
             },
           };
         }
 
-        resolvedUser = userRows[0];
+        resolvedUser = existingCustomer;
         if (resolvedUser.status && String(resolvedUser.status).toUpperCase() !== 'ACTIVE') {
           return {
             statusCode: 403,
@@ -264,6 +315,7 @@ export async function processCustomerLoginRequest(
           id: newCustomerId,
           full_name: requestedName,
           phone: cleanPhone,
+          phone_normalized: phoneNormalized,
           role: 'CUSTOMER',
           status: 'ACTIVE',
           created_at: nowIso,
@@ -280,6 +332,28 @@ export async function processCustomerLoginRequest(
           .single();
         insertedUser = primaryRes.data;
         insertErr = primaryRes.error;
+
+        if (
+          insertErr &&
+          !isUniqueViolationError(insertErr) &&
+          isMissingColumnError(insertErr, 'phone_normalized')
+        ) {
+          const withoutNormRes = await supabase
+            .from('users')
+            .insert({
+              id: newCustomerId,
+              full_name: requestedName,
+              phone: cleanPhone,
+              role: 'CUSTOMER',
+              status: 'ACTIVE',
+              created_at: nowIso,
+              updated_at: nowIso,
+            })
+            .select()
+            .single();
+          insertedUser = withoutNormRes.data;
+          insertErr = withoutNormRes.error;
+        }
 
         if (
           insertErr &&
@@ -304,15 +378,13 @@ export async function processCustomerLoginRequest(
         }
 
         if (insertErr) {
-          const { data: retryRows } = await supabase
-            .from('users')
-            .select('*')
-            .in('phone', phoneVariants)
-            .eq('role', 'CUSTOMER')
-            .order('created_at', { ascending: true })
-            .limit(1);
+          const { user: retryUser } = await findExistingCustomerByPhone(
+            supabase,
+            cleanPhone,
+            phoneNormalized
+          );
 
-          if (retryRows && retryRows.length > 0) {
+          if (retryUser) {
             if (isNewRegistration) {
               return {
                 statusCode: 409,
@@ -321,12 +393,13 @@ export async function processCustomerLoginRequest(
                   code: 'DUPLICATE_CUSTOMER',
                   redirectToLogin: true,
                   phone: cleanPhone,
+                  phoneNormalized,
                   error: DUPLICATE_CUSTOMER_MESSAGE,
                 },
               };
             }
 
-            resolvedUser = retryRows[0];
+            resolvedUser = retryUser;
             if (resolvedUser.status && String(resolvedUser.status).toUpperCase() !== 'ACTIVE') {
               return {
                 statusCode: 403,
@@ -346,6 +419,7 @@ export async function processCustomerLoginRequest(
                 code: 'DUPLICATE_CUSTOMER',
                 redirectToLogin: true,
                 phone: cleanPhone,
+                phoneNormalized,
                 error: DUPLICATE_CUSTOMER_MESSAGE,
               },
             };
@@ -381,11 +455,16 @@ export async function processCustomerLoginRequest(
         role: 'CUSTOMER',
         customerId,
         phone: cleanPhone,
+        phoneNormalized,
         user: resolvedUser
           ? {
               id: resolvedUser.id,
               name: resolvedUser.full_name ?? resolvedUser.name ?? '',
               phone: resolvedUser.phone,
+              phoneNormalized:
+                resolvedUser.phone_normalized ||
+                normalizeIndianMobileE164(resolvedUser.phone) ||
+                phoneNormalized,
               role: resolvedUser.role || 'CUSTOMER',
               status: resolvedUser.status || 'ACTIVE',
               walletBalance: Number(resolvedUser.wallet_balance || 0),

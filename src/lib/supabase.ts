@@ -56,6 +56,11 @@ export function normalizeIndianMobile(raw: unknown): string {
   return digits.length === 10 ? digits : '';
 }
 
+export function normalizeIndianMobileE164(raw: unknown): string {
+  const clean10 = normalizeIndianMobile(raw);
+  return clean10 ? `+91${clean10}` : '';
+}
+
 export function getIndianMobileVariants(cleanPhone10: string): string[] {
   if (!cleanPhone10 || cleanPhone10.length !== 10) return [];
   return Array.from(
@@ -68,6 +73,70 @@ export function getIndianMobileVariants(cleanPhone10: string): string[] {
       `0091${cleanPhone10}`,
     ])
   );
+}
+
+function isMissingColumnError(err: any, columnName: string): boolean {
+  if (!err) return false;
+  const code = String(err.code || '').trim();
+  const msg = String(err.message || '');
+  return (
+    (code === 'PGRST204' || code === '42703' || msg.toLowerCase().includes('schema cache')) &&
+    new RegExp(columnName, 'i').test(msg)
+  );
+}
+
+function isUniqueViolationError(err: any): boolean {
+  if (!err) return false;
+  const code = String(err.code || '').trim();
+  const msg = String(err.message || '').toLowerCase();
+  return code === '23505' || msg.includes('duplicate key') || msg.includes('unique constraint');
+}
+
+async function findCustomerByNormalizedPhone(
+  cleanPhone: string,
+  role?: string
+): Promise<{ user: any | null; error: any | null }> {
+  if (!supabase || !cleanPhone || cleanPhone.length !== 10) {
+    return { user: null, error: null };
+  }
+
+  const phoneNormalized = normalizeIndianMobileE164(cleanPhone);
+  if (phoneNormalized) {
+    let normQuery = supabase
+      .from('users')
+      .select('*')
+      .eq('phone_normalized', phoneNormalized);
+    if (role) {
+      normQuery = normQuery.eq('role', role);
+    }
+    const { data: normRows, error: normError } = await normQuery
+      .order('created_at', { ascending: true })
+      .limit(1);
+
+    if (!normError && normRows && normRows.length > 0) {
+      return { user: normRows[0], error: null };
+    }
+    if (normError && !isMissingColumnError(normError, 'phone_normalized')) {
+      return { user: null, error: normError };
+    }
+  }
+
+  const phoneVariants = getIndianMobileVariants(cleanPhone);
+  let varQuery = supabase
+    .from('users')
+    .select('*')
+    .in('phone', phoneVariants.length > 0 ? phoneVariants : [cleanPhone, `+91${cleanPhone}`]);
+  if (role) {
+    varQuery = varQuery.eq('role', role);
+  }
+  const { data: varRows, error: varError } = await varQuery
+    .order('created_at', { ascending: true })
+    .limit(1);
+
+  if (varError) {
+    return { user: null, error: varError };
+  }
+  return { user: varRows && varRows.length > 0 ? varRows[0] : null, error: null };
 }
 
 function parseCustomerAddress(rawAddress?: unknown): {
@@ -214,12 +283,29 @@ async function resolveCustomerIdentityAliases(
   if (supabase) {
     try {
       if (cleanPhone) {
-        const phoneVariants = getIndianMobileVariants(cleanPhone);
-        const { data: dbUsers } = await supabase
-          .from('users')
-          .select('id, phone')
-          .in('phone', phoneVariants.length > 0 ? phoneVariants : [cleanPhone, `+91${cleanPhone}`])
-          .limit(5);
+        const phoneNormalized = normalizeIndianMobileE164(cleanPhone);
+        let dbUsers: any[] | null = null;
+
+        if (phoneNormalized) {
+          const normRes = await supabase
+            .from('users')
+            .select('id, phone')
+            .eq('phone_normalized', phoneNormalized)
+            .limit(5);
+          if (!normRes.error && normRes.data && normRes.data.length > 0) {
+            dbUsers = normRes.data;
+          }
+        }
+
+        if (!dbUsers || dbUsers.length === 0) {
+          const phoneVariants = getIndianMobileVariants(cleanPhone);
+          const varRes = await supabase
+            .from('users')
+            .select('id, phone')
+            .in('phone', phoneVariants.length > 0 ? phoneVariants : [cleanPhone, `+91${cleanPhone}`])
+            .limit(5);
+          dbUsers = varRes.data;
+        }
 
         if (dbUsers && dbUsers.length > 0) {
           dbUsers.forEach((u) => {
@@ -414,21 +500,13 @@ export async function getOrCreateCustomerByPhone(
 ): Promise<User | null> {
   if (!supabase) return null;
 
-  const cleanPhone = normalizeIndianMobile(phone) || phone.replace(/\D/g, '').slice(-10);
-  if (!cleanPhone || cleanPhone.length !== 10) return null;
-  const phoneVariants = getIndianMobileVariants(cleanPhone);
+  const cleanPhone = normalizeIndianMobile(phone);
+  const phoneNormalized = normalizeIndianMobileE164(phone);
+  if (!cleanPhone || cleanPhone.length !== 10 || !phoneNormalized) return null;
 
   try {
-    // 1. Check if user with this phone and role exists in Supabase users table
-    const { data: existingRows } = await supabase
-      .from('users')
-      .select('*')
-      .in('phone', phoneVariants)
-      .eq('role', role)
-      .order('created_at', { ascending: true })
-      .limit(1);
-
-    const existingUser = existingRows && existingRows.length > 0 ? existingRows[0] : null;
+    // 1. Check if user with this normalized phone and role exists in Supabase users table
+    const { user: existingUser } = await findCustomerByNormalizedPhone(cleanPhone, role);
 
     if (existingUser) {
       const { fullAddress, landmark, pincode } = parseCustomerAddress(existingUser.address);
@@ -472,6 +550,7 @@ export async function getOrCreateCustomerByPhone(
       .insert({
         id: newId,
         phone: cleanPhone,
+        phone_normalized: phoneNormalized,
         full_name: resolvedFullName,
         role,
         status: 'ACTIVE',
@@ -483,7 +562,29 @@ export async function getOrCreateCustomerByPhone(
 
     if (
       insertError &&
-      insertError.code !== '23505' &&
+      !isUniqueViolationError(insertError) &&
+      isMissingColumnError(insertError, 'phone_normalized')
+    ) {
+      const withoutNormRes = await supabase
+        .from('users')
+        .insert({
+          id: newId,
+          phone: cleanPhone,
+          full_name: resolvedFullName,
+          role,
+          status: 'ACTIVE',
+          created_at: nowIso,
+          updated_at: nowIso,
+        })
+        .select()
+        .single();
+      insertedUser = withoutNormRes.data;
+      insertError = withoutNormRes.error;
+    }
+
+    if (
+      insertError &&
+      !isUniqueViolationError(insertError) &&
       (insertError.code === 'PGRST204' ||
         insertError.code === '42703' ||
         /full_name|status/i.test(String(insertError.message || '')))
@@ -504,16 +605,10 @@ export async function getOrCreateCustomerByPhone(
     }
 
     if (insertError) {
-      const { data: fallbackUser } = await supabase
-        .from('users')
-        .select('*')
-        .in('phone', phoneVariants)
-        .eq('role', role)
-        .order('created_at', { ascending: true })
-        .limit(1);
+      const { user: fallbackUser } = await findCustomerByNormalizedPhone(cleanPhone, role);
 
-      if (fallbackUser && fallbackUser.length > 0) {
-        const u = fallbackUser[0];
+      if (fallbackUser) {
+        const u = fallbackUser;
         const { fullAddress, landmark, pincode } = parseCustomerAddress(u.address);
         return {
           id: u.id,
@@ -556,11 +651,13 @@ export async function saveCustomerProfileToSupabase(
   name: string,
   fullAddress: string,
   landmark: string = '',
-  pincode: string = ''
+  pincode: string = '',
+  newPhone?: string
 ): Promise<User | null> {
   if (!supabase) return null;
-  const cleanPhone = normalizeIndianMobile(phone) || phone.replace(/\D/g, '').slice(-10);
-  const phoneVariants = getIndianMobileVariants(cleanPhone);
+  const cleanPhone = normalizeIndianMobile(phone);
+  const phoneNormalized = normalizeIndianMobileE164(phone);
+  if (!cleanPhone || !phoneNormalized) return null;
 
   try {
     let completeAddress = fullAddress.trim();
@@ -571,7 +668,7 @@ export async function saveCustomerProfileToSupabase(
       completeAddress = `${completeAddress} - ${pincode.trim()}`;
     }
 
-    // 1. Locate existing record in users table by UUID id or normalized phone variants
+    // 1. Locate existing record in users table by UUID id or normalized phone
     let targetUser: any = null;
 
     if (isUuid(userId)) {
@@ -586,21 +683,15 @@ export async function saveCustomerProfileToSupabase(
     }
 
     if (!targetUser && cleanPhone) {
-      const { data: existingRows } = await supabase
-        .from('users')
-        .select('*')
-        .in('phone', phoneVariants.length > 0 ? phoneVariants : [cleanPhone, `+91${cleanPhone}`])
-        .eq('role', 'CUSTOMER')
-        .order('created_at', { ascending: true })
-        .limit(1);
-
-      if (existingRows && existingRows.length > 0) {
-        targetUser = existingRows[0];
+      const { user: existingByPhone } = await findCustomerByNormalizedPhone(cleanPhone, 'CUSTOMER');
+      if (existingByPhone) {
+        targetUser = existingByPhone;
       }
     }
 
     const nowIso = new Date().toISOString();
     const cleanName = name.trim();
+    let effectiveCleanPhone = cleanPhone;
 
     if (targetUser) {
       const updatePayload: Record<string, any> = {
@@ -623,17 +714,60 @@ export async function saveCustomerProfileToSupabase(
         updatePayload.role = 'CUSTOMER';
       }
 
-      const { data: updated, error: updateError } = await supabase
+      if (typeof newPhone === 'string' && newPhone.trim()) {
+        const nextCleanPhone = normalizeIndianMobile(newPhone);
+        const nextPhoneNormalized = normalizeIndianMobileE164(newPhone);
+        const existingNorm =
+          targetUser.phone_normalized || normalizeIndianMobileE164(targetUser.phone);
+        if (nextCleanPhone && nextPhoneNormalized && nextPhoneNormalized !== existingNorm) {
+          const { user: conflictUser } = await findCustomerByNormalizedPhone(
+            nextCleanPhone,
+            'CUSTOMER'
+          );
+          if (conflictUser && conflictUser.id !== targetUser.id) {
+            throw Object.assign(new Error(DUPLICATE_CUSTOMER_MESSAGE), {
+              code: 'DUPLICATE_CUSTOMER',
+            });
+          }
+          updatePayload.phone = nextCleanPhone;
+          updatePayload.phone_normalized = nextPhoneNormalized;
+          effectiveCleanPhone = nextCleanPhone;
+        }
+      }
+
+      let { data: updated, error: updateError } = await supabase
         .from('users')
         .update(updatePayload)
         .eq('id', targetUser.id)
         .select()
         .single();
 
+      if (
+        updateError &&
+        !isUniqueViolationError(updateError) &&
+        isMissingColumnError(updateError, 'phone_normalized')
+      ) {
+        const { phone_normalized: _omit, ...fallbackUpdate } = updatePayload;
+        const retryUpdate = await supabase
+          .from('users')
+          .update(fallbackUpdate)
+          .eq('id', targetUser.id)
+          .select()
+          .single();
+        updated = retryUpdate.data;
+        updateError = retryUpdate.error;
+      }
+
       if (updateError) {
+        if (isUniqueViolationError(updateError)) {
+          throw Object.assign(new Error(DUPLICATE_CUSTOMER_MESSAGE), {
+            code: 'DUPLICATE_CUSTOMER',
+          });
+        }
         console.warn('Supabase update customer profile warning:', updateError.message);
       } else if (updated) {
         targetUser = updated;
+        effectiveCleanPhone = normalizeIndianMobile(updated.phone) || effectiveCleanPhone;
       }
     } else {
       const newUserId = isUuid(userId) ? userId.trim() : generateUuid();
@@ -641,6 +775,7 @@ export async function saveCustomerProfileToSupabase(
         id: newUserId,
         full_name: cleanName || `Customer (${cleanPhone.slice(-4)})`,
         phone: cleanPhone,
+        phone_normalized: phoneNormalized,
         role: 'CUSTOMER',
         status: 'ACTIVE',
         created_at: nowIso,
@@ -655,7 +790,29 @@ export async function saveCustomerProfileToSupabase(
 
       if (
         insertError &&
-        insertError.code !== '23505' &&
+        !isUniqueViolationError(insertError) &&
+        isMissingColumnError(insertError, 'phone_normalized')
+      ) {
+        const withoutNormInsert = await supabase
+          .from('users')
+          .insert({
+            id: newUserId,
+            full_name: cleanName || `Customer (${cleanPhone.slice(-4)})`,
+            phone: cleanPhone,
+            role: 'CUSTOMER',
+            status: 'ACTIVE',
+            created_at: nowIso,
+            updated_at: nowIso,
+          })
+          .select()
+          .single();
+        inserted = withoutNormInsert.data;
+        insertError = withoutNormInsert.error;
+      }
+
+      if (
+        insertError &&
+        !isUniqueViolationError(insertError) &&
         (insertError.code === 'PGRST204' ||
           insertError.code === '42703' ||
           /full_name|status/i.test(String(insertError.message || '')))
@@ -678,15 +835,9 @@ export async function saveCustomerProfileToSupabase(
       }
 
       if (insertError) {
-        const { data: retryRows } = await supabase
-          .from('users')
-          .select('*')
-          .in('phone', phoneVariants.length > 0 ? phoneVariants : [cleanPhone, `+91${cleanPhone}`])
-          .eq('role', 'CUSTOMER')
-          .order('created_at', { ascending: true })
-          .limit(1);
-        if (retryRows && retryRows.length > 0) {
-          targetUser = retryRows[0];
+        const { user: retryUser } = await findCustomerByNormalizedPhone(cleanPhone, 'CUSTOMER');
+        if (retryUser) {
+          targetUser = retryUser;
         } else {
           console.warn('Supabase insert customer profile warning:', insertError.message);
         }
@@ -697,13 +848,13 @@ export async function saveCustomerProfileToSupabase(
 
     const resolvedId = targetUser?.id || userId;
     const dbOutstanding = Number(targetUser?.outstanding_balance || 0);
-    const ledgerCredits = await getCustomerWalletBalanceFromLedger(resolvedId, cleanPhone);
+    const ledgerCredits = await getCustomerWalletBalanceFromLedger(resolvedId, effectiveCleanPhone);
     const dbCredits = Math.max(Number(targetUser?.wallet_balance || 0), ledgerCredits);
 
     return {
       id: resolvedId,
       name: targetUser?.full_name ?? targetUser?.name ?? cleanName,
-      phone: cleanPhone,
+      phone: effectiveCleanPhone,
       role: Role.CUSTOMER,
       walletBalance: dbCredits,
       outstandingBalance: dbOutstanding,
@@ -712,9 +863,113 @@ export async function saveCustomerProfileToSupabase(
       createdAt: targetUser?.updated_at || nowIso,
       isDatabaseVerified: true,
     };
-  } catch (err) {
+  } catch (err: any) {
+    if (err?.code === 'DUPLICATE_CUSTOMER') {
+      throw err;
+    }
     console.error('Error saving customer profile to Supabase:', err);
     return null;
+  }
+}
+
+export async function updateCustomerPhoneInSupabase(
+  userId: string,
+  newPhone: string
+): Promise<{
+  success: boolean;
+  code?: string;
+  error?: string;
+  phone?: string;
+  phoneNormalized?: string;
+}> {
+  if (!supabase) {
+    return { success: false, code: 'NO_DB', error: 'Supabase client is not configured.' };
+  }
+
+  const cleanPhone = normalizeIndianMobile(newPhone);
+  const phoneNormalized = normalizeIndianMobileE164(newPhone);
+  if (!cleanPhone || cleanPhone.length !== 10 || !phoneNormalized) {
+    return {
+      success: false,
+      code: 'INVALID_PHONE',
+      error: 'Valid 10-digit Indian mobile number is required.',
+    };
+  }
+
+  try {
+    const { user: existingOwner, error: lookupError } = await findCustomerByNormalizedPhone(
+      cleanPhone,
+      'CUSTOMER'
+    );
+    if (lookupError) {
+      return {
+        success: false,
+        code: 'LOOKUP_ERROR',
+        error: lookupError.message || 'Failed to verify mobile number uniqueness.',
+      };
+    }
+
+    if (existingOwner && String(existingOwner.id) !== String(userId)) {
+      return {
+        success: false,
+        code: 'DUPLICATE_CUSTOMER',
+        error: DUPLICATE_CUSTOMER_MESSAGE,
+      };
+    }
+
+    const nowIso = new Date().toISOString();
+    let { error: updateError } = await supabase
+      .from('users')
+      .update({
+        phone: cleanPhone,
+        phone_normalized: phoneNormalized,
+        updated_at: nowIso,
+      })
+      .eq('id', userId)
+      .eq('role', 'CUSTOMER');
+
+    if (
+      updateError &&
+      !isUniqueViolationError(updateError) &&
+      isMissingColumnError(updateError, 'phone_normalized')
+    ) {
+      const retryRes = await supabase
+        .from('users')
+        .update({
+          phone: cleanPhone,
+          updated_at: nowIso,
+        })
+        .eq('id', userId)
+        .eq('role', 'CUSTOMER');
+      updateError = retryRes.error;
+    }
+
+    if (updateError) {
+      if (isUniqueViolationError(updateError)) {
+        return {
+          success: false,
+          code: 'DUPLICATE_CUSTOMER',
+          error: DUPLICATE_CUSTOMER_MESSAGE,
+        };
+      }
+      return {
+        success: false,
+        code: 'UPDATE_FAILED',
+        error: updateError.message || 'Failed to update customer mobile number.',
+      };
+    }
+
+    return {
+      success: true,
+      phone: cleanPhone,
+      phoneNormalized,
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      code: 'UPDATE_FAILED',
+      error: err?.message || 'Failed to update customer mobile number.',
+    };
   }
 }
 
@@ -1050,30 +1305,24 @@ export async function saveAddressToSupabase(address: Address): Promise<boolean> 
  */
 export async function fetchCustomerProfileFromSupabase(phone: string): Promise<User | null> {
   if (!supabase) return null;
-  const cleanPhone = normalizeIndianMobile(phone) || phone.replace(/\D/g, '').slice(-10);
+  const cleanPhone = normalizeIndianMobile(phone);
   if (!cleanPhone || cleanPhone.length !== 10) return null;
-  const phoneVariants = getIndianMobileVariants(cleanPhone);
 
   try {
-    // 1. Safe query: Filter strictly by phone variants AND role = 'CUSTOMER'
-    const { data: userRows, error: userError } = await supabase
-      .from('users')
-      .select('*')
-      .in('phone', phoneVariants)
-      .eq('role', 'CUSTOMER')
-      .order('created_at', { ascending: true })
-      .limit(1);
+    // 1. Safe query: Filter strictly by canonical normalized phone / variants AND role = 'CUSTOMER'
+    const { user: dbUser, error: userError } = await findCustomerByNormalizedPhone(
+      cleanPhone,
+      'CUSTOMER'
+    );
 
     if (userError) {
       console.warn('Error fetching customer from Supabase users:', userError.message);
       return null;
     }
 
-    if (!userRows || userRows.length === 0) {
+    if (!dbUser) {
       return null;
     }
-
-    const dbUser = userRows[0];
 
     // 2. Read fallback address metadata from users.address only if column exists
     const { fullAddress, landmark, pincode } = parseCustomerAddress(dbUser.address);
