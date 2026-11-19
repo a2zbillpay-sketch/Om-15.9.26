@@ -178,6 +178,9 @@ $fn_body$;
   END IF;
 END $do_norm_fn$;
 
+SET LOCAL lock_timeout = '5s';
+LOCK TABLE public.users IN SHARE ROW EXCLUSIVE MODE;
+
 -- 2A. Pre-flight check: If public.users.phone_normalized already exists, verify its data type is TEXT
 DO $$
 DECLARE

@@ -98,6 +98,7 @@ export function getFulfillmentStepIndex(status: string | OrderStatus): number {
     case 'PACKING_IN_PROGRESS':
     case 'PACKING':
     case 'PACKING IN PROGRESS':
+    case 'PROCESSING':
       return 2;
 
     case 'READY_FOR_DELIVERY':

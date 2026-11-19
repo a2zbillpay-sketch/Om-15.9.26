@@ -199,12 +199,102 @@ export function findProductAndVariant(
     );
   }
 
-  // 6. Default to the first variant if specific variant couldn't be matched
-  if (!matchedVariant) {
+  // 6. Default to the first variant only when product has a single variant or no explicit variant spec was provided
+  const hasExplicitVariantSpec = Boolean(
+    item.variantId ||
+    (item.variantName && item.variantName.trim()) ||
+    (item.unit && item.packSize !== undefined)
+  );
+  if (!matchedVariant && (matchedProduct.variants.length === 1 || !hasExplicitVariantSpec)) {
     matchedVariant = matchedProduct.variants[0];
   }
 
+  if (!matchedVariant) {
+    return null;
+  }
+
   return { product: matchedProduct, variant: matchedVariant };
+}
+
+export interface InsufficientStockItem {
+  productName: string;
+  variantLabel?: string;
+  requestedQty: number;
+  availableStock: number;
+}
+
+export interface OrderStockValidationResult {
+  available: boolean;
+  insufficientItems: InsufficientStockItem[];
+  errorMessage?: string;
+}
+
+/**
+ * Validates cumulative ordered quantities against current available stock for every matched product/variant.
+ * Returns available: false with descriptive errorMessage if any item has 0 or insufficient stock.
+ */
+export function validateOrderStockAvailability(
+  order: Order,
+  currentProducts: Product[]
+): OrderStockValidationResult {
+  if (!order.items || order.items.length === 0) {
+    return { available: true, insufficientItems: [] };
+  }
+
+  const aggregated = new Map<
+    string,
+    { productName: string; variantLabel?: string; requestedQty: number; availableStock: number }
+  >();
+
+  for (const item of order.items) {
+    const qty = Number(item.quantity) || 0;
+    if (qty <= 0) continue;
+
+    const match = findProductAndVariant(item, currentProducts);
+    if (!match) continue;
+
+    const key = match.variant ? `var:${match.variant.id}` : `prod:${match.product.id}`;
+    const availableStock = match.variant
+      ? Math.max(0, Number(match.variant.stockQuantity ?? 0) || 0)
+      : Math.max(0, Number(match.product.stockQuantity ?? match.product.stock ?? 0) || 0);
+
+    const existing = aggregated.get(key);
+    if (existing) {
+      existing.requestedQty += qty;
+    } else {
+      aggregated.set(key, {
+        productName: match.product.name || item.productName || 'Product',
+        variantLabel: match.variant?.packLabel || item.variantName,
+        requestedQty: qty,
+        availableStock,
+      });
+    }
+  }
+
+  const insufficientItems: InsufficientStockItem[] = [];
+  for (const entry of aggregated.values()) {
+    if (entry.availableStock <= 0 || entry.requestedQty > entry.availableStock) {
+      insufficientItems.push(entry);
+    }
+  }
+
+  if (insufficientItems.length > 0) {
+    const details = insufficientItems
+      .map((it) => {
+        const label = it.variantLabel ? `${it.productName} (${it.variantLabel})` : it.productName;
+        return it.availableStock <= 0
+          ? `${label} (Out of stock: 0 available, ${it.requestedQty} ordered)`
+          : `${label} (Available: ${it.availableStock}, Ordered: ${it.requestedQty})`;
+      })
+      .join(', ');
+    return {
+      available: false,
+      insufficientItems,
+      errorMessage: `Insufficient stock to accept order: ${details}`,
+    };
+  }
+
+  return { available: true, insufficientItems: [] };
 }
 
 export interface StockChangeResult {
@@ -254,10 +344,12 @@ export function deductStockForOrder(
       if (targetVar) {
         targetVar.stockQuantity = Math.max(0, Number(targetVar.stockQuantity || 0) - qtyToDeduct);
         // Synchronize overall product stock
-        (prod as any).stock = prod.variants.reduce(
+        const totalVarStock = prod.variants.reduce(
           (sum, v) => sum + (Number(v.stockQuantity) || 0),
           0
         );
+        (prod as any).stock = totalVarStock;
+        prod.stockQuantity = totalVarStock;
         affectedProductIds.add(prod.id);
       }
     } else {
@@ -273,11 +365,13 @@ export function deductStockForOrder(
   const updatedProducts = currentProducts.map((p) => {
     if (affectedProductIds.has(p.id)) {
       const updated = productsMap.get(p.id)!;
+      const syncedTotal = updated.variants && updated.variants.length > 0
+        ? updated.variants.reduce((sum, v) => sum + (Number(v.stockQuantity) || 0), 0)
+        : Number(updated.stockQuantity ?? updated.stock ?? 0);
       return {
         ...updated,
-        stock: updated.variants && updated.variants.length > 0
-          ? updated.variants.reduce((sum, v) => sum + (Number(v.stockQuantity) || 0), 0)
-          : Number(updated.stockQuantity ?? updated.stock ?? 0),
+        stock: syncedTotal,
+        stockQuantity: syncedTotal,
       };
     }
     return p;
@@ -333,10 +427,12 @@ export function restoreStockForOrder(
       if (targetVar) {
         targetVar.stockQuantity = Number(targetVar.stockQuantity || 0) + qtyToRestore;
         // Synchronize overall product stock
-        (prod as any).stock = prod.variants.reduce(
+        const totalVarStock = prod.variants.reduce(
           (sum, v) => sum + (Number(v.stockQuantity) || 0),
           0
         );
+        (prod as any).stock = totalVarStock;
+        prod.stockQuantity = totalVarStock;
         affectedProductIds.add(prod.id);
       }
     } else {
@@ -352,11 +448,13 @@ export function restoreStockForOrder(
   const updatedProducts = currentProducts.map((p) => {
     if (affectedProductIds.has(p.id)) {
       const updated = productsMap.get(p.id)!;
+      const syncedTotal = updated.variants && updated.variants.length > 0
+        ? updated.variants.reduce((sum, v) => sum + (Number(v.stockQuantity) || 0), 0)
+        : Number(updated.stockQuantity ?? updated.stock ?? 0);
       return {
         ...updated,
-        stock: updated.variants && updated.variants.length > 0
-          ? updated.variants.reduce((sum, v) => sum + (Number(v.stockQuantity) || 0), 0)
-          : Number(updated.stockQuantity ?? updated.stock ?? 0),
+        stock: syncedTotal,
+        stockQuantity: syncedTotal,
       };
     }
     return p;

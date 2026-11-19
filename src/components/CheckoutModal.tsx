@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   X,
   MapPin,
@@ -28,6 +28,11 @@ import {
 } from '../types';
 import { DualPaymentModal } from './DualPaymentModal';
 import { GoogleLocationPickerModal } from './GoogleLocationPickerModal';
+import {
+  INDIAN_MOBILE_REGEX,
+  INVALID_INDIAN_MOBILE_MESSAGE,
+  normalizeIndianMobile,
+} from '../lib/supabase';
 
 interface CheckoutModalProps {
   isOpen: boolean;
@@ -42,6 +47,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
 }) => {
   const {
     currentUser,
+    cart,
     userAddresses,
     addressesLoading,
     addressesError,
@@ -81,6 +87,31 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   const [applyWalletInAdvance, setApplyWalletInAdvance] = useState(true);
   const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
   const [orderErrorMessage, setOrderErrorMessage] = useState<string | null>(null);
+  const isSubmittingRef = useRef(false);
+  const checkoutAttemptRef = useRef<{ orderId: string; orderNumber: string } | null>(null);
+
+  const getOrCreateCheckoutAttempt = () => {
+    if (!checkoutAttemptRef.current) {
+      checkoutAttemptRef.current = {
+        orderId: `ord-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+        orderNumber: `OM-${Math.floor(10000 + Math.random() * 90000)}`,
+      };
+    }
+    return checkoutAttemptRef.current;
+  };
+
+  useEffect(() => {
+    if (!isOpen) {
+      isSubmittingRef.current = false;
+      checkoutAttemptRef.current = null;
+      setIsSubmittingOrder(false);
+      setOrderErrorMessage(null);
+      setIsDualPaymentOpen(false);
+      setIsSimulatingRazorpay(false);
+    } else {
+      getOrCreateCheckoutAttempt();
+    }
+  }, [isOpen]);
 
   // Google Location Picker state (kept in checkout state and snapshotted into orders.delivery_address JSONB)
   const [isGoogleLocationPickerOpen, setIsGoogleLocationPickerOpen] = useState(false);
@@ -117,7 +148,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
     e.preventDefault();
     setAddressFormError(null);
     const cleanRecipientName = newAddressForm.recipientName.trim();
-    const cleanRecipientPhone = newAddressForm.recipientPhone.replace(/\D/g, '').slice(-10);
+    const cleanRecipientPhone = normalizeIndianMobile(newAddressForm.recipientPhone);
     const cleanLine1 = newAddressForm.addressLine1.trim();
     const cleanLine2 = newAddressForm.addressLine2.trim();
     const cleanLandmark = newAddressForm.landmark.trim();
@@ -129,8 +160,8 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
       setAddressFormError('Recipient name is required.');
       return;
     }
-    if (!cleanRecipientPhone || cleanRecipientPhone.length !== 10) {
-      setAddressFormError('Please enter a valid 10-digit recipient phone number.');
+    if (!cleanRecipientPhone || !INDIAN_MOBILE_REGEX.test(cleanRecipientPhone)) {
+      setAddressFormError(INVALID_INDIAN_MOBILE_MESSAGE);
       return;
     }
     if (!cleanLine1) {
@@ -197,6 +228,14 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   };
 
   const handleProceedToPayment = () => {
+    if (!cart || cart.length === 0) {
+      setWalletErrorMessage('Your cart is empty. Please add products before proceeding.');
+      return;
+    }
+    if (isAddingNewAddress) {
+      setWalletErrorMessage('Please save or cancel the new delivery address before proceeding.');
+      return;
+    }
     if (!currentSelectedAddress) {
       setWalletErrorMessage('Please select or add a delivery address before proceeding.');
       return;
@@ -212,6 +251,11 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   ) => {
     setWalletErrorMessage(null);
     setOrderErrorMessage(null);
+    if (!cart || cart.length === 0) {
+      const errMsg = 'Your cart is empty. Please add products before placing an order.';
+      setOrderErrorMessage(errMsg);
+      throw new Error(errMsg);
+    }
     if (method === PaymentMethod.ADVANCE_ONLINE) {
       if (app) {
         setSelectedUpiApp(app);
@@ -222,15 +266,21 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
     } else {
       // Cash On Delivery Placement - triggered strictly via "Confirm COD Order" button
       // Wallet deduction is strictly ₹0 for COD (never used or reduced)
+      if (isSubmittingRef.current) return;
+      isSubmittingRef.current = true;
       try {
         setIsSubmittingOrder(true);
+        const attempt = getOrCreateCheckoutAttempt();
         const order = await createOrder({
           address: currentSelectedAddress,
           paymentMethod: PaymentMethod.COD,
           deliveryDate,
           useWallet: false,
+          orderId: attempt.orderId,
+          orderNumber: attempt.orderNumber,
           googleLocation: selectedGoogleLocation || currentSelectedAddress?.googleLocation,
         });
+        checkoutAttemptRef.current = null;
         setIsDualPaymentOpen(false);
         onClose();
         onOrderSuccess(order.id, order);
@@ -239,24 +289,35 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
         setOrderErrorMessage(err?.message || 'Failed to place order. Please try again.');
         throw err;
       } finally {
+        isSubmittingRef.current = false;
         setIsSubmittingOrder(false);
       }
     }
   };
 
   const handleCompleteAdvancePayment = async () => {
+    if (isSubmittingRef.current || isSubmittingOrder) return;
+    if (!cart || cart.length === 0) {
+      setOrderErrorMessage('Your cart is empty. Please add products before placing an order.');
+      return;
+    }
+    isSubmittingRef.current = true;
     setWalletErrorMessage(null);
     setOrderErrorMessage(null);
     try {
       setIsSubmittingOrder(true);
+      const attempt = getOrCreateCheckoutAttempt();
       const order = await createOrder({
         address: currentSelectedAddress,
         paymentMethod: PaymentMethod.ADVANCE_ONLINE,
         deliveryDate,
         useWallet: applyWalletInAdvance,
+        orderId: attempt.orderId,
+        orderNumber: attempt.orderNumber,
         selectedPaymentApp: selectedUpiApp,
         googleLocation: selectedGoogleLocation || currentSelectedAddress?.googleLocation,
       });
+      checkoutAttemptRef.current = null;
       setIsSimulatingRazorpay(false);
       onClose();
       onOrderSuccess(order.id, order);
@@ -264,6 +325,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
       console.error('Error creating advance order:', err);
       setOrderErrorMessage(err?.message || 'Failed to place advance order. Please try again.');
     } finally {
+      isSubmittingRef.current = false;
       setIsSubmittingOrder(false);
     }
   };

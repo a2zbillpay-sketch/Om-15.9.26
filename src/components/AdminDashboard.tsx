@@ -135,6 +135,7 @@ export const AdminDashboard: React.FC = () => {
     users,
     isSupabaseConfigured,
     refreshOrders,
+    refreshProducts,
     recordCodCollection,
     adminNotifications,
     markNotificationAsRead,
@@ -148,6 +149,14 @@ export const AdminDashboard: React.FC = () => {
 
   const isShopkeeper = activeRole === Role.SHOPKEEPER || currentUser?.role === Role.SHOPKEEPER || activeRole !== Role.CUSTOMER;
   const [isExportingExcel, setIsExportingExcel] = useState(false);
+  const [orderActionError, setOrderActionError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (isSupabaseConfigured) {
+      refreshOrders().catch(() => {});
+      refreshProducts().catch(() => {});
+    }
+  }, []);
 
   const handleExportProductsToExcel = () => {
     try {
@@ -1382,11 +1391,11 @@ export const AdminDashboard: React.FC = () => {
               <button
                 onClick={async () => {
                   setIsRefreshing(true);
-                  await refreshOrders();
+                  await Promise.all([refreshOrders(), refreshProducts()]);
                   setTimeout(() => setIsRefreshing(false), 500);
                 }}
                 className="px-2.5 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white transition flex items-center gap-1 text-[11px]"
-                title="Synchronize Orders with Cloud"
+                title="Synchronize Orders & Inventory with Cloud"
               >
                 <RefreshCw size={13} className={isRefreshing ? 'animate-spin text-[#D4AF37]' : ''} />
                 <span className="hidden sm:inline">Sync</span>
@@ -1477,6 +1486,26 @@ export const AdminDashboard: React.FC = () => {
                 )}
               </div>
             </div>
+
+            {orderActionError && (
+              <div
+                id="admin-order-action-error"
+                className="p-3 bg-red-50 border-b border-red-200 flex items-center justify-between gap-2 text-xs text-red-800 font-bold"
+              >
+                <div className="flex items-center gap-2">
+                  <AlertCircle size={15} className="text-red-600 shrink-0" />
+                  <span>{orderActionError}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setOrderActionError(null)}
+                  className="text-red-500 hover:text-red-800 p-1 rounded cursor-pointer"
+                  aria-label="Dismiss error"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            )}
 
             {/* Real-time Order Cancellation Notifications for Shopkeeper */}
             {unreadCancellations.length > 0 && (
@@ -1826,7 +1855,11 @@ export const AdminDashboard: React.FC = () => {
                                     id={`accept-order-btn-${order.id}`}
                                     onClick={(e) => {
                                       e.stopPropagation();
-                                      updateOrderStatus(order.id, OrderStatus.ORDER_ACCEPTED);
+                                      setOrderActionError(null);
+                                      const res = updateOrderStatus(order.id, OrderStatus.ORDER_ACCEPTED);
+                                      if (res && !res.success && res.error) {
+                                        setOrderActionError(res.error);
+                                      }
                                     }}
                                     className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-extrabold rounded-lg shadow-sm transition flex items-center gap-1 shrink-0 cursor-pointer"
                                     title="Accept Order"
@@ -1840,6 +1873,7 @@ export const AdminDashboard: React.FC = () => {
                                   onClick={(e) => e.stopPropagation()}
                                   onChange={(e) => {
                                     e.stopPropagation();
+                                    setOrderActionError(null);
                                     const newStatus = e.target.value as OrderStatus;
                                     if (
                                       newStatus === OrderStatus.DELIVERED &&
@@ -1849,12 +1883,17 @@ export const AdminDashboard: React.FC = () => {
                                       setSelectedOrderForDetails(null);
                                       setCodCollectingOrder(order);
                                     } else {
-                                      updateOrderStatus(order.id, newStatus);
+                                      const res = updateOrderStatus(order.id, newStatus);
+                                      if (res && !res.success && res.error) {
+                                        setOrderActionError(res.error);
+                                      }
                                     }
                                   }}
                                   className="bg-white border border-gray-300 text-gray-800 text-[11px] font-bold rounded-lg p-1.5 outline-none focus:ring-1 focus:ring-[#0F2C59] cursor-pointer"
                                 >
-                                  <option value={OrderStatus.ORDER_PENDING}>Order Pending</option>
+                                  <option value={OrderStatus.ORDER_PENDING} disabled={order.status !== OrderStatus.ORDER_PENDING}>
+                                    Order Pending
+                                  </option>
                                   <option value={OrderStatus.ORDER_ACCEPTED}>Order Accepted</option>
                                   <option value={OrderStatus.PACKING_IN_PROGRESS}>Packing</option>
                                   <option value={OrderStatus.READY_FOR_DELIVERY}>Ready</option>

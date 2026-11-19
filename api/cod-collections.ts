@@ -263,12 +263,24 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
             codCollectedAmount = finalAmount;
           }
 
+          const dbPStatus = String(o.payment_status || '').toUpperCase();
           let paymentStatus = 'PENDING';
-          if (o.is_paid || codCollectedAmount >= finalAmount) {
+          if (dbPStatus === 'REFUNDED') {
+            paymentStatus = 'REFUNDED';
+          } else if (dbPStatus === 'FAILED') {
+            paymentStatus = 'FAILED';
+          } else if (o.is_paid || dbPStatus === 'RECEIVED' || dbPStatus === 'PAID' || (finalAmount > 0 && codCollectedAmount >= finalAmount)) {
             paymentStatus = 'RECEIVED';
-          } else if (codCollectedAmount > 0) {
+          } else if (dbPStatus === 'PARTIALLY_COLLECTED' || codCollectedAmount > 0) {
             paymentStatus = 'PARTIALLY_COLLECTED';
           }
+
+          const isRowCod = !o.payment_method || String(o.payment_method).toUpperCase() === 'COD';
+          const resolvedTotalPayable = isRowCod
+            ? finalAmount
+            : codMeta.totalPayable !== undefined
+            ? Number(codMeta.totalPayable)
+            : Math.max(0, Math.round((finalAmount - (Number(codMeta.walletAmountUsed) || 0)) * 100) / 100);
 
           sanitizedOrdersMap[o.id] = {
             id: o.id,
@@ -278,8 +290,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
             customerName: o.customer_name,
             finalAmount,
             previousOutstanding: Number(codMeta.prevOutstanding ?? 0),
-            // Rule: totalPayable strictly equals finalAmount only
-            totalPayable: finalAmount,
+            totalPayable: resolvedTotalPayable,
             codCollectedAmount,
             paymentStatus,
             status: o.status,
@@ -688,6 +699,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
           codCollected: targetUpd.codCollectedAmount,
           prevOutstanding: targetUpd.previousOutstanding || 0,
           totalPayable: targetUpd.finalAmount || 0,
+          ...(body.stockDeducted ? { stockDeducted: true, stockRestored: false } : {}),
           ...(targetUpd.status === 'DELIVERED' && !targetUpd.existingMeta?.deliveredAt
             ? { deliveredAt: nowISO }
             : {}),
@@ -699,6 +711,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
           .from('orders')
           .update({
             status: targetUpd.status,
+            payment_status: targetUpd.paymentStatus,
             is_paid: isPaid,
             notes: orderNotes,
             updated_at: new Date().toISOString(),
@@ -767,6 +780,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
           .from('orders')
           .update({
             status: updData.status,
+            payment_status: updData.paymentStatus,
             is_paid: isPaid,
             notes: orderNotes,
             updated_at: new Date().toISOString(),

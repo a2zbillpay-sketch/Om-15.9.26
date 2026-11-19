@@ -36,12 +36,19 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
   const mrp = currentVariant
     ? currentVariant.mrp
     : Number(product.mrp ?? product.price ?? 0);
-  const stock = currentVariant
+  const rawStock = currentVariant
     ? currentVariant.stockQuantity
     : Number(product.stockQuantity ?? product.stock ?? 0);
-  const maxOrderLimit = currentVariant
-    ? currentVariant.maxOrderLimit
-    : Number(product.maxOrderLimit || 20);
+  const stock = Number.isFinite(Number(rawStock)) ? Math.max(0, Math.floor(Number(rawStock))) : 0;
+  const rawMaxOrderLimit = currentVariant ? currentVariant.maxOrderLimit : product.maxOrderLimit;
+  const hasMaxOrderLimit =
+    rawMaxOrderLimit !== undefined &&
+    rawMaxOrderLimit !== null &&
+    Number.isFinite(Number(rawMaxOrderLimit)) &&
+    Number(rawMaxOrderLimit) > 0;
+  const effectiveCap = hasMaxOrderLimit
+    ? Math.min(stock, Math.floor(Number(rawMaxOrderLimit)))
+    : stock;
   const unit = currentVariant
     ? currentVariant.unit
     : (product.unit || 'PIECE');
@@ -73,7 +80,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
   };
 
   const handleIncrement = () => {
-    if (cartQuantity < Math.min(stock, maxOrderLimit)) {
+    if (cartQuantity < effectiveCap) {
       updateCartQty(currentVariant?.id || product.id, cartQuantity + 1);
     }
   };
@@ -373,7 +380,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
                   <button
                     id={`cart-increase-${currentVariant?.id || product.id}`}
                     onClick={handleIncrement}
-                    disabled={cartQuantity >= Math.min(stock, maxOrderLimit)}
+                    disabled={cartQuantity >= effectiveCap}
                     className="w-7 h-7 flex items-center justify-center hover:bg-white/20 rounded-lg transition disabled:opacity-40"
                     aria-label="Increase quantity"
                   >

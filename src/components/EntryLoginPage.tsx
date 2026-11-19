@@ -4,7 +4,11 @@ import { Role } from '../types';
 import { useApp } from '../context/AppContext';
 import { BrandLogo } from './BrandLogo';
 import { AdminLoginModal } from './AdminLoginModal';
-import { normalizeIndianMobile } from '../lib/supabase';
+import {
+  INDIAN_MOBILE_REGEX,
+  INVALID_INDIAN_MOBILE_MESSAGE,
+  normalizeIndianMobile,
+} from '../lib/supabase';
 
 interface EntryLoginPageProps {
   isOpen: boolean;
@@ -86,8 +90,8 @@ export const EntryLoginPage: React.FC<EntryLoginPageProps> = ({
     }
 
     const cleanPhone = normalizeIndianMobile(phone);
-    if (!cleanPhone) {
-      setError('Please enter a valid 10-digit mobile number');
+    if (!cleanPhone || !INDIAN_MOBILE_REGEX.test(cleanPhone)) {
+      setError(INVALID_INDIAN_MOBILE_MESSAGE);
       return;
     }
 
@@ -233,9 +237,9 @@ export const EntryLoginPage: React.FC<EntryLoginPageProps> = ({
                     <input
                       id="whatsapp-phone-input"
                       type="tel"
-                      maxLength={16}
+                      maxLength={20}
                       value={phone}
-                      onChange={(e) => setPhone(e.target.value)}
+                      onChange={(e) => setPhone(e.target.value.replace(/[^\d+\s()-]/g, ''))}
                       placeholder="Enter 10-digit number"
                       autoComplete="off"
                       className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#0F2C59] outline-none text-sm font-mono font-semibold"

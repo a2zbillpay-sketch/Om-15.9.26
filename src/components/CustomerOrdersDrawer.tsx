@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import {
   X,
   Clock,
@@ -32,16 +32,28 @@ export const CustomerOrdersDrawer: React.FC<CustomerOrdersDrawerProps> = ({
   onSelectOrder,
   onOpenCart,
 }) => {
-  const { orders, currentUser, startEditingOrder, repeatLastOrder, repeatOrder } = useApp();
+  const { orders, currentUser, startEditingOrder, repeatLastOrder, repeatOrder, refreshOrders } = useApp();
+
+  useEffect(() => {
+    if (isOpen) {
+      refreshOrders().catch(() => {});
+    }
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
+  const cleanCurrentPhone = currentUser.phone
+    ? currentUser.phone.replace(/\D/g, '').slice(-10)
+    : '';
+
   const customerOrders = orders
-    .filter(
-      (o) =>
+    .filter((o) => {
+      const orderPhone = (o.userPhone || o.customerPhone || '').replace(/\D/g, '').slice(-10);
+      return (
         o.userId === currentUser.id ||
-        (currentUser.phone && o.customerPhone === currentUser.phone)
-    )
+        Boolean(cleanCurrentPhone && orderPhone && orderPhone === cleanCurrentPhone)
+      );
+    })
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
   return (

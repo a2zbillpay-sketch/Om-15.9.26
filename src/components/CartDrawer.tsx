@@ -43,6 +43,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
 }) => {
   const {
     cart,
+    products,
     updateCartQty,
     removeFromCart,
     clearCart,
@@ -150,12 +151,14 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
 
   const freeShippingNeeded = Math.max(
     0,
-    settings.freeShippingMinAmount - checkoutBreakdown.subtotal
+    Math.round((settings.freeShippingMinAmount - checkoutBreakdown.subtotal) * 100) / 100
   );
 
   const freeShippingProgress = Math.min(
     100,
-    (checkoutBreakdown.subtotal / settings.freeShippingMinAmount) * 100
+    settings.freeShippingMinAmount > 0
+      ? (checkoutBreakdown.subtotal / settings.freeShippingMinAmount) * 100
+      : 100
   );
 
   return (
@@ -331,24 +334,42 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
             </div>
           ) : (
             cart.map((item) => {
-              const baseSellingPrice = item.variant
-                ? item.variant.baseSellingPrice
-                : Number(item.product.baseSellingPrice ?? item.product.price ?? 0);
-              const tieredPrices = item.variant?.tieredPrices || item.product.tieredPrices || [];
+              const liveProduct = products.find((p) => p.id === item.productId) || item.product;
+              const liveVariant = item.variantId
+                ? liveProduct.variants?.find((v) => v.id === item.variantId) || item.variant
+                : item.variant;
+              const baseSellingPrice = liveVariant
+                ? liveVariant.baseSellingPrice
+                : Number(liveProduct.baseSellingPrice ?? liveProduct.price ?? 0);
+              const tieredPrices = liveVariant?.tieredPrices || liveProduct.tieredPrices || [];
               const activePrice = getActiveUnitPrice(
                 baseSellingPrice,
                 item.quantity,
                 tieredPrices
               );
-              const itemTotal = activePrice * item.quantity;
+              const itemTotal = Math.round(activePrice * item.quantity * 100) / 100;
               const hasTierDiscount = activePrice < baseSellingPrice;
-              const packText = item.variant
-                ? formatVariantPack(item.variant)
-                : (item.product.packLabel || (item.product.unit ? String(item.product.unit) : 'Standard Pack'));
+              const packText = liveVariant
+                ? formatVariantPack(liveVariant)
+                : (liveProduct.packLabel || (liveProduct.unit ? String(liveProduct.unit) : 'Standard Pack'));
               const itemKey = item.variantId || item.productId;
-              const maxLimit = item.variant
-                ? item.variant.maxOrderLimit
-                : Number(item.product.maxOrderLimit || 20);
+              const rawStock = liveVariant
+                ? liveVariant.stockQuantity
+                : Number(liveProduct.stockQuantity ?? liveProduct.stock ?? 0);
+              const cleanStock = Number.isFinite(Number(rawStock))
+                ? Math.max(0, Math.floor(Number(rawStock)))
+                : 0;
+              const rawLimit = liveVariant ? liveVariant.maxOrderLimit : liveProduct.maxOrderLimit;
+              const hasMaxLimit =
+                rawLimit !== undefined &&
+                rawLimit !== null &&
+                Number.isFinite(Number(rawLimit)) &&
+                Number(rawLimit) > 0;
+              const maxLimit = editingOrder
+                ? (hasMaxLimit ? Math.floor(Number(rawLimit)) : 999)
+                : hasMaxLimit
+                ? Math.min(cleanStock, Math.floor(Number(rawLimit)))
+                : cleanStock;
 
               return (
                 <div key={itemKey} className="pt-3 first:pt-0 flex gap-3 items-center">

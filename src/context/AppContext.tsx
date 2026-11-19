@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useMemo, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   User,
   Role,
@@ -69,6 +69,8 @@ import {
   deleteCategoryFromSupabase,
   reorderCategoriesInSupabase,
   DUPLICATE_CUSTOMER_MESSAGE,
+  INDIAN_MOBILE_REGEX,
+  INVALID_INDIAN_MOBILE_MESSAGE,
   normalizeIndianMobile,
   getIndianMobileVariants,
 } from '../lib/supabase';
@@ -86,6 +88,7 @@ import {
   restoreStockForOrder,
   adjustStockForEditedOrder,
   findProductAndVariant,
+  validateOrderStockAvailability,
   isStockDeductedForOrder,
   markStockDeductedForOrder,
   isStockRestoredForOrder,
@@ -117,11 +120,11 @@ const BLANK_CUSTOMER: User = {
   createdAt: '',
 };
 
-// Customer-scoped cart helpers: Isolates every customer's cart by their 10-digit mobile number.
+// Customer-scoped cart helpers: Isolates every customer's cart by their normalized 10-digit mobile number.
 const getCustomerCartKey = (phone?: string): string | null => {
   if (!phone) return null;
-  const cleanPhone = phone.replace(/\D/g, '');
-  return cleanPhone.length === 10 ? `om_cart_${cleanPhone}` : null;
+  const cleanPhone = normalizeIndianMobile(phone);
+  return cleanPhone && INDIAN_MOBILE_REGEX.test(cleanPhone) ? `om_cart_${cleanPhone}` : null;
 };
 
 const loadCustomerCart = (phone?: string): CartItem[] => {
@@ -236,7 +239,7 @@ interface AppContextType {
     googleLocation?: GoogleLocation;
   }) => Promise<Order>;
   cancelOrder: (orderId: string, isShopkeeperOverride?: boolean) => boolean;
-  updateOrderStatus: (orderId: string, newStatus: OrderStatus) => void;
+  updateOrderStatus: (orderId: string, newStatus: OrderStatus) => { success: boolean; error?: string } | void;
   recordCodCollection: (
     orderId: string,
     collectedAmount: number,
@@ -455,8 +458,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       try {
         const session: CustomerSession = JSON.parse(savedSession);
         if (session.role === Role.SHOPKEEPER) return 'SHOP';
+        const cleanSessionPhone = normalizeIndianMobile(session.phone);
+        if (!cleanSessionPhone) return 'AUTH';
         if (session.profileCompleted) {
-          if (session.role === Role.CUSTOMER && session.phone === '9876543210') {
+          if (session.role === Role.CUSTOMER && cleanSessionPhone === '9876543210') {
             const cached = localStorage.getItem('om_profile_9876543210');
             if (!cached) return 'AUTH';
             try {
@@ -485,28 +490,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           return INITIAL_USERS[0];
         }
 
+        const cleanSessionPhone = normalizeIndianMobile(session.phone);
+        if (!cleanSessionPhone) {
+          return BLANK_CUSTOMER;
+        }
+
         // Rule: Sourced strictly for session.phone, accepting ONLY Role.CUSTOMER. Never use SHOPKEEPER or ADMIN.
         // When Supabase is configured, never treat localStorage addresses as authoritative; wait for DB fetch.
-        const phoneKey = `om_profile_${session.phone}`;
+        const phoneKey = `om_profile_${cleanSessionPhone}`;
         const savedPhoneProfile = localStorage.getItem(phoneKey);
         if (savedPhoneProfile) {
           try {
             const parsed = JSON.parse(savedPhoneProfile);
             if (parsed && parsed.role === Role.CUSTOMER && parsed.id !== 'user-shopkeeper') {
-              return isSupabaseConfigured ? { ...parsed, addresses: [] } : parsed;
+              return isSupabaseConfigured
+                ? { ...parsed, phone: cleanSessionPhone, addresses: [] }
+                : { ...parsed, phone: cleanSessionPhone };
             }
           } catch {}
         }
 
         if (!isSupabaseConfigured) {
-          const match = INITIAL_USERS.find((u) => u.role === Role.CUSTOMER && u.phone === session.phone);
+          const match = INITIAL_USERS.find(
+            (u) => u.role === Role.CUSTOMER && normalizeIndianMobile(u.phone) === cleanSessionPhone
+          );
           if (match) return match;
         }
 
         return {
-          id: `user-${session.phone}`,
+          id: `user-${cleanSessionPhone}`,
           name: '',
-          phone: session.phone,
+          phone: cleanSessionPhone,
           role: Role.CUSTOMER,
           walletBalance: 0,
           codOrderCount: 0,
@@ -851,7 +865,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [settings.logoUrl]);
 
+  const productsRef = useRef<Product[]>(products);
+  const ordersRef = useRef<Order[]>(orders);
+
   useEffect(() => {
+    productsRef.current = products;
     localStorage.setItem('om_products', JSON.stringify(products));
   }, [products]);
 
@@ -882,6 +900,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [cart, currentUser]);
 
   useEffect(() => {
+    ordersRef.current = orders;
     localStorage.setItem('om_orders', JSON.stringify(orders));
   }, [orders]);
 
@@ -889,8 +908,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const refreshOrders = async () => {
     try {
       let fetchedOrders: Order[] | null = null;
+      const isAdminView =
+        activeRole === Role.SHOPKEEPER ||
+        activeRole === Role.SECONDARY_ADMIN ||
+        activeRole === Role.ACCOUNTS;
+
       if (isSupabaseConfigured) {
-        if (activeRole === Role.SHOPKEEPER) {
+        if (isAdminView) {
           fetchedOrders = await fetchAllOrdersForAdmin();
         } else {
           fetchedOrders = await fetchCustomerOrdersFromSupabase(currentUser.id, currentUser.phone);
@@ -905,7 +929,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       // Fetch persistent COD transactions and allocations from backend API
       const apiData = await fetchCodCollectionsFromApi(
-        activeRole === Role.SHOPKEEPER ? undefined : currentUser.phone
+        isAdminView ? undefined : currentUser.phone
       );
 
       // Preserve rich item definitions and stock status from current orders
@@ -945,6 +969,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           return o;
         });
         setOrders(merged);
+      } else if (resolvedFetched && resolvedFetched.length > 0) {
+        setOrders(resolvedFetched);
       } else if (fetchedOrders && fetchedOrders.length > 0) {
         setOrders(fetchedOrders);
       }
@@ -1004,6 +1030,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (isSupabaseConfigured) {
       refreshOrders();
     }
+  }, [currentUser.id, currentUser.phone, activeRole]);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const handleVisibilityChange = () => {
+      if (!document.hidden && isSupabaseConfigured) {
+        refreshOrders().catch(() => {});
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   }, [currentUser.id, currentUser.phone, activeRole]);
 
   // Synchronize customer wallet and persistent ledger from Supabase
@@ -1250,9 +1289,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     id: string,
     updates: Partial<Product>
   ): Promise<{ success: boolean; error?: string }> => {
-    const current = products.find((p) => p.id === id);
+    const currentList = productsRef.current.length > 0 ? productsRef.current : products;
+    const current = currentList.find((p) => p.id === id);
     if (!current) return { success: false, error: 'Product not found.' };
     const updated = { ...current, ...updates };
+    if (Array.isArray(updated.variants) && updated.variants.length > 0) {
+      const totalStock = updated.variants.reduce((sum, v) => sum + (Number(v.stockQuantity) || 0), 0);
+      updated.stock = totalStock;
+      updated.stockQuantity = totalStock;
+    }
 
     let serverSynced = false;
     try {
@@ -1268,6 +1313,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const savedProduct = data.product || updated;
         setProducts((prev) => {
           const next = prev.map((p) => (p.id === id ? savedProduct : p));
+          productsRef.current = next;
           try {
             localStorage.setItem('om_products', JSON.stringify(next));
           } catch {}
@@ -1276,20 +1322,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         serverSynced = true;
         return { success: true };
       }
+
+      const errData = await resp.json().catch(() => null);
+      return {
+        success: false,
+        error: errData?.error || `Failed to save product stock (HTTP ${resp.status}).`,
+      };
     } catch {
-      // Offline or network error
+      // Offline or network error: attempt Supabase direct fallback or local persistence
     }
 
     if (!serverSynced) {
       if (isSupabaseConfigured) {
         try {
-          await saveProductToSupabase(updated);
-        } catch (dbErr) {
+          const dbRes = await saveProductToSupabase(updated);
+          if (!dbRes.success) {
+            return { success: false, error: dbRes.error || 'Failed to sync product to database.' };
+          }
+        } catch (dbErr: any) {
           console.warn('Supabase product update error:', dbErr);
+          return { success: false, error: dbErr?.message || 'Database sync error.' };
         }
       }
       setProducts((prev) => {
         const next = prev.map((p) => (p.id === id ? updated : p));
+        productsRef.current = next;
         try {
           localStorage.setItem('om_products', JSON.stringify(next));
         } catch {}
@@ -1445,6 +1502,73 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return updateProduct(productId, updatedProduct);
   };
 
+  // Keep persisted cart items synchronized with live catalog prices, stock, and order limits after refresh
+  useEffect(() => {
+    if (editingOrder || !Array.isArray(products) || products.length === 0) return;
+
+    setCart((prev) => {
+      if (!prev || prev.length === 0) return prev;
+      let changed = false;
+      const nextCart: CartItem[] = [];
+
+      for (const item of prev) {
+        const liveProduct = products.find((p) => p.id === item.productId);
+        if (!liveProduct) {
+          nextCart.push(item);
+          continue;
+        }
+
+        const hasVariants = Array.isArray(liveProduct.variants) && liveProduct.variants.length > 0;
+        let liveVariant: ProductVariant | null = null;
+        if (item.variantId) {
+          liveVariant = liveProduct.variants?.find((v) => v.id === item.variantId) || null;
+          if (!liveVariant) {
+            changed = true;
+            continue;
+          }
+        } else if (hasVariants) {
+          changed = true;
+          continue;
+        }
+
+        const rawStock = liveVariant
+          ? liveVariant.stockQuantity
+          : Number(liveProduct.stockQuantity ?? liveProduct.stock ?? 0);
+        const stock = Number.isFinite(Number(rawStock)) ? Math.max(0, Math.floor(Number(rawStock))) : 0;
+        if (stock <= 0) {
+          changed = true;
+          continue;
+        }
+
+        const rawMaxLimit = liveVariant ? liveVariant.maxOrderLimit : liveProduct.maxOrderLimit;
+        const hasMaxLimit =
+          rawMaxLimit !== undefined &&
+          rawMaxLimit !== null &&
+          Number.isFinite(Number(rawMaxLimit)) &&
+          Number(rawMaxLimit) > 0;
+        const effectiveCap = hasMaxLimit ? Math.min(Number(rawMaxLimit), stock) : stock;
+        const clampedQty = Math.min(effectiveCap, Math.max(1, Math.floor(Number(item.quantity) || 1)));
+
+        if (
+          item.product !== liveProduct ||
+          item.variant !== liveVariant ||
+          item.quantity !== clampedQty
+        ) {
+          changed = true;
+        }
+
+        nextCart.push({
+          ...item,
+          product: liveProduct,
+          variant: liveVariant,
+          quantity: clampedQty,
+        });
+      }
+
+      return changed ? nextCart : prev;
+    });
+  }, [products, editingOrder]);
+
   // Cart operations (scoped to active customer)
   const addToCart = (product: Product, variant?: ProductVariant | null, quantity = 1) => {
     const cleanRequestedQty = Math.floor(Number(quantity));
@@ -1452,19 +1576,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return;
     }
 
+    const liveProduct = products.find((p) => p.id === product.id) || product;
+    const liveVariant = variant
+      ? liveProduct.variants?.find((v) => v.id === variant.id) || variant
+      : null;
+
     setCart((prev) => {
       const existingIndex = prev.findIndex((item) =>
-        variant ? item.variantId === variant.id : !item.variantId && item.productId === product.id
+        liveVariant
+          ? item.variantId === liveVariant.id
+          : !item.variantId && item.productId === liveProduct.id
       );
-      const rawMaxLimit = variant ? variant.maxOrderLimit : product.maxOrderLimit;
+      const rawMaxLimit = liveVariant ? liveVariant.maxOrderLimit : liveProduct.maxOrderLimit;
       const hasMaxLimit =
         rawMaxLimit !== undefined &&
         rawMaxLimit !== null &&
         Number.isFinite(Number(rawMaxLimit)) &&
         Number(rawMaxLimit) > 0;
-      const rawStock = variant
-        ? variant.stockQuantity
-        : Number(product.stockQuantity ?? product.stock ?? 0);
+      const rawStock = liveVariant
+        ? liveVariant.stockQuantity
+        : Number(liveProduct.stockQuantity ?? liveProduct.stock ?? 0);
       const stock = Number.isFinite(Number(rawStock)) ? Math.max(0, Math.floor(Number(rawStock))) : 0;
 
       if (stock <= 0) {
@@ -1488,7 +1619,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const existing = prev[existingIndex];
         const newQty = Math.min(effectiveCap, existing.quantity + cleanRequestedQty);
         updated = [...prev];
-        updated[existingIndex] = { ...existing, quantity: newQty };
+        updated[existingIndex] = {
+          ...existing,
+          product: liveProduct,
+          variant: liveVariant,
+          quantity: newQty,
+        };
       } else {
         const initialQty = Math.min(effectiveCap, cleanRequestedQty);
         if (initialQty <= 0) {
@@ -1497,10 +1633,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updated = [
           ...prev,
           {
-            productId: product.id,
-            product,
-            variantId: variant?.id || null,
-            variant: variant || null,
+            productId: liveProduct.id,
+            product: liveProduct,
+            variantId: liveVariant?.id || null,
+            variant: liveVariant || null,
             quantity: initialQty,
           },
         ];
@@ -1523,19 +1659,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         .map((item) => {
           const isMatch = item.variantId === itemKey || (!item.variantId && item.productId === itemKey);
           if (isMatch) {
-            const rawMaxLimit = item.variant ? item.variant.maxOrderLimit : item.product.maxOrderLimit;
+            const liveProduct = (!editingOrder && products.find((p) => p.id === item.productId)) || item.product;
+            const liveVariant =
+              item.variantId && !editingOrder
+                ? liveProduct.variants?.find((v) => v.id === item.variantId) || item.variant
+                : item.variant;
+            const rawMaxLimit = liveVariant ? liveVariant.maxOrderLimit : liveProduct.maxOrderLimit;
             const hasMaxLimit =
               rawMaxLimit !== undefined &&
               rawMaxLimit !== null &&
               Number.isFinite(Number(rawMaxLimit)) &&
               Number(rawMaxLimit) > 0;
-            const rawStock = item.variant
-              ? item.variant.stockQuantity
-              : Number(item.product.stockQuantity ?? item.product.stock ?? 0);
+            const rawStock = liveVariant
+              ? liveVariant.stockQuantity
+              : Number(liveProduct.stockQuantity ?? liveProduct.stock ?? 0);
             const stock = Number.isFinite(Number(rawStock)) ? Math.max(0, Math.floor(Number(rawStock))) : 0;
-            const effectiveCap = hasMaxLimit ? Math.min(Number(rawMaxLimit), stock) : stock;
+            const effectiveCap = editingOrder
+              ? (hasMaxLimit ? Math.floor(Number(rawMaxLimit)) : 999)
+              : hasMaxLimit
+              ? Math.min(Number(rawMaxLimit), stock)
+              : stock;
             const clamped = Math.min(effectiveCap, cleanQty);
-            return { ...item, quantity: clamped };
+            return {
+              ...item,
+              product: liveProduct,
+              variant: liveVariant,
+              quantity: clamped,
+            };
           }
           return item;
         })
@@ -2032,8 +2182,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const repeatLastOrder = useCallback((): RepeatOrderResult => {
     // Find customer's past orders
     const customerOrders = orders.filter((o) => {
+      const cleanCurrentPhone = currentUser.phone ? currentUser.phone.replace(/\D/g, '').slice(-10) : '';
+      const orderPhone = (o.userPhone || o.customerPhone || '').replace(/\D/g, '').slice(-10);
       const matchId = currentUser.id && o.userId === currentUser.id;
-      const matchPhone = currentUser.phone && o.customerPhone === currentUser.phone;
+      const matchPhone = Boolean(cleanCurrentPhone && orderPhone && cleanCurrentPhone === orderPhone);
       return matchId || matchPhone;
     });
 
@@ -2156,6 +2308,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [cart, settings, currentUser.walletBalance, useWalletBalance]);
 
   // Order Management
+  const activeOrderSubmissionRef = useRef<Promise<Order> | null>(null);
+
   const createOrder = async (data: {
     address: Address;
     paymentMethod: PaymentMethod;
@@ -2167,7 +2321,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     isWalletPayment?: boolean;
     googleLocation?: GoogleLocation;
   }): Promise<Order> => {
-    const isAdvance = data.paymentMethod === PaymentMethod.ADVANCE_ONLINE;
+    if (data.orderId) {
+      const alreadyCreated = orders.find((o) => o.id === data.orderId);
+      if (alreadyCreated) {
+        return alreadyCreated;
+      }
+    }
+
+    if (activeOrderSubmissionRef.current) {
+      return activeOrderSubmissionRef.current;
+    }
+
+    if (!cart || cart.length === 0) {
+      throw new Error('Your cart is empty. Please add products before placing an order.');
+    }
+
+    const submissionPromise = (async (): Promise<Order> => {
+      const isAdvance = data.paymentMethod === PaymentMethod.ADVANCE_ONLINE;
     const discountedOrderAmount = isAdvance
       ? checkoutBreakdown.advanceFinalTotal
       : checkoutBreakdown.codFinalTotal;
@@ -2250,13 +2420,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const isExplicitlyUsingWallet = isAdvance && Boolean(data.useWallet);
     const walletUsed = isExplicitlyUsingWallet ? Math.min(currentActualWallet, discountedOrderAmount) : 0;
 
-    // When wallet balance is applied during advance payment, deduct it from the discounted order amount in the final bill.
-    // Example: Items ₹1250 − 3% discount ₹38 − Wallet ₹184 = Final Bill ₹1028.
-    const finalAmount = isAdvance && isExplicitlyUsingWallet
-      ? Math.max(0, discountedOrderAmount - walletUsed)
-      : discountedOrderAmount;
-    // Rule: new order totalPayable equals finalAmount only. Keep previousOutstanding separate.
-    const totalPayable = finalAmount;
+    // Keep finalAmount as the bill amount (before wallet) and totalPayable as remaining online/COD payable,
+    // matching server calculation and OrderTrackingModal financial breakdown.
+    const finalAmount = discountedOrderAmount;
+    const totalPayable =
+      isAdvance && isExplicitlyUsingWallet
+        ? Math.max(0, Math.round((discountedOrderAmount - walletUsed) * 100) / 100)
+        : discountedOrderAmount;
     const newWalletBalance = isExplicitlyUsingWallet
       ? Math.max(0, currentActualWallet - walletUsed)
       : currentActualWallet;
@@ -2332,7 +2502,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           packSize,
           quantity: item.quantity,
           unitPrice,
-          price: unitPrice * item.quantity,
+          price: Math.round(unitPrice * item.quantity * 100) / 100,
           isDiscountExcluded: item.product.isDiscountExcluded === true || (item.product.isDiscountExcluded as any) === 'true',
         };
       }),
@@ -2356,6 +2526,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       ...newOrder,
       id: serverOrder?.id || newOrder.id,
       orderNumber: serverOrder?.orderNumber || newOrder.orderNumber,
+      status: (serverOrder?.status as OrderStatus) || newOrder.status,
+      paymentStatus: (serverOrder?.paymentStatus as PaymentStatus) || newOrder.paymentStatus,
+      createdAt: serverOrder?.createdAt || newOrder.createdAt,
+      previousOutstanding:
+        typeof serverOrder?.previousOutstanding === 'number'
+          ? serverOrder.previousOutstanding
+          : newOrder.previousOutstanding,
       subtotal: typeof serverOrder?.subtotal === 'number' ? serverOrder.subtotal : newOrder.subtotal,
       discountAmount: typeof serverOrder?.discountAmount === 'number' ? serverOrder.discountAmount : newOrder.discountAmount,
       deliveryFee: typeof serverOrder?.deliveryFee === 'number' ? serverOrder.deliveryFee : newOrder.deliveryFee,
@@ -2383,6 +2560,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         : newOrder.items,
     };
 
+    const orderAlreadyExistsLocally = orders.some((o) => o.id === confirmedOrder.id);
+
     // 3. Update orders state ONLY after successful server confirmation
     setOrders((prev) => {
       const next = [confirmedOrder, ...prev.filter((o) => o.id !== confirmedOrder.id)];
@@ -2392,10 +2571,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return next;
     });
 
-    // 4. Update wallet locally if wallet was used in the confirmed order
+    // 4. Update wallet locally if wallet was used in the confirmed order (prevent duplicate debit on retries)
     const actualWalletUsed = confirmedOrder.walletAmountUsed || 0;
     if (actualWalletUsed > 0) {
-      const updatedWalletBalance = Math.max(0, currentActualWallet - actualWalletUsed);
+      const alreadyDebitedLocally = walletTransactions.some(
+        (tx) => tx.orderId === confirmedOrder.id && tx.type === 'DEBIT'
+      );
+
+      const updatedWalletBalance =
+        typeof serverOrder?.remainingWalletBalance === 'number'
+          ? Math.max(0, Math.round(serverOrder.remainingWalletBalance * 100) / 100)
+          : alreadyDebitedLocally || orderAlreadyExistsLocally || saveResult.deduplicated
+          ? currentActualWallet
+          : Math.max(0, Math.round((currentActualWallet - actualWalletUsed) * 100) / 100);
+
       const updatedCurrentUser: User = {
         ...currentUser,
         walletBalance: updatedWalletBalance,
@@ -2434,24 +2623,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return updated;
       });
 
-      const newWalletTx: WalletTransaction = {
-        id: `wtx-${Date.now()}`,
-        userId: confirmedOrder.userId || currentUser.id,
-        userPhone: confirmedOrder.userPhone || currentUser.phone,
-        orderId: confirmedOrder.id,
-        orderNumber: confirmedOrder.orderNumber,
-        type: 'DEBIT',
-        amount: actualWalletUsed,
-        balanceAfter: updatedWalletBalance,
-        description: `Wallet Applied (Advance) for Order #${confirmedOrder.orderNumber}`,
-        createdAt: new Date().toISOString(),
-      };
+      if (!alreadyDebitedLocally) {
+        const newWalletTx: WalletTransaction = {
+          id: `wtx-${Date.now()}`,
+          userId: confirmedOrder.userId || currentUser.id,
+          userPhone: confirmedOrder.userPhone || currentUser.phone,
+          orderId: confirmedOrder.id,
+          orderNumber: confirmedOrder.orderNumber,
+          type: 'DEBIT',
+          amount: actualWalletUsed,
+          balanceAfter: updatedWalletBalance,
+          description: `Wallet Applied (Advance) for Order #${confirmedOrder.orderNumber}`,
+          createdAt: new Date().toISOString(),
+        };
 
-      setWalletTransactions((prev) => {
-        const updated = [newWalletTx, ...prev];
-        localStorage.setItem('om_wallet_transactions', JSON.stringify(updated));
-        return updated;
-      });
+        setWalletTransactions((prev) => {
+          if (prev.some((tx) => tx.orderId === confirmedOrder.id && tx.type === 'DEBIT')) {
+            return prev;
+          }
+          const updated = [newWalletTx, ...prev];
+          localStorage.setItem('om_wallet_transactions', JSON.stringify(updated));
+          return updated;
+        });
+      }
 
       // Synchronize latest server-side wallet balance
       refreshCustomerWallet();
@@ -2460,14 +2654,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // 5. Clear cart ONLY after verified order confirmation
     clearCart();
     return confirmedOrder;
+    })();
+
+    activeOrderSubmissionRef.current = submissionPromise;
+    try {
+      return await submissionPromise;
+    } finally {
+      activeOrderSubmissionRef.current = null;
+    }
   };
 
   const cancelOrder = (orderId: string, isShopkeeperOverride: boolean = false): boolean => {
-    const target = orders.find((o) => o.id === orderId || o.orderNumber === orderId);
+    const liveOrders = ordersRef.current.length > 0 ? ordersRef.current : orders;
+    const target = liveOrders.find((o) => o.id === orderId || o.orderNumber === orderId);
     if (!target) return false;
 
-    // Check if order is already cancelled (prevent duplicate processing)
-    if (target.status === OrderStatus.CANCELLED) {
+    // Check if order is already cancelled or delivered (prevent duplicate/invalid processing)
+    if (target.status === OrderStatus.CANCELLED || target.status === OrderStatus.DELIVERED) {
       return false;
     }
 
@@ -2476,24 +2679,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return false;
     }
 
-    // Requirement 3: If an order is cancelled while still "Pending", do not change stock.
-    const isPending = target.status === OrderStatus.ORDER_PENDING;
-
-    // Restore stock ONLY if stock was deducted upon acceptance and has not yet been restored
-    const wasDeducted = !isPending && isStockDeductedForOrder(target.id, target.orderNumber, target);
+    // Restore stock ONLY if stock was actually deducted upon acceptance and has not yet been restored.
+    // Never change stock when an unaccepted ORDER_PENDING order is cancelled.
+    const wasDeducted = isStockDeductedForOrder(target.id, target.orderNumber, target);
     const alreadyRestored = isStockRestoredForOrder(target.id, target.orderNumber, target);
 
     if (wasDeducted && !alreadyRestored) {
-      const { updatedProducts, affectedProducts } = restoreStockForOrder(target, products);
-      setProducts(updatedProducts);
-      markStockRestoredForOrder(target.id, target.orderNumber);
+      const currentCatalog = productsRef.current.length > 0 ? productsRef.current : products;
+      const { updatedProducts, affectedProducts } = restoreStockForOrder(target, currentCatalog);
+      if (affectedProducts.length > 0) {
+        productsRef.current = updatedProducts;
+        setProducts(updatedProducts);
+        markStockRestoredForOrder(target.id, target.orderNumber);
 
-      if (isSupabaseConfigured && affectedProducts.length > 0) {
-        affectedProducts.forEach((p) => {
-          updateProductStockInSupabase(p.id, p.variants, p).catch((err) => {
-            console.warn('Background Supabase product stock restore error:', err);
+        if (isSupabaseConfigured) {
+          affectedProducts.forEach((p) => {
+            updateProductStockInSupabase(p.id, p.variants, p).catch((err) => {
+              console.warn('Background Supabase product stock restore error:', err);
+            });
           });
-        });
+        }
       }
     }
 
@@ -2760,6 +2965,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             }
           : o
       );
+      ordersRef.current = updated;
       localStorage.setItem('om_orders', JSON.stringify(updated));
       return updated;
     });
@@ -2824,13 +3030,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return true;
   };
 
-  const updateOrderStatus = (orderId: string, newStatus: OrderStatus) => {
-    const target = orders.find((o) => o.id === orderId || o.orderNumber === orderId);
-    if (!target) return;
+  const updateOrderStatus = (
+    orderId: string,
+    newStatus: OrderStatus
+  ): { success: boolean; error?: string } => {
+    const liveOrders = ordersRef.current.length > 0 ? ordersRef.current : orders;
+    const target = liveOrders.find((o) => o.id === orderId || o.orderNumber === orderId);
+    if (!target) return { success: false, error: 'Order not found.' };
 
     if (newStatus === OrderStatus.CANCELLED) {
-      cancelOrder(orderId, true);
-      return;
+      const cancelled = cancelOrder(orderId, true);
+      return cancelled
+        ? { success: true }
+        : { success: false, error: 'Order cannot be cancelled in its current state.' };
+    }
+
+    // Prevent invalid status changes on already cancelled or delivered orders
+    if (target.status === OrderStatus.CANCELLED || target.status === OrderStatus.DELIVERED) {
+      return { success: false, error: 'Completed or cancelled orders cannot change fulfillment status.' };
     }
 
     // Check if order is moving to an accepted or subsequent active fulfillment status
@@ -2841,70 +3058,94 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       newStatus === OrderStatus.ON_THE_WAY ||
       newStatus === OrderStatus.DELIVERED;
 
+    // Prevent reverting an already-accepted/deducted order back to ORDER_PENDING
     const alreadyDeducted = isStockDeductedForOrder(target.id, target.orderNumber, target);
-    let nextStockDeducted = target.stockDeducted ?? false;
+    if (alreadyDeducted && newStatus === OrderStatus.ORDER_PENDING) {
+      return {
+        success: false,
+        error: 'Accepted order cannot be reverted back to Order Pending.',
+      };
+    }
+
+    let nextStockDeducted = Boolean(alreadyDeducted || target.stockDeducted);
 
     if (isAcceptedOrProgressing && !alreadyDeducted) {
-      const { updatedProducts, affectedProducts } = deductStockForOrder(target, products);
-      setProducts(updatedProducts);
-      markStockDeductedForOrder(target.id, target.orderNumber);
-      nextStockDeducted = true;
+      const currentCatalog = productsRef.current.length > 0 ? productsRef.current : products;
+      const stockCheck = validateOrderStockAvailability(target, currentCatalog);
+      if (!stockCheck.available) {
+        return {
+          success: false,
+          error: stockCheck.errorMessage || 'Insufficient stock available to accept this order.',
+        };
+      }
 
-      if (isSupabaseConfigured && affectedProducts.length > 0) {
-        affectedProducts.forEach((p) => {
-          updateProductStockInSupabase(p.id, p.variants, p).catch((err) => {
-            console.warn('Background Supabase product stock deduction error:', err);
+      const { updatedProducts, affectedProducts } = deductStockForOrder(target, currentCatalog);
+      if (affectedProducts.length > 0) {
+        productsRef.current = updatedProducts;
+        setProducts(updatedProducts);
+        markStockDeductedForOrder(target.id, target.orderNumber);
+        nextStockDeducted = true;
+
+        if (isSupabaseConfigured) {
+          affectedProducts.forEach((p) => {
+            updateProductStockInSupabase(p.id, p.variants, p).catch((err) => {
+              console.warn('Background Supabase product stock deduction error:', err);
+            });
           });
-        });
+        }
       }
     }
 
-    const deliveryTimestamp = newStatus === OrderStatus.DELIVERED ? (target.deliveredAt || new Date().toISOString()) : target.deliveredAt;
+    const isDelivered = newStatus === OrderStatus.DELIVERED;
+    const deliveryTimestamp = isDelivered ? (target.deliveredAt || new Date().toISOString()) : target.deliveredAt;
 
-    setOrders((prev) =>
-      prev.map((o) => {
+    let nextPaymentStatus = target.paymentStatus;
+    let nextCodCollected = target.codCollectedAmount;
+
+    if (isDelivered && target.paymentMethod === PaymentMethod.COD) {
+      if (nextCodCollected !== undefined) {
+        nextPaymentStatus =
+          nextCodCollected === target.finalAmount
+            ? PaymentStatus.RECEIVED
+            : nextCodCollected > 0
+            ? PaymentStatus.PARTIALLY_COLLECTED
+            : PaymentStatus.PENDING;
+      } else {
+        // Default full COD collection if delivered without prior custom record
+        nextCodCollected = target.finalAmount;
+        nextPaymentStatus = PaymentStatus.RECEIVED;
+      }
+    }
+
+    const nextIsPaid = nextPaymentStatus === PaymentStatus.RECEIVED ? true : undefined;
+
+    setOrders((prev) => {
+      const nextOrders = prev.map((o) => {
         if (o.id === orderId || o.orderNumber === orderId) {
-          const isDelivered = newStatus === OrderStatus.DELIVERED;
-          let updatedPaymentStatus = o.paymentStatus;
-          let updatedCodCollected = o.codCollectedAmount;
-
-          if (isDelivered && o.paymentMethod === PaymentMethod.COD) {
-            if (updatedCodCollected !== undefined) {
-              updatedPaymentStatus =
-                updatedCodCollected === o.finalAmount
-                  ? PaymentStatus.RECEIVED
-                  : updatedCodCollected > 0
-                  ? PaymentStatus.PARTIALLY_COLLECTED
-                  : PaymentStatus.PENDING;
-            } else {
-              // Default full COD collection if delivered without prior custom record
-              updatedCodCollected = o.finalAmount;
-              updatedPaymentStatus = PaymentStatus.RECEIVED;
-            }
-          }
-
           return {
             ...o,
             status: newStatus,
             deliveredAt: isDelivered ? (o.deliveredAt || deliveryTimestamp) : o.deliveredAt,
-            paymentStatus: updatedPaymentStatus,
-            codCollectedAmount: updatedCodCollected,
-            stockDeducted: isAcceptedOrProgressing ? true : o.stockDeducted,
+            paymentStatus: nextPaymentStatus,
+            codCollectedAmount: nextCodCollected,
+            stockDeducted: nextStockDeducted || Boolean(o.stockDeducted),
             stockRestored: false,
           };
         }
         return o;
-      })
-    );
+      });
+      ordersRef.current = nextOrders;
+      return nextOrders;
+    });
 
     if (isSupabaseConfigured) {
-      updateOrderStatusInSupabase(orderId, newStatus, undefined, {
+      updateOrderStatusInSupabase(orderId, newStatus, nextIsPaid, {
         stockDeducted: nextStockDeducted,
         stockRestored: false,
         orderNumber: target.orderNumber,
         walletAmountUsed: target.walletAmountUsed,
         items: target.items,
-        codCollected: target.codCollectedAmount || 0,
+        codCollected: nextCodCollected || 0,
         codCharge: target.codCharge || 0,
         deliveredAt: deliveryTimestamp,
         codLateFeeApplied: target.codLateFeeApplied,
@@ -2912,10 +3153,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         codLateFeeAppliedAt: target.codLateFeeAppliedAt,
         prevOutstanding: target.previousOutstanding || 0,
         totalPayable: target.totalPayable !== undefined ? target.totalPayable : target.finalAmount,
+        paymentStatus: nextPaymentStatus,
       }).catch((err) => {
         console.warn('Background Supabase status update error:', err);
       });
     }
+
+    return { success: true };
   };
 
   const recordCodCollection = async (
@@ -2923,7 +3167,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     collectedAmount: number,
     markAsDelivered: boolean = false
   ): Promise<{ success: boolean; error?: string }> => {
-    const order = orders.find((o) => o.id === orderId);
+    const liveOrders = ordersRef.current.length > 0 ? ordersRef.current : orders;
+    const order = liveOrders.find((o) => o.id === orderId);
     if (!order) {
       return { success: false, error: 'Order not found.' };
     }
@@ -2952,18 +3197,54 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const cleanAmount = Math.round(collectedAmount * 100) / 100;
 
+    // Ensure stock is available and deducted if marking directly as delivered from pending state
+    let justDeductedStock = isStockDeductedForOrder(order.id, order.orderNumber, order);
+    if (markAsDelivered && !justDeductedStock) {
+      const currentCatalog = productsRef.current.length > 0 ? productsRef.current : products;
+      const stockCheck = validateOrderStockAvailability(order, currentCatalog);
+      if (!stockCheck.available) {
+        return {
+          success: false,
+          error: stockCheck.errorMessage || 'Insufficient stock available to deliver this order.',
+        };
+      }
+
+      const { updatedProducts, affectedProducts } = deductStockForOrder(order, currentCatalog);
+      if (affectedProducts.length > 0) {
+        productsRef.current = updatedProducts;
+        setProducts(updatedProducts);
+        markStockDeductedForOrder(order.id, order.orderNumber);
+        justDeductedStock = true;
+        if (isSupabaseConfigured) {
+          affectedProducts.forEach((p) => {
+            updateProductStockInSupabase(p.id, p.variants, p).catch((err) => {
+              console.warn('Background Supabase product stock deduction error on COD delivery:', err);
+            });
+          });
+        }
+      }
+    }
+
     // Allocate cash across previous unpaid/partially paid orders (FIFO) and current order
     const targetCustomer = order.userPhone || order.userId;
     const allocationResult = allocateCodCollection(
-      orders,
+      liveOrders,
       targetCustomer,
       orderId,
       cleanAmount,
       markAsDelivered
     );
 
+    const finalUpdatedOrders =
+      markAsDelivered && justDeductedStock
+        ? allocationResult.updatedOrders.map((o) =>
+            o.id === orderId ? { ...o, stockDeducted: true, stockRestored: false } : o
+          )
+        : allocationResult.updatedOrders;
+
     // Update React state with all affected orders
-    setOrders(allocationResult.updatedOrders);
+    ordersRef.current = finalUpdatedOrders;
+    setOrders(finalUpdatedOrders);
 
     // Update customer in users list and currentUser if matching
     const newDebt = allocationResult.remainingOutstanding;
@@ -3010,6 +3291,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       orderAmount: order.finalAmount,
       totalPayable: order.finalAmount,
       markAsDelivered,
+      stockDeducted: markAsDelivered && justDeductedStock ? true : undefined,
       allCustomerOrders: orders.filter(
         (o) => isSameCustomer(o, order.userPhone || order.userId)
       ),
@@ -3047,7 +3329,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (cleanPhone.length !== 10) return false;
 
       const check = await checkCustomerServerSession();
-      if (check.authenticated && check.phone === cleanPhone) {
+      if (
+        check.authenticated &&
+        check.phone === cleanPhone &&
+        (!customerIdOverride || check.customerId === customerIdOverride)
+      ) {
         return true;
       }
 
@@ -3106,6 +3392,104 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [currentUser.phone, activeRole]);
 
+  // Restore/hydrate customer session & profile from HttpOnly cookie + Supabase DB on page refresh
+  useEffect(() => {
+    if (!isSupabaseConfigured || activeRole !== Role.CUSTOMER) return;
+    let cancelled = false;
+
+    const hydrateCustomerSessionOnMount = async () => {
+      try {
+        const initialCleanPhone = normalizeIndianMobile(currentUser.phone);
+
+        if (customerFlowStep === 'AUTH' || !initialCleanPhone) {
+          const serverSession = await checkCustomerServerSession();
+          if (cancelled || !serverSession.authenticated || !serverSession.phone) return;
+
+          const cleanPhone = normalizeIndianMobile(serverSession.phone);
+          if (!cleanPhone) return;
+
+          const [dbProfile, addrRes] = await Promise.all([
+            fetchCustomerProfileFromSupabase(cleanPhone),
+            fetchAddressesFromSupabase(),
+          ]);
+          if (cancelled || localStorage.getItem('om_customer_session')) return;
+
+          const dbAddresses = addrRes.success ? addrRes.addresses : [];
+          const resolvedName = dbProfile?.name?.trim() || '';
+          const shouldEnterShop = Boolean(resolvedName || dbAddresses.length > 0);
+          const restoredUser: User = {
+            id: dbProfile?.id || serverSession.customerId || `user-${cleanPhone}`,
+            name: resolvedName,
+            phone: cleanPhone,
+            role: Role.CUSTOMER,
+            walletBalance: Math.max(0, Number(dbProfile?.walletBalance || 0)),
+            outstandingBalance: Number(dbProfile?.outstandingBalance || 0),
+            codOrderCount: Number(dbProfile?.codOrderCount || 0),
+            addresses: dbAddresses,
+            createdAt: dbProfile?.createdAt || new Date().toISOString(),
+            isDatabaseVerified: Boolean(dbProfile?.id || serverSession.customerId),
+          };
+
+          setCurrentUser(restoredUser);
+          setActiveRoleState(Role.CUSTOMER);
+          const defaultAddr = dbAddresses.find((a) => a.isDefault) || dbAddresses[0];
+          setSelectedAddressId(defaultAddr?.id || null);
+          setCart(loadCustomerCart(cleanPhone));
+          setCustomerFlowStep(shouldEnterShop ? 'SHOP' : 'PROFILE');
+
+          try {
+            localStorage.setItem(
+              `om_profile_${cleanPhone}`,
+              JSON.stringify({ ...restoredUser, addresses: [] })
+            );
+            localStorage.setItem(
+              'om_customer_session',
+              JSON.stringify({
+                phone: cleanPhone,
+                role: Role.CUSTOMER,
+                profileCompleted: shouldEnterShop,
+              })
+            );
+          } catch {}
+          return;
+        }
+
+        if (!currentUser.isDatabaseVerified || !currentUser.name || !currentUser.id || currentUser.id.startsWith('user-')) {
+          const dbProfile = await fetchCustomerProfileFromSupabase(initialCleanPhone);
+          if (cancelled || !dbProfile) return;
+
+          setCurrentUser((prev) => {
+            if (normalizeIndianMobile(prev.phone) !== initialCleanPhone) return prev;
+            const merged: User = {
+              ...prev,
+              id: dbProfile.id || prev.id,
+              name: prev.name?.trim() || dbProfile.name?.trim() || '',
+              walletBalance: Math.max(prev.walletBalance || 0, Number(dbProfile.walletBalance || 0)),
+              outstandingBalance: dbProfile.outstandingBalance ?? prev.outstandingBalance ?? 0,
+              codOrderCount: dbProfile.codOrderCount ?? prev.codOrderCount ?? 0,
+              createdAt: dbProfile.createdAt || prev.createdAt,
+              isDatabaseVerified: true,
+            };
+            try {
+              localStorage.setItem(
+                `om_profile_${initialCleanPhone}`,
+                JSON.stringify({ ...merged, addresses: [] })
+              );
+            } catch {}
+            return merged;
+          });
+        }
+      } catch {
+        // Keep existing cached session gracefully if offline
+      }
+    };
+
+    hydrateCustomerSessionOnMount();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const persistLocalOfflineAddresses = (updatedUser: User) => {
     if (isSupabaseConfigured) return;
     const cleanPhone = updatedUser.phone ? updatedUser.phone.replace(/\D/g, '').slice(-10) : '';
@@ -3141,16 +3525,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const cleanState = (addressData.state ?? '').trim();
     const cleanPincode = (addressData.pincode ?? '').trim();
     const cleanRecipientName = (addressData.recipientName ?? currentUser.name ?? '').trim();
-    const cleanRecipientPhone = (addressData.recipientPhone ?? currentUser.phone ?? '')
-      .replace(/\D/g, '')
-      .slice(-10);
+    const cleanRecipientPhone = normalizeIndianMobile(addressData.recipientPhone ?? currentUser.phone ?? '');
     const resolvedLabel = normalizeAddressLabel(addressData.addressLabel ?? addressData.label);
 
     if (!cleanRecipientName) {
       return { success: false, error: 'Recipient name is required.' };
     }
-    if (!cleanRecipientPhone || cleanRecipientPhone.length !== 10) {
-      return { success: false, error: 'Valid 10-digit recipient phone number is required.' };
+    if (!cleanRecipientPhone || !INDIAN_MOBILE_REGEX.test(cleanRecipientPhone)) {
+      return { success: false, error: INVALID_INDIAN_MOBILE_MESSAGE };
     }
     if (!cleanLine1) {
       return { success: false, error: 'Address line 1 is required.' };
@@ -3254,7 +3636,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (!isSupabaseConfigured) {
       const shouldBeDefault = updates.isDefault === true;
-      const updatedAddresses = userAddresses.map((a) => {
+      let updatedAddresses = userAddresses.map((a) => {
         if (a.id === addressId) {
           const merged: Address = {
             ...a,
@@ -3272,8 +3654,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
         return shouldBeDefault ? { ...a, isDefault: false } : a;
       });
+      if (updatedAddresses.length > 0 && !updatedAddresses.some((a) => a.isDefault)) {
+        const replacement = updatedAddresses.find((a) => a.id !== addressId) || updatedAddresses[0];
+        updatedAddresses = updatedAddresses.map((a) =>
+          a.id === replacement.id ? { ...a, isDefault: true } : a
+        );
+      }
       const updatedUser: User = { ...currentUser, addresses: updatedAddresses };
       setCurrentUser(updatedUser);
+      if (updates.isDefault === true) {
+        setSelectedAddressId(addressId);
+      }
       persistLocalOfflineAddresses(updatedUser);
       return { success: true, address: updatedAddresses.find((a) => a.id === addressId) };
     }
@@ -3294,6 +3685,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     await refreshAddresses();
+    if (updates.isDefault === true) {
+      setSelectedAddressId(addressId);
+    }
     return { success: true, address: res.address };
   };
 
@@ -3649,8 +4043,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // CUSTOMER FLOW:
     const cleanPhone10 = normalizeIndianMobile(phone);
-    if (!cleanPhone10) {
-      throw new Error('Please enter a valid 10-digit Indian mobile number.');
+    if (!cleanPhone10 || !INDIAN_MOBILE_REGEX.test(cleanPhone10)) {
+      throw new Error(INVALID_INDIAN_MOBILE_MESSAGE);
     }
 
     const isNewRegistration = options?.isNewRegistration === true || options?.isExisting === false;

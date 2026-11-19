@@ -71,6 +71,8 @@ export function calculateCheckoutTotals(
   availableWalletBalance: number = 0,
   useWallet: boolean = true
 ): CheckoutBreakdown {
+  const roundCurrency = (value: number): number => Math.round((Number(value) || 0) * 100) / 100;
+
   let subtotal = 0;
   let eligibleSubtotal = 0;
   let excludedSubtotal = 0;
@@ -78,7 +80,7 @@ export function calculateCheckoutTotals(
   items.forEach((item) => {
     // 1. Determine Tiered / Slab Price
     const activePrice = getActiveUnitPrice(item.baseSellingPrice, item.quantity, item.tieredPrices);
-    const itemTotal = activePrice * item.quantity;
+    const itemTotal = roundCurrency(activePrice * item.quantity);
     subtotal += itemTotal;
 
     // Track subtotal of items eligible for dynamic discounts vs price-regulated excluded items
@@ -89,32 +91,43 @@ export function calculateCheckoutTotals(
     }
   });
 
-  // 2. Delivery Fee Calculation (Free delivery if subtotal >= freeShippingMinAmount)
-  const deliveryFee = subtotal >= settings.freeShippingMinAmount ? 0 : settings.baseDeliveryFee;
+  subtotal = roundCurrency(subtotal);
+  eligibleSubtotal = roundCurrency(eligibleSubtotal);
+  excludedSubtotal = roundCurrency(excludedSubtotal);
+
+  // 2. Delivery Fee Calculation (Free delivery if subtotal >= freeShippingMinAmount; ₹0 when cart is empty)
+  const freeShippingMin = Math.max(0, Number(settings.freeShippingMinAmount) || 0);
+  const baseDeliveryFee = Math.max(0, Number(settings.baseDeliveryFee) || 0);
+  const deliveryFee =
+    items.length === 0 || subtotal <= 0
+      ? 0
+      : subtotal >= freeShippingMin
+      ? 0
+      : roundCurrency(baseDeliveryFee);
 
   // 3. COD Charge Calculation (Initial COD fee defaults to ₹0; no order-count-based rule)
-  const codCharge = Math.max(0, Number(settings.codBaseCharge) || 0);
+  const codCharge = items.length === 0 || subtotal <= 0 ? 0 : roundCurrency(Math.max(0, Number(settings.codBaseCharge) || 0));
 
   // 4. Advance Payment Discount Calculation (Applied STRICTLY and ONLY to eligible items; NEVER on excluded items)
   const discountPct = Math.max(0, Number(settings.advancePaymentDiscountPct) || 0);
   const advanceDiscountAmount = Math.round((eligibleSubtotal * discountPct) / 100);
 
   // Final Calculations: Original product price and bill amount remain unchanged
-  const codFinalTotal = Math.max(0, subtotal + deliveryFee + codCharge);
-  const advanceFinalTotal = Math.max(0, subtotal + deliveryFee - advanceDiscountAmount);
-  const cleanOutstanding = Math.max(0, Number(previousOutstanding) || 0);
-  const codTotalPayable = codFinalTotal + cleanOutstanding;
+  const codFinalTotal = roundCurrency(Math.max(0, subtotal + deliveryFee + codCharge));
+  const advanceFinalTotal = roundCurrency(Math.max(0, subtotal + deliveryFee - advanceDiscountAmount));
+  const cleanOutstanding = roundCurrency(Math.max(0, Number(previousOutstanding) || 0));
+  const codTotalPayable = roundCurrency(codFinalTotal + cleanOutstanding);
   const advanceTotalPayable = advanceFinalTotal;
 
   // 5. Wallet Usage Calculation
-  const cleanWalletBalance = Math.max(0, Number(availableWalletBalance) || 0);
-  const isWalletApplied = Boolean(useWallet && cleanWalletBalance > 0);
+  const cleanWalletBalance = roundCurrency(Math.max(0, Number(availableWalletBalance) || 0));
+  const isWalletApplied = Boolean(useWallet && cleanWalletBalance > 0 && advanceTotalPayable > 0);
 
   const advanceWalletUsed = isWalletApplied
-    ? Math.min(cleanWalletBalance, advanceTotalPayable)
+    ? roundCurrency(Math.min(cleanWalletBalance, advanceTotalPayable))
     : 0;
-  const advanceRemainingPayable = Math.max(0, advanceTotalPayable - advanceWalletUsed);
-  const advanceRemainingWallet = Math.max(0, cleanWalletBalance - advanceWalletUsed);
+  const advanceRemainingPayable = roundCurrency(Math.max(0, advanceTotalPayable - advanceWalletUsed));
+  const advanceRemainingWallet = roundCurrency(Math.max(0, cleanWalletBalance - advanceWalletUsed));
 
   // Wallet is strictly NOT a direct payment method and never applied to COD
   const codWalletUsed = 0;

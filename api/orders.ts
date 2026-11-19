@@ -448,16 +448,59 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
         if (alreadyCredited < refundAmount) {
           const amountToCredit = Math.round((refundAmount - alreadyCredited) * 100) / 100;
           let currentWallet = 0;
+          let matchedDbUser: { id?: string; wallet_balance?: any } | null = null;
 
           if (cleanPhone) {
+            const { data: normUsers, error: normErr } = await supabase
+              .from('users')
+              .select('id, wallet_balance')
+              .eq('phone_normalized', cleanPhone)
+              .limit(1);
+            if (!normErr && Array.isArray(normUsers) && normUsers.length > 0) {
+              matchedDbUser = normUsers[0];
+            }
+          }
+          if (!matchedDbUser && cleanPhone) {
             const { data: dbUser } = await supabase
               .from('users')
               .select('id, wallet_balance')
               .eq('phone', cleanPhone)
               .maybeSingle();
-            if (dbUser && dbUser.wallet_balance !== undefined) {
-              currentWallet = Math.max(0, Number(dbUser.wallet_balance) || 0);
-            }
+            if (dbUser) matchedDbUser = dbUser;
+          }
+          if (!matchedDbUser && existingOrder?.customer_id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(existingOrder.customer_id))) {
+            const { data: dbUserById } = await supabase
+              .from('users')
+              .select('id, wallet_balance')
+              .eq('id', existingOrder.customer_id)
+              .maybeSingle();
+            if (dbUserById) matchedDbUser = dbUserById;
+          }
+          if (!matchedDbUser && cleanPhone) {
+            try {
+              const { data: varUsers } = await supabase
+                .from('users')
+                .select('id, wallet_balance, phone')
+                .in('phone', [cleanPhone, `+91${cleanPhone}`, `+91 ${cleanPhone}`, `91${cleanPhone}`, `0${cleanPhone}`])
+                .limit(1);
+              if (Array.isArray(varUsers) && varUsers.length > 0) {
+                matchedDbUser = varUsers[0];
+              } else {
+                const { data: fuzzyUsers } = await supabase
+                  .from('users')
+                  .select('id, wallet_balance, phone')
+                  .ilike('phone', `%${cleanPhone}%`)
+                  .limit(5);
+                if (Array.isArray(fuzzyUsers)) {
+                  matchedDbUser =
+                    fuzzyUsers.find((u: any) => String(u?.phone || '').replace(/\D/g, '').slice(-10) === cleanPhone) ||
+                    null;
+                }
+              }
+            } catch {}
+          }
+          if (matchedDbUser && matchedDbUser.wallet_balance !== undefined) {
+            currentWallet = Math.max(0, Number(matchedDbUser.wallet_balance) || 0);
           }
 
           const newBalanceAfter = Math.round((currentWallet + amountToCredit) * 100) / 100;
@@ -479,7 +522,15 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
           });
 
           if (!ledgerErr) {
-            if (cleanPhone) {
+            if (matchedDbUser?.id) {
+              await supabase
+                .from('users')
+                .update({
+                  wallet_balance: newBalanceAfter,
+                  updated_at: new Date().toISOString(),
+                })
+                .eq('id', matchedDbUser.id);
+            } else if (cleanPhone) {
               await supabase
                 .from('users')
                 .update({
@@ -611,12 +662,118 @@ export async function processCreateOrderRequest(
     };
   }
 
-  // Check customer active status in database
-  const { data: dbCustomer } = await supabase
+  const formatExistingOrderPayload = (row: any) => {
+    const parsedMeta = parseCodMetaFromNotes(row?.notes)?.meta || {};
+    const metaItems = Array.isArray(parsedMeta.items) ? parsedMeta.items : [];
+    const subtotalVal = Number(row?.subtotal) || 0;
+    const discountVal = Number(row?.discount_amount) || 0;
+    const finalVal = Number(row?.final_total) || 0;
+    const codChargeVal = Number(parsedMeta.codCharge) || 0;
+    const walletUsedVal = Number(parsedMeta.walletAmountUsed) || 0;
+    const deliveryVal = Math.max(
+      0,
+      Math.round((finalVal - subtotalVal + discountVal - codChargeVal) * 100) / 100
+    );
+    const isRowAdvance =
+      row?.payment_method === 'ADVANCE_ONLINE' ||
+      row?.payment_method === 'ONLINE' ||
+      row?.payment_method === 'UPI';
+    const resolvedPaymentStatus =
+      row?.payment_status ||
+      (row?.is_paid || isRowAdvance ? 'RECEIVED' : 'PENDING');
+    return {
+      id: row.id,
+      orderNumber: row.order_number,
+      customerPhone: row.customer_phone,
+      status: row.status || 'ORDER_PENDING',
+      paymentStatus: resolvedPaymentStatus,
+      isPaid: Boolean(
+        row?.is_paid ||
+          String(resolvedPaymentStatus).toUpperCase() === 'RECEIVED' ||
+          String(resolvedPaymentStatus).toUpperCase() === 'PAID'
+      ),
+      createdAt: row.created_at,
+      previousOutstanding: Number(parsedMeta.prevOutstanding) || 0,
+      subtotal: subtotalVal,
+      deliveryFee: deliveryVal,
+      codCharge: codChargeVal,
+      discountAmount: discountVal,
+      finalAmount: finalVal,
+      walletAmountUsed: walletUsedVal,
+      totalPayable:
+        parsedMeta.totalPayable !== undefined
+          ? Number(parsedMeta.totalPayable)
+          : isRowAdvance
+          ? Math.max(0, Math.round((finalVal - walletUsedVal) * 100) / 100)
+          : finalVal,
+      paymentMethod: row.payment_method || 'COD',
+      items: metaItems,
+    };
+  };
+
+  // Idempotency Check #1: If client supplies an orderId that already exists, return it idempotently
+  const requestedOrderId = typeof body?.orderId === 'string' ? body.orderId.trim() : '';
+  if (requestedOrderId) {
+    const { data: existingById, error: existingLookupErr } = await supabase
+      .from('orders')
+      .select('*')
+      .eq('id', requestedOrderId)
+      .maybeSingle();
+
+    if (!existingLookupErr && existingById) {
+      const existingPhone = String(existingById.customer_phone || '').replace(/\D/g, '').slice(-10);
+      if (!isShopkeeper && existingPhone && existingPhone !== cleanPhone) {
+        return {
+          statusCode: 409,
+          payload: {
+            success: false,
+            error: 'Order ID already exists for another customer.',
+          },
+        };
+      }
+      return {
+        statusCode: 200,
+        payload: {
+          success: true,
+          deduplicated: true,
+          order: formatExistingOrderPayload(existingById),
+        },
+      };
+    }
+  }
+
+  // Check customer active status in database (resolve via phone, UUID, or phone variants)
+  let { data: dbCustomer } = await supabase
     .from('users')
     .select('*')
     .eq('phone', cleanPhone)
     .maybeSingle();
+
+  if (!dbCustomer && customerSession?.customerId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(customerSession.customerId)) {
+    const byIdRes = await supabase
+      .from('users')
+      .select('*')
+      .eq('id', customerSession.customerId)
+      .maybeSingle();
+    if (byIdRes?.data) {
+      dbCustomer = byIdRes.data;
+    }
+  }
+
+  if (!dbCustomer) {
+    try {
+      const byVarRes = await supabase
+        .from('users')
+        .select('*')
+        .in('phone', [cleanPhone, `+91${cleanPhone}`, `91${cleanPhone}`, `0${cleanPhone}`])
+        .limit(1);
+      if (Array.isArray(byVarRes?.data) && byVarRes.data.length > 0) {
+        dbCustomer = byVarRes.data[0];
+      }
+    } catch {
+      // Non-fatal fallback for minimal query mocks
+    }
+  }
 
   // Load authoritative settings from database (advance discount strictly defaults to 0.00%)
   let advanceDiscountPct = 0.0; // 0.00% safe default advance payment discount
@@ -980,7 +1137,55 @@ export async function processCreateOrderRequest(
         authoritativeWalletBalance = Math.max(0, Number(freshUser.wallet_balance));
       }
     }
-    walletAmountUsed = Math.min(authoritativeWalletBalance, orderFinalAmount);
+
+    // Reconcile against authoritative wallet ledger credits/debits when ledger history exists
+    try {
+      const walletAliasIds = Array.from(
+        new Set(
+          [
+            dbCustomer?.id,
+            customerSession?.customerId,
+            cleanPhone,
+            `usr_${cleanPhone}`,
+            `user-${cleanPhone}`,
+          ].filter(Boolean)
+        )
+      ) as string[];
+      if (walletAliasIds.length > 0) {
+        let ledgerQ: any = supabase
+          .from('ledger')
+          .select('id, type, amount, description, date')
+          .or(walletAliasIds.map((id) => `customer_id.eq.${id}`).join(','));
+        if (typeof ledgerQ?.order === 'function') {
+          ledgerQ = ledgerQ.order('date', { ascending: true });
+        }
+        const { data: ledgerRows } = await ledgerQ;
+        if (Array.isArray(ledgerRows) && ledgerRows.length > 0) {
+          const walletRows = ledgerRows.filter((r: any) => {
+            if (!r) return false;
+            const desc = String(r.description || '').toLowerCase();
+            if (desc.includes('cod payment') || desc.includes('cod collection')) return false;
+            if (r.id && (String(r.id).startsWith('cod_tx_') || String(r.id).startsWith('led_ord_'))) return false;
+            if (r.type === 'DEBIT' && (desc.includes('wallet') || String(r.id || '').startsWith('wtx_'))) return true;
+            if (r.type === 'CREDIT' && (desc.includes('refund') || desc.includes('wallet') || String(r.id || '').startsWith('wtx_'))) return true;
+            return false;
+          });
+          if (walletRows.some((r: any) => r.type === 'CREDIT')) {
+            let running = 0;
+            for (const tx of walletRows) {
+              const amt = Number(tx.amount) || 0;
+              if (tx.type === 'CREDIT') running += amt;
+              else if (tx.type === 'DEBIT') running = Math.max(0, running - amt);
+            }
+            authoritativeWalletBalance = Math.round(running * 100) / 100;
+          }
+        }
+      }
+    } catch {
+      // Non-fatal: keep dbCustomer.wallet_balance
+    }
+
+    walletAmountUsed = Math.round(Math.min(authoritativeWalletBalance, orderFinalAmount) * 100) / 100;
   }
 
   const finalPayable = Math.max(0, Math.round((orderFinalAmount - walletAmountUsed) * 100) / 100);
@@ -1118,6 +1323,57 @@ export async function processCreateOrderRequest(
     ...(resolvedGoogleLoc ? { google_location: resolvedGoogleLoc } : {}),
   };
 
+  // Idempotency Check #2: Prevent rapid accidental double-submission (identical phone + paymentMethod + address + total + items within 30s)
+  const buildCanonicalItemSignature = (itemsList: any[]): string =>
+    [...(itemsList || [])]
+      .map(
+        (it) =>
+          `${String(it?.productId || '').trim()}:${String(it?.variantId || '').trim()}:${Number(it?.quantity) || 0}`
+      )
+      .sort()
+      .join('|');
+
+  const expectedPaymentMethod = isAdvance ? 'ADVANCE_ONLINE' : 'COD';
+  const currentItemSignature = buildCanonicalItemSignature(verifiedLineItems);
+  try {
+    let recentQuery: any = supabase.from('orders').select('*').eq('customer_phone', cleanPhone);
+    if (typeof recentQuery?.order === 'function') {
+      recentQuery = recentQuery.order('created_at', { ascending: false });
+    }
+    if (typeof recentQuery?.limit === 'function') {
+      recentQuery = recentQuery.limit(5);
+    }
+    const { data: recentOrders } = await recentQuery;
+    if (Array.isArray(recentOrders) && recentOrders.length > 0) {
+      const nowMs = Date.now();
+      const duplicateRecent = recentOrders.find((ro: any) => {
+        if (!ro) return false;
+        const createdMs = ro.created_at ? new Date(ro.created_at).getTime() : 0;
+        if (!createdMs || nowMs - createdMs > 30000 || nowMs - createdMs < 0) return false;
+        if (ro.status === 'CANCELLED') return false;
+        if ((ro.payment_method || 'COD') !== expectedPaymentMethod) return false;
+        if (Math.abs((Number(ro.final_total) || 0) - orderFinalAmount) >= 0.01) return false;
+        if ((ro.address_id || null) !== (verifiedAddressId || null)) return false;
+        const roMeta = parseCodMetaFromNotes(ro.notes)?.meta || {};
+        if (Math.abs((Number(roMeta.walletAmountUsed) || 0) - walletAmountUsed) >= 0.01) return false;
+        const roItems = Array.isArray(roMeta.items) ? roMeta.items : [];
+        return buildCanonicalItemSignature(roItems) === currentItemSignature;
+      });
+      if (duplicateRecent) {
+        return {
+          statusCode: 200,
+          payload: {
+            success: true,
+            deduplicated: true,
+            order: formatExistingOrderPayload(duplicateRecent),
+          },
+        };
+      }
+    }
+  } catch {
+    // Non-fatal: continue to insert
+  }
+
   // 1. Insert into public.orders table
   const insertPayload = {
     id: orderId,
@@ -1130,10 +1386,10 @@ export async function processCreateOrderRequest(
     subtotal: verifiedSubtotal,
     discount_amount: advanceDiscountAmount,
     final_total: orderFinalAmount,
-    status: 'ORDER_ACCEPTED',
+    status: 'ORDER_PENDING',
     payment_method: isAdvance ? 'ADVANCE_ONLINE' : 'COD',
-    payment_status: isAdvance && finalPayable === 0 ? 'RECEIVED' : 'PENDING',
-    is_paid: isAdvance && finalPayable === 0,
+    payment_status: isAdvance ? 'RECEIVED' : 'PENDING',
+    is_paid: isAdvance,
     address_id: verifiedAddressId,
     delivery_address: deliveryAddressJsonb,
     preferred_slot: body.deliveryDate || body.preferredSlot || new Date().toISOString().split('T')[0],
@@ -1148,6 +1404,29 @@ export async function processCreateOrderRequest(
   const { error: insertOrderError } = await supabase.from('orders').insert(insertPayload);
 
   if (insertOrderError) {
+    const isDuplicateKey =
+      insertOrderError.code === '23505' ||
+      /duplicate key|unique constraint/i.test(String(insertOrderError.message || ''));
+    if (isDuplicateKey) {
+      const { data: racedExisting } = await supabase
+        .from('orders')
+        .select('*')
+        .eq('id', orderId)
+        .maybeSingle();
+      if (racedExisting) {
+        const racedPhone = String(racedExisting.customer_phone || '').replace(/\D/g, '').slice(-10);
+        if (isShopkeeper || !racedPhone || racedPhone === cleanPhone) {
+          return {
+            statusCode: 200,
+            payload: {
+              success: true,
+              deduplicated: true,
+              order: formatExistingOrderPayload(racedExisting),
+            },
+          };
+        }
+      }
+    }
     return { statusCode: 500, payload: { success: false, error: insertOrderError.message } };
   }
 
@@ -1178,25 +1457,56 @@ export async function processCreateOrderRequest(
     console.warn('Warning: Could not mirror order items into public.order_items:', insertItemsError.message);
   }
 
-  // 3. If wallet was used, record debit in ledger and deduct user's wallet_balance
-  if (walletAmountUsed > 0) {
-    const remainingWallet = Math.max(0, authoritativeWalletBalance - walletAmountUsed);
-    await supabase.from('ledger').insert({
-      id: `wtx_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-      customer_id: customerId,
-      customer_name: customerName,
-      order_id: orderId,
-      date: new Date().toISOString(),
-      type: 'DEBIT',
-      amount: walletAmountUsed,
-      description: `Wallet Applied on Order #${orderNumber}`,
-      balance_after: remainingWallet,
-    });
+  // 3. If wallet was used, record debit in ledger (idempotently) and deduct user's wallet_balance
+  const remainingWallet =
+    walletAmountUsed > 0
+      ? Math.max(0, Math.round((authoritativeWalletBalance - walletAmountUsed) * 100) / 100)
+      : authoritativeWalletBalance;
 
-    await supabase
-      .from('users')
-      .update({ wallet_balance: remainingWallet, updated_at: new Date().toISOString() })
-      .eq('phone', cleanPhone);
+  if (walletAmountUsed > 0) {
+    let alreadyDebited = false;
+    try {
+      const { data: existingDebits } = await supabase
+        .from('ledger')
+        .select('id')
+        .eq('order_id', orderId)
+        .eq('type', 'DEBIT')
+        .limit(1);
+      if (Array.isArray(existingDebits) && existingDebits.length > 0) {
+        alreadyDebited = true;
+      }
+    } catch {
+      // Non-fatal: proceed carefully
+    }
+
+    if (!alreadyDebited) {
+      const { error: ledgerDebitErr } = await supabase.from('ledger').insert({
+        id: `wtx_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        customer_id: customerId,
+        customer_name: customerName,
+        order_id: orderId,
+        date: new Date().toISOString(),
+        type: 'DEBIT',
+        amount: walletAmountUsed,
+        description: `Wallet Applied on Order #${orderNumber}`,
+        balance_after: remainingWallet,
+      });
+      if (ledgerDebitErr) {
+        console.warn('Warning: Could not insert wallet debit into ledger:', ledgerDebitErr.message);
+      }
+
+      if (dbCustomer?.id) {
+        await supabase
+          .from('users')
+          .update({ wallet_balance: remainingWallet, updated_at: new Date().toISOString() })
+          .eq('id', dbCustomer.id);
+      } else {
+        await supabase
+          .from('users')
+          .update({ wallet_balance: remainingWallet, updated_at: new Date().toISOString() })
+          .eq('phone', cleanPhone);
+      }
+    }
   }
 
   return {
@@ -1207,12 +1517,18 @@ export async function processCreateOrderRequest(
         id: orderId,
         orderNumber,
         customerPhone: cleanPhone,
+        status: 'ORDER_PENDING',
+        paymentStatus: isAdvance ? 'RECEIVED' : 'PENDING',
+        isPaid: isAdvance,
+        createdAt: insertPayload.created_at,
+        previousOutstanding: Number(body.previousOutstanding) || 0,
         subtotal: verifiedSubtotal,
         deliveryFee,
         codCharge,
         discountAmount: advanceDiscountAmount,
         finalAmount: orderFinalAmount,
         walletAmountUsed,
+        ...(walletAmountUsed > 0 ? { remainingWalletBalance: remainingWallet } : {}),
         totalPayable: isAdvance ? finalPayable : orderFinalAmount,
         paymentMethod: isAdvance ? 'ADVANCE_ONLINE' : 'COD',
         items: verifiedLineItems,

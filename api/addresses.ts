@@ -7,6 +7,13 @@ import {
   AdminSession,
   CustomerSession,
 } from './auth/_verify.js';
+import {
+  INDIAN_MOBILE_REGEX,
+  INVALID_INDIAN_MOBILE_MESSAGE,
+  normalizeIndianMobile,
+  normalizeIndianMobileE164,
+  getIndianMobileVariants,
+} from './auth/[action].js';
 
 export interface AddressAuthContext {
   adminSession: AdminSession | null;
@@ -88,33 +95,6 @@ function sendJson(res: ServerResponse, statusCode: number, data: any) {
 
 function cleanText(raw: unknown): string {
   return typeof raw === 'string' ? raw.trim() : '';
-}
-
-function cleanPhone10(raw: unknown): string {
-  if (typeof raw !== 'string' && typeof raw !== 'number') return '';
-  let digits = String(raw).replace(/\D/g, '');
-  if (digits.length === 14 && digits.startsWith('0091')) {
-    digits = digits.slice(4);
-  } else if (digits.length === 12 && digits.startsWith('91')) {
-    digits = digits.slice(2);
-  } else if (digits.length === 11 && digits.startsWith('0')) {
-    digits = digits.slice(1);
-  }
-  return digits.length === 10 ? digits : '';
-}
-
-function getPhoneVariantsForLookup(phone10: string): string[] {
-  if (!phone10 || phone10.length !== 10) return [];
-  return Array.from(
-    new Set([
-      phone10,
-      `+91${phone10}`,
-      `+91 ${phone10}`,
-      `91${phone10}`,
-      `0${phone10}`,
-      `0091${phone10}`,
-    ])
-  );
 }
 
 export function normalizeAddressLabel(raw: unknown): AddressLabel {
@@ -215,6 +195,65 @@ function isUuidSyntaxError(error: any): boolean {
   );
 }
 
+function isMissingColumnError(err: any, columnName: string): boolean {
+  if (!err) return false;
+  const code = String(err.code || '').trim();
+  const msg = String(err.message || '');
+  return (
+    (code === 'PGRST204' || code === '42703' || msg.toLowerCase().includes('schema cache')) &&
+    new RegExp(columnName, 'i').test(msg)
+  );
+}
+
+function isUniqueViolationError(err: any): boolean {
+  if (!err) return false;
+  const code = String(err.code || '').trim();
+  const msg = String(err.message || '').toLowerCase();
+  return code === '23505' || msg.includes('duplicate key') || msg.includes('unique constraint');
+}
+
+function isCustomerRoleRow(row: any): boolean {
+  const role = row?.role;
+  if (role === null || role === undefined || String(role).trim() === '') return true;
+  return String(role).trim().toUpperCase() === 'CUSTOMER';
+}
+
+function normalizeExistingPhoneForLookup(raw: unknown): string {
+  const direct = normalizeIndianMobile(raw);
+  if (direct) return direct;
+  if (typeof raw !== 'string' && typeof raw !== 'number') return '';
+  const digits = String(raw).replace(/\D/g, '');
+  if (digits.length === 13 && digits.startsWith('091')) {
+    return normalizeIndianMobile(digits.slice(3));
+  }
+  return '';
+}
+
+const addressPhoneCreationQueues = new Map<string, Promise<any>>();
+
+async function withAddressPhoneCreationLock<T>(
+  cleanPhone: string,
+  task: () => Promise<T>
+): Promise<T> {
+  const previous = addressPhoneCreationQueues.get(cleanPhone) || Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const chained = previous.catch(() => {}).then(() => current);
+  addressPhoneCreationQueues.set(cleanPhone, chained);
+
+  await previous.catch(() => {});
+  try {
+    return await task();
+  } finally {
+    release();
+    if (addressPhoneCreationQueues.get(cleanPhone) === chained) {
+      addressPhoneCreationQueues.delete(cleanPhone);
+    }
+  }
+}
+
 async function resolveCustomerIdentity(
   supabase: SupabaseClient,
   phone: string,
@@ -226,10 +265,13 @@ async function resolveCustomerIdentity(
   userFullName?: string;
   isInactive?: boolean;
   inactiveReason?: string;
+  invalidPhone?: boolean;
+  lookupError?: string;
+  lookupErrorStatus?: number;
 }> {
-  const cleanPhone = cleanPhone10(phone) || phone.replace(/\D/g, '').slice(-10);
-  const phoneNormalized = cleanPhone.length === 10 ? `+91${cleanPhone}` : '';
-  const phoneVariants = getPhoneVariantsForLookup(cleanPhone);
+  const cleanPhone = normalizeIndianMobile(phone);
+  const phoneNormalized = normalizeIndianMobileE164(cleanPhone);
+  const phoneVariants = getIndianMobileVariants(cleanPhone);
   const aliasSet = new Set<string>();
 
   if (sessionCustomerId && sessionCustomerId.trim()) {
@@ -241,56 +283,100 @@ async function resolveCustomerIdentity(
     aliasSet.add(`usr_${cleanPhone}`);
   }
 
+  if (options?.ensureDbUser && (!INDIAN_MOBILE_REGEX.test(cleanPhone) || !phoneNormalized)) {
+    return {
+      aliases: Array.from(aliasSet),
+      canonicalUserId: (sessionCustomerId && sessionCustomerId.trim()) || '',
+      invalidPhone: true,
+    };
+  }
+
   let dbUserId: string | null = null;
   let userFullName: string | undefined;
   let isInactive = false;
   let inactiveReason: string | undefined;
 
-  const lookupCustomerRows = async (): Promise<any[]> => {
+  const lookupCustomerRows = async (): Promise<{ rows: any[]; error: any | null }> => {
     if (phoneNormalized) {
       const byNorm = await supabase
         .from('users')
         .select('*')
         .eq('phone_normalized', phoneNormalized)
-        .eq('role', 'CUSTOMER')
         .order('created_at', { ascending: true });
-      if (!byNorm.error && byNorm.data && byNorm.data.length > 0) {
-        return byNorm.data;
+
+      if (!byNorm.error) {
+        const matchedNorm = (byNorm.data || []).filter(isCustomerRoleRow);
+        if (matchedNorm.length > 0) {
+          return { rows: matchedNorm, error: null };
+        }
+      } else if (!isMissingColumnError(byNorm.error, 'phone_normalized')) {
+        return { rows: [], error: byNorm.error };
       }
     }
-    const byVars = await supabase
-      .from('users')
-      .select('*')
-      .in('phone', phoneVariants.length > 0 ? phoneVariants : [cleanPhone, `+91${cleanPhone}`])
-      .eq('role', 'CUSTOMER')
-      .order('updated_at', { ascending: false });
-    return byVars.data || [];
+
+    const baseVarQuery = supabase.from('users').select('*');
+    const digitWildcardPattern = `%${cleanPhone.split('').join('%')}%`;
+    const filteredVarQuery =
+      typeof (baseVarQuery as any).ilike === 'function'
+        ? (baseVarQuery as any).ilike('phone', digitWildcardPattern)
+        : baseVarQuery.in('phone', phoneVariants.length > 0 ? phoneVariants : [cleanPhone, `+91${cleanPhone}`]);
+
+    const byVars = await filteredVarQuery.order('updated_at', { ascending: false });
+    if (byVars.error) {
+      return { rows: [], error: byVars.error };
+    }
+
+    const matchedVars = (byVars.data || []).filter(
+      (row: any) =>
+        isCustomerRoleRow(row) && normalizeExistingPhoneForLookup(row?.phone) === cleanPhone
+    );
+    return { rows: matchedVars, error: null };
   };
 
-  if (cleanPhone) {
-    const userRows = await lookupCustomerRows();
+  const applyResolvedCustomerRows = (rows: any[]) => {
+    for (const u of rows) {
+      if (u?.id) {
+        aliasSet.add(String(u.id));
+        if (!dbUserId && !String(u.id).startsWith('user-')) {
+          dbUserId = String(u.id);
+        }
+      }
+      const candidateName = cleanText(u?.full_name ?? u?.name);
+      if (!userFullName && candidateName) {
+        userFullName = candidateName;
+      }
+    }
+    if (!dbUserId && rows[0]?.id) {
+      dbUserId = String(rows[0].id);
+    }
+    if (rows[0]?.status && String(rows[0].status).toUpperCase() !== 'ACTIVE') {
+      isInactive = true;
+      inactiveReason = rows[0].inactive_reason || undefined;
+    }
+  };
+
+  const resolveOrCreate = async (): Promise<{
+    lookupError?: string;
+    lookupErrorStatus?: number;
+    invalidPhone?: boolean;
+  } | null> => {
+    const { rows: userRows, error: lookupErr } = await lookupCustomerRows();
+    if (lookupErr) {
+      return {
+        lookupError: lookupErr.message || 'Database customer lookup failed.',
+        lookupErrorStatus: 500,
+      };
+    }
 
     if (userRows.length > 0) {
-      for (const u of userRows) {
-        if (u?.id) {
-          aliasSet.add(String(u.id));
-          if (!dbUserId && !String(u.id).startsWith('user-')) {
-            dbUserId = String(u.id);
-          }
-        }
-        const candidateName = cleanText(u?.full_name ?? u?.name);
-        if (!userFullName && candidateName) {
-          userFullName = candidateName;
-        }
+      applyResolvedCustomerRows(userRows);
+      return null;
+    }
+
+    if (options?.ensureDbUser) {
+      if (!INDIAN_MOBILE_REGEX.test(cleanPhone) || !phoneNormalized) {
+        return { invalidPhone: true };
       }
-      if (!dbUserId && userRows[0]?.id) {
-        dbUserId = String(userRows[0].id);
-      }
-      if (userRows[0]?.status && String(userRows[0].status).toUpperCase() !== 'ACTIVE') {
-        isInactive = true;
-        inactiveReason = userRows[0].inactive_reason || undefined;
-      }
-    } else if (options?.ensureDbUser) {
       const nowIso = new Date().toISOString();
       const newUserId = isUuid(sessionCustomerId) ? sessionCustomerId!.trim() : crypto.randomUUID();
       const seedName = cleanText(options?.fallbackFullName);
@@ -311,9 +397,8 @@ async function resolveCustomerIdentity(
 
       if (
         insertRes.error &&
-        insertRes.error.code !== '23505' &&
-        (insertRes.error.code === 'PGRST204' || insertRes.error.code === '42703') &&
-        /phone_normalized/i.test(String(insertRes.error.message || ''))
+        !isUniqueViolationError(insertRes.error) &&
+        isMissingColumnError(insertRes.error, 'phone_normalized')
       ) {
         insertRes = await supabase
           .from('users')
@@ -330,25 +415,14 @@ async function resolveCustomerIdentity(
           .single();
       }
 
-      if (!insertRes.error && insertRes.data?.id) {
-        dbUserId = String(insertRes.data.id);
-        aliasSet.add(dbUserId);
-        if (seedName) userFullName = seedName;
-      } else if (insertRes.error && insertRes.error.code === '23505') {
-        const raceRows = await lookupCustomerRows();
-        if (raceRows[0]?.id) {
-          dbUserId = String(raceRows[0].id);
-          aliasSet.add(dbUserId);
-          const candidateName = cleanText(raceRows[0]?.full_name ?? raceRows[0]?.name);
-          if (candidateName) userFullName = candidateName;
-        }
-      } else if (
+      if (
         insertRes.error &&
+        !isUniqueViolationError(insertRes.error) &&
         (insertRes.error.code === 'PGRST204' ||
           insertRes.error.code === '42703' ||
           /full_name|status/i.test(String(insertRes.error.message || '')))
       ) {
-        const legacyRes = await supabase
+        insertRes = await supabase
           .from('users')
           .insert({
             id: newUserId,
@@ -359,12 +433,62 @@ async function resolveCustomerIdentity(
           })
           .select('id')
           .single();
-        if (!legacyRes.error && legacyRes.data?.id) {
-          dbUserId = String(legacyRes.data.id);
-          aliasSet.add(dbUserId);
-          if (seedName) userFullName = seedName;
-        }
       }
+
+      if (!insertRes.error && insertRes.data?.id) {
+        dbUserId = String(insertRes.data.id);
+        aliasSet.add(dbUserId);
+        if (seedName) userFullName = seedName;
+        return null;
+      }
+
+      if (insertRes.error && isUniqueViolationError(insertRes.error)) {
+        const { rows: raceRows, error: raceErr } = await lookupCustomerRows();
+        if (raceErr) {
+          return {
+            lookupError: raceErr.message || 'Database lookup failed during duplicate conflict recovery.',
+            lookupErrorStatus: 500,
+          };
+        }
+        if (raceRows.length > 0) {
+          applyResolvedCustomerRows(raceRows);
+          return null;
+        }
+        return {
+          lookupError:
+            'Customer mobile conflict detected during registration, and existing customer record could not be resolved.',
+          lookupErrorStatus: 409,
+        };
+      }
+
+      if (insertRes.error) {
+        return {
+          lookupError: insertRes.error.message || 'Failed to initialize customer record.',
+          lookupErrorStatus: 500,
+        };
+      }
+    }
+
+    return null;
+  };
+
+  if (cleanPhone && INDIAN_MOBILE_REGEX.test(cleanPhone)) {
+    const failure = options?.ensureDbUser
+      ? await withAddressPhoneCreationLock(cleanPhone, resolveOrCreate)
+      : await resolveOrCreate();
+
+    if (failure) {
+      return {
+        aliases: Array.from(aliasSet),
+        canonicalUserId: (sessionCustomerId && sessionCustomerId.trim()) || '',
+        ...(failure.invalidPhone ? { invalidPhone: true } : {}),
+        ...(failure.lookupError
+          ? {
+              lookupError: failure.lookupError,
+              lookupErrorStatus: failure.lookupErrorStatus || 500,
+            }
+          : {}),
+      };
     }
   }
 
@@ -490,10 +614,21 @@ export async function processAddressesRequest(
   let resolvedUserPhone = '';
 
   if (customerSession) {
+    const sessionCleanPhone = normalizeIndianMobile(customerSession.phone);
     const requestedPhone = (query?.phone || body?.phone || '').toString().trim();
     if (requestedPhone) {
-      const cleanRequestedPhone = requestedPhone.replace(/\D/g, '').slice(-10);
-      if (cleanRequestedPhone.length !== 10 || cleanRequestedPhone !== customerSession.phone) {
+      const cleanRequestedPhone = normalizeIndianMobile(requestedPhone);
+      if (!cleanRequestedPhone || !INDIAN_MOBILE_REGEX.test(cleanRequestedPhone)) {
+        return {
+          statusCode: 400,
+          payload: {
+            success: false,
+            code: 'INVALID_MOBILE',
+            error: INVALID_INDIAN_MOBILE_MESSAGE,
+          },
+        };
+      }
+      if (!sessionCleanPhone || cleanRequestedPhone !== sessionCleanPhone) {
         return {
           statusCode: 403,
           payload: {
@@ -504,15 +639,61 @@ export async function processAddressesRequest(
       }
     }
 
+    if (method === 'POST') {
+      if (!sessionCleanPhone || !INDIAN_MOBILE_REGEX.test(sessionCleanPhone)) {
+        return {
+          statusCode: 400,
+          payload: {
+            success: false,
+            code: 'INVALID_MOBILE',
+            error: INVALID_INDIAN_MOBILE_MESSAGE,
+          },
+        };
+      }
+      const rawRecipientPhoneCheck = body?.recipientPhone ?? body?.recipient_phone;
+      if (rawRecipientPhoneCheck !== undefined && String(rawRecipientPhoneCheck).trim() !== '') {
+        const cleanRecipientCheck = normalizeIndianMobile(rawRecipientPhoneCheck);
+        if (!cleanRecipientCheck || !INDIAN_MOBILE_REGEX.test(cleanRecipientCheck)) {
+          return {
+            statusCode: 400,
+            payload: {
+              success: false,
+              code: 'INVALID_MOBILE',
+              error: INVALID_INDIAN_MOBILE_MESSAGE,
+            },
+          };
+        }
+      }
+    }
+
     const identity = await resolveCustomerIdentity(
       supabase,
-      customerSession.phone,
+      sessionCleanPhone || customerSession.phone,
       customerSession.customerId,
       {
         ensureDbUser: method === 'POST',
         fallbackFullName: cleanText(body?.recipientName),
       }
     );
+    if (identity.invalidPhone) {
+      return {
+        statusCode: 400,
+        payload: {
+          success: false,
+          code: 'INVALID_MOBILE',
+          error: INVALID_INDIAN_MOBILE_MESSAGE,
+        },
+      };
+    }
+    if (identity.lookupError) {
+      return {
+        statusCode: identity.lookupErrorStatus || 500,
+        payload: {
+          success: false,
+          error: identity.lookupError,
+        },
+      };
+    }
     if (identity.isInactive) {
       return {
         statusCode: 403,
@@ -525,7 +706,7 @@ export async function processAddressesRequest(
     aliases = identity.aliases;
     canonicalUserId = identity.canonicalUserId;
     resolvedUserFullName = identity.userFullName || '';
-    resolvedUserPhone = customerSession.phone;
+    resolvedUserPhone = sessionCleanPhone;
 
     const requestedUserId = (query?.userId || body?.userId || '').toString().trim();
     if (requestedUserId && !aliases.includes(requestedUserId)) {
@@ -541,14 +722,65 @@ export async function processAddressesRequest(
     const targetPhone = (query?.phone || body?.phone || '').toString().trim();
     const targetUserId = (query?.userId || body?.userId || '').toString().trim();
     if (targetPhone) {
-      const identity = await resolveCustomerIdentity(supabase, targetPhone, targetUserId || undefined, {
-        ensureDbUser: method === 'POST',
-        fallbackFullName: cleanText(body?.recipientName),
-      });
+      const cleanTargetPhone = normalizeIndianMobile(targetPhone);
+      if (!cleanTargetPhone || !INDIAN_MOBILE_REGEX.test(cleanTargetPhone)) {
+        return {
+          statusCode: 400,
+          payload: {
+            success: false,
+            code: 'INVALID_MOBILE',
+            error: INVALID_INDIAN_MOBILE_MESSAGE,
+          },
+        };
+      }
+      if (method === 'POST') {
+        const rawRecipientPhoneCheck = body?.recipientPhone ?? body?.recipient_phone;
+        if (rawRecipientPhoneCheck !== undefined && String(rawRecipientPhoneCheck).trim() !== '') {
+          const cleanRecipientCheck = normalizeIndianMobile(rawRecipientPhoneCheck);
+          if (!cleanRecipientCheck || !INDIAN_MOBILE_REGEX.test(cleanRecipientCheck)) {
+            return {
+              statusCode: 400,
+              payload: {
+                success: false,
+                code: 'INVALID_MOBILE',
+                error: INVALID_INDIAN_MOBILE_MESSAGE,
+              },
+            };
+          }
+        }
+      }
+      const identity = await resolveCustomerIdentity(
+        supabase,
+        cleanTargetPhone,
+        targetUserId || undefined,
+        {
+          ensureDbUser: method === 'POST',
+          fallbackFullName: cleanText(body?.recipientName),
+        }
+      );
+      if (identity.invalidPhone) {
+        return {
+          statusCode: 400,
+          payload: {
+            success: false,
+            code: 'INVALID_MOBILE',
+            error: INVALID_INDIAN_MOBILE_MESSAGE,
+          },
+        };
+      }
+      if (identity.lookupError) {
+        return {
+          statusCode: identity.lookupErrorStatus || 500,
+          payload: {
+            success: false,
+            error: identity.lookupError,
+          },
+        };
+      }
       aliases = identity.aliases;
       canonicalUserId = identity.canonicalUserId;
       resolvedUserFullName = identity.userFullName || '';
-      resolvedUserPhone = cleanPhone10(targetPhone);
+      resolvedUserPhone = cleanTargetPhone;
     } else if (targetUserId) {
       if (isUuid(targetUserId)) {
         const { data: userRow } = await supabase
@@ -558,11 +790,20 @@ export async function processAddressesRequest(
           .limit(1);
         if (userRow && userRow.length > 0 && userRow[0].phone) {
           const identity = await resolveCustomerIdentity(supabase, userRow[0].phone, targetUserId);
+          if (identity.lookupError) {
+            return {
+              statusCode: identity.lookupErrorStatus || 500,
+              payload: {
+                success: false,
+                error: identity.lookupError,
+              },
+            };
+          }
           aliases = identity.aliases;
           canonicalUserId = identity.canonicalUserId;
           resolvedUserFullName =
             identity.userFullName || cleanText(userRow[0].full_name ?? userRow[0].name);
-          resolvedUserPhone = cleanPhone10(userRow[0].phone);
+          resolvedUserPhone = normalizeIndianMobile(userRow[0].phone);
         } else {
           aliases = [targetUserId];
           canonicalUserId = targetUserId;
@@ -614,8 +855,12 @@ export async function processAddressesRequest(
     const addressLabel = normalizeAddressLabel(rawLabel);
     const recipientName =
       cleanText(body?.recipientName ?? body?.recipient_name) || resolvedUserFullName;
-    const recipientPhone =
-      cleanPhone10(body?.recipientPhone ?? body?.recipient_phone) || resolvedUserPhone;
+    const rawRecipientPhone = body?.recipientPhone ?? body?.recipient_phone;
+    const hasExplicitRecipientPhone =
+      rawRecipientPhone !== undefined && String(rawRecipientPhone).trim() !== '';
+    const recipientPhone = hasExplicitRecipientPhone
+      ? normalizeIndianMobile(rawRecipientPhone)
+      : resolvedUserPhone;
     const addressLine1 =
       cleanText(body?.addressLine1 ?? body?.address_line1) ||
       cleanText(body?.fullAddress ?? body?.full_address);
@@ -632,10 +877,14 @@ export async function processAddressesRequest(
       };
     }
 
-    if (!recipientPhone || recipientPhone.length !== 10) {
+    if (!recipientPhone || !INDIAN_MOBILE_REGEX.test(recipientPhone)) {
       return {
         statusCode: 400,
-        payload: { success: false, error: 'Valid 10-digit recipient phone number is required.' },
+        payload: {
+          success: false,
+          code: 'INVALID_MOBILE',
+          error: INVALID_INDIAN_MOBILE_MESSAGE,
+        },
       };
     }
 
@@ -790,7 +1039,7 @@ export async function processAddressesRequest(
           canonicalUserId = identity.canonicalUserId;
           resolvedUserFullName =
             identity.userFullName || cleanText(ownerUser[0].full_name ?? ownerUser[0].name);
-          resolvedUserPhone = cleanPhone10(ownerUser[0].phone);
+          resolvedUserPhone = normalizeIndianMobile(ownerUser[0].phone);
         } else {
           aliases = [ownerId];
           canonicalUserId = ownerId;
@@ -890,13 +1139,17 @@ export async function processAddressesRequest(
       body?.recipientPhone !== undefined ? body.recipientPhone : body?.recipient_phone;
     const nextRecipientPhone =
       rawRecipientPhone !== undefined
-        ? cleanPhone10(rawRecipientPhone)
+        ? normalizeIndianMobile(rawRecipientPhone)
         : parsedExisting.recipientPhone || resolvedUserPhone;
 
-    if (!nextRecipientPhone || nextRecipientPhone.length !== 10) {
+    if (!nextRecipientPhone || !INDIAN_MOBILE_REGEX.test(nextRecipientPhone)) {
       return {
         statusCode: 400,
-        payload: { success: false, error: 'Valid 10-digit recipient phone number is required.' },
+        payload: {
+          success: false,
+          code: 'INVALID_MOBILE',
+          error: INVALID_INDIAN_MOBILE_MESSAGE,
+        },
       };
     }
 
@@ -1138,12 +1391,26 @@ export async function processAddressesRequest(
       };
     }
 
-    const { addresses: refreshed, error: refreshErr } = await fetchSortedCustomerAddresses(
+    let { addresses: refreshed, error: refreshErr } = await fetchSortedCustomerAddresses(
       supabase,
       aliases
     );
     if (refreshErr) {
       return { statusCode: 500, payload: { success: false, error: refreshErr } };
+    }
+
+    // Defensive fallback if DB trigger promote_default_address_after_delete did not promote a replacement
+    if (currentRow.is_default && refreshed.length > 0 && !refreshed.some((a) => a.isDefault)) {
+      const { error: promoteErr } = await supabase
+        .from('addresses')
+        .update({ is_default: true, updated_at: new Date().toISOString() })
+        .eq('id', refreshed[0].id);
+      if (!promoteErr) {
+        const reSorted = await fetchSortedCustomerAddresses(supabase, aliases);
+        if (!reSorted.error) {
+          refreshed = reSorted.addresses;
+        }
+      }
     }
 
     return {

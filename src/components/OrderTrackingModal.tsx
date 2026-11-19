@@ -39,9 +39,15 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
   onOpenCart,
   onPayPendingBalance,
 }) => {
-  const { orders, cancelOrder, startEditingOrder, repeatOrder, currentUser } = useApp();
+  const { orders, cancelOrder, startEditingOrder, repeatOrder, currentUser, refreshOrders } = useApp();
   const [secondsRemaining, setSecondsRemaining] = useState<number>(0);
   const [cancelMessage, setCancelMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (isOpen) {
+      refreshOrders().catch(() => {});
+    }
+  }, [isOpen]);
 
   // Automatically sync with latest order state from AppContext
   const currentOrder = (order && orders.find((o) => o.id === order.id)) || order;

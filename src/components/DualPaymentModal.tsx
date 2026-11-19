@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { ShieldCheck, Truck, ArrowRight, Percent, CheckCircle2, Wallet, AlertTriangle } from 'lucide-react';
 import { CheckoutBreakdown } from '../lib/engine/checkout-calculator';
 import { useApp } from '../context/AppContext';
@@ -23,9 +23,11 @@ export const DualPaymentModal: React.FC<DualPaymentModalProps> = ({
   const [isPlacingOrder, setIsPlacingOrder] = useState(false);
   const [showCodConfirmPopup, setShowCodConfirmPopup] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const isPlacingRef = useRef(false);
 
   useEffect(() => {
     if (isOpen) {
+      isPlacingRef.current = false;
       setSelectedMethod(null);
       setIsPlacingOrder(false);
       setShowCodConfirmPopup(false);
@@ -57,13 +59,15 @@ export const DualPaymentModal: React.FC<DualPaymentModalProps> = ({
   };
 
   const handleFinalPlaceCodOrder = async () => {
-    if (isPlacingOrder) return;
+    if (isPlacingRef.current || isPlacingOrder) return;
+    isPlacingRef.current = true;
     setIsPlacingOrder(true);
     setErrorMessage(null);
     try {
       await onSelectPayment('COD');
     } catch (err: any) {
       console.error('Failed to create COD order:', err);
+      isPlacingRef.current = false;
       setIsPlacingOrder(false);
       setShowCodConfirmPopup(false);
       setErrorMessage(err?.message || 'Failed to place COD order. Please try again.');

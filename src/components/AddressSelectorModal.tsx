@@ -2,6 +2,11 @@ import React, { useState, useEffect } from 'react';
 import { X, MapPin, Plus, Check, Pencil, Trash2, RefreshCw, AlertCircle, Loader2 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { Address, AddressLabel, formatFullAddress, normalizeAddressLabel } from '../types';
+import {
+  INDIAN_MOBILE_REGEX,
+  INVALID_INDIAN_MOBILE_MESSAGE,
+  normalizeIndianMobile,
+} from '../lib/supabase';
 
 interface AddressSelectorModalProps {
   isOpen: boolean;
@@ -115,7 +120,7 @@ export const AddressSelectorModal: React.FC<AddressSelectorModalProps> = ({ isOp
     setFormError(null);
 
     const cleanRecipientName = recipientName.trim();
-    const cleanRecipientPhone = recipientPhone.replace(/\D/g, '').slice(-10);
+    const cleanRecipientPhone = normalizeIndianMobile(recipientPhone);
     const cleanLine1 = addressLine1.trim();
     const cleanLine2 = addressLine2.trim();
     const cleanLandmark = landmark.trim();
@@ -127,8 +132,8 @@ export const AddressSelectorModal: React.FC<AddressSelectorModalProps> = ({ isOp
       setFormError('Recipient name is required.');
       return;
     }
-    if (!cleanRecipientPhone || cleanRecipientPhone.length !== 10) {
-      setFormError('Please enter a valid 10-digit recipient phone number.');
+    if (!cleanRecipientPhone || !INDIAN_MOBILE_REGEX.test(cleanRecipientPhone)) {
+      setFormError(INVALID_INDIAN_MOBILE_MESSAGE);
       return;
     }
     if (!cleanLine1) {

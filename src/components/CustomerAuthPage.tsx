@@ -4,16 +4,15 @@ import { useApp } from '../context/AppContext';
 import { Role } from '../types';
 import { BrandLogo } from './BrandLogo';
 import { AdminLoginModal } from './AdminLoginModal';
-import { DUPLICATE_CUSTOMER_MESSAGE, normalizeIndianMobile } from '../lib/supabase';
+import {
+  DUPLICATE_CUSTOMER_MESSAGE,
+  INDIAN_MOBILE_REGEX,
+  INVALID_INDIAN_MOBILE_MESSAGE,
+  normalizeIndianMobile,
+} from '../lib/supabase';
 
-function normalizeMobileInput(raw: string): string {
-  const normalized = normalizeIndianMobile(raw);
-  if (normalized) return normalized;
-  const digits = raw.replace(/\D/g, '');
-  if (digits.startsWith('0091')) return digits.slice(4, 14);
-  if (digits.length > 10 && digits.startsWith('91')) return digits.slice(2, 12);
-  if (digits.length > 10 && digits.startsWith('0')) return digits.slice(1, 11);
-  return digits.slice(0, 10);
+function sanitizeMobileInput(raw: string): string {
+  return raw.replace(/[^\d+\s()-]/g, '');
 }
 
 interface CustomerAuthPageProps {
@@ -38,8 +37,8 @@ export const CustomerAuthPage: React.FC<CustomerAuthPageProps> = ({ onSuccess })
     setError('');
     const cleanPhone = normalizeIndianMobile(phone);
 
-    if (!cleanPhone) {
-      setError('Please enter a valid 10-digit mobile number.');
+    if (!cleanPhone || !INDIAN_MOBILE_REGEX.test(cleanPhone)) {
+      setError(INVALID_INDIAN_MOBILE_MESSAGE);
       return;
     }
 
@@ -251,10 +250,10 @@ export const CustomerAuthPage: React.FC<CustomerAuthPageProps> = ({ onSuccess })
                           <input
                             type="tel"
                             id="new-customer-mobile-input"
-                            maxLength={16}
+                            maxLength={20}
                             required
                             value={phone}
-                            onChange={(e) => setPhone(normalizeMobileInput(e.target.value))}
+                            onChange={(e) => setPhone(sanitizeMobileInput(e.target.value))}
                             placeholder="Enter your 10-digit mobile"
                             className="w-full pl-9 pr-3.5 py-2.5 border border-gray-300 rounded-xl text-sm font-mono font-bold text-gray-800 placeholder:text-gray-400 focus:ring-2 focus:ring-[#FF6B00] focus:border-transparent outline-none transition"
                           />
@@ -312,10 +311,10 @@ export const CustomerAuthPage: React.FC<CustomerAuthPageProps> = ({ onSuccess })
                           <input
                             type="tel"
                             id="existing-customer-mobile-input"
-                            maxLength={16}
+                            maxLength={20}
                             required
                             value={phone}
-                            onChange={(e) => setPhone(normalizeMobileInput(e.target.value))}
+                            onChange={(e) => setPhone(sanitizeMobileInput(e.target.value))}
                             placeholder="Enter saved 10-digit mobile"
                             className="w-full pl-9 pr-3.5 py-2.5 border border-gray-300 rounded-xl text-sm font-mono font-bold text-gray-800 placeholder:text-gray-400 focus:ring-2 focus:ring-[#0F2C59] focus:border-transparent outline-none transition"
                           />

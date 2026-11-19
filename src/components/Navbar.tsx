@@ -50,6 +50,7 @@ export const Navbar: React.FC<NavbarProps> = ({
     setIsAuthModalOpen,
     isAuthModalOpen,
     editingOrder,
+    selectedAddressId,
   } = useApp();
 
   const [isLogoModalOpen, setIsLogoModalOpen] = useState(false);
@@ -119,7 +120,10 @@ export const Navbar: React.FC<NavbarProps> = ({
   const walletBalance = Math.max(0, currentUser.walletBalance || 0);
   const formattedBalance = `₹${walletBalance}`;
 
-  const currentAddress = currentUser.addresses.find((a) => a.isDefault) || currentUser.addresses[0];
+  const currentAddress =
+    currentUser.addresses.find((a) => a.id === selectedAddressId) ||
+    currentUser.addresses.find((a) => a.isDefault) ||
+    currentUser.addresses[0];
 
   return (
     <header className="sticky top-0 z-40 bg-[#0F2C59] text-white shadow-lg border-b border-[#D4AF37]/30">

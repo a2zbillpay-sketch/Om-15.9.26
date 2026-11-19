@@ -250,6 +250,7 @@ export async function recordCodCollectionViaApi(payload: {
   orderAmount: number;
   totalPayable: number;
   markAsDelivered?: boolean;
+  stockDeducted?: boolean;
   notes?: string;
   allCustomerOrders?: any[];
 }): Promise<{

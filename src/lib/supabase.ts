@@ -43,17 +43,37 @@ export const supabase = supabaseInstance;
 export const DUPLICATE_CUSTOMER_MESSAGE =
   '🙏 हा मोबाईल नंबर आधीपासून नोंदणीकृत आहे. आपण विद्यमान ग्राहक आहात. कृपया आपल्या जुन्या Customer Account मधून Login करा.';
 
+export const INDIAN_MOBILE_REGEX = /^[6-9][0-9]{9}$/;
+export const INVALID_INDIAN_MOBILE_MESSAGE =
+  'कृपया 6 ते 9 या अंकाने सुरू होणारा वैध 10 अंकी मोबाईल नंबर टाका.';
+
 export function normalizeIndianMobile(raw: unknown): string {
   if (typeof raw !== 'string' && typeof raw !== 'number') return '';
-  let digits = String(raw).replace(/\D/g, '');
+  const trimmed = String(raw).trim();
+  if (!trimmed) return '';
+  if (!/^[0-9\s+()-]+$/.test(trimmed)) return '';
+
+  // When '+' is present, strictly recognize only a leading '+91' prefix (optional parens/spaces),
+  // separate it from the mobile number, and validate the actual 10-digit number.
+  if (trimmed.includes('+')) {
+    if (!/^[\s(]*\+91/.test(trimmed)) return '';
+    const compact = trimmed.replace(/[\s()-]/g, '');
+    if (!compact.startsWith('+91')) return '';
+    const actual = compact.slice(3);
+    return INDIAN_MOBILE_REGEX.test(actual) ? actual : '';
+  }
+
+  let digits = trimmed.replace(/\D/g, '');
   if (digits.length === 14 && digits.startsWith('0091')) {
     digits = digits.slice(4);
+  } else if (digits.length === 13 && digits.startsWith('091')) {
+    digits = digits.slice(3);
   } else if (digits.length === 12 && digits.startsWith('91')) {
     digits = digits.slice(2);
   } else if (digits.length === 11 && digits.startsWith('0')) {
     digits = digits.slice(1);
   }
-  return digits.length === 10 ? digits : '';
+  return INDIAN_MOBILE_REGEX.test(digits) ? digits : '';
 }
 
 export function normalizeIndianMobileE164(raw: unknown): string {
@@ -62,7 +82,7 @@ export function normalizeIndianMobileE164(raw: unknown): string {
 }
 
 export function getIndianMobileVariants(cleanPhone10: string): string[] {
-  if (!cleanPhone10 || cleanPhone10.length !== 10) return [];
+  if (!INDIAN_MOBILE_REGEX.test(cleanPhone10)) return [];
   return Array.from(
     new Set([
       cleanPhone10,
@@ -502,7 +522,7 @@ export async function getOrCreateCustomerByPhone(
 
   const cleanPhone = normalizeIndianMobile(phone);
   const phoneNormalized = normalizeIndianMobileE164(phone);
-  if (!cleanPhone || cleanPhone.length !== 10 || !phoneNormalized) return null;
+  if (!INDIAN_MOBILE_REGEX.test(cleanPhone) || !phoneNormalized) return null;
 
   try {
     // 1. Check if user with this normalized phone and role exists in Supabase users table
@@ -657,7 +677,7 @@ export async function saveCustomerProfileToSupabase(
   if (!supabase) return null;
   const cleanPhone = normalizeIndianMobile(phone);
   const phoneNormalized = normalizeIndianMobileE164(phone);
-  if (!cleanPhone || !phoneNormalized) return null;
+  if (!INDIAN_MOBILE_REGEX.test(cleanPhone) || !phoneNormalized) return null;
 
   try {
     let completeAddress = fullAddress.trim();
@@ -888,11 +908,11 @@ export async function updateCustomerPhoneInSupabase(
 
   const cleanPhone = normalizeIndianMobile(newPhone);
   const phoneNormalized = normalizeIndianMobileE164(newPhone);
-  if (!cleanPhone || cleanPhone.length !== 10 || !phoneNormalized) {
+  if (!INDIAN_MOBILE_REGEX.test(cleanPhone) || !phoneNormalized) {
     return {
       success: false,
       code: 'INVALID_PHONE',
-      error: 'Valid 10-digit Indian mobile number is required.',
+      error: INVALID_INDIAN_MOBILE_MESSAGE,
     };
   }
 
@@ -1306,7 +1326,7 @@ export async function saveAddressToSupabase(address: Address): Promise<boolean> 
 export async function fetchCustomerProfileFromSupabase(phone: string): Promise<User | null> {
   if (!supabase) return null;
   const cleanPhone = normalizeIndianMobile(phone);
-  if (!cleanPhone || cleanPhone.length !== 10) return null;
+  if (!INDIAN_MOBILE_REGEX.test(cleanPhone)) return null;
 
   try {
     // 1. Safe query: Filter strictly by canonical normalized phone / variants AND role = 'CUSTOMER'
@@ -1724,16 +1744,23 @@ export async function fetchCustomerOrdersFromSupabase(
 }
 export interface SaveOrderResult {
   success: boolean;
+  deduplicated?: boolean;
   order?: {
     id: string;
     orderNumber: string;
     customerPhone?: string;
+    status?: string;
+    paymentStatus?: string;
+    isPaid?: boolean;
+    createdAt?: string;
+    previousOutstanding?: number;
     subtotal?: number;
     deliveryFee?: number;
     codCharge?: number;
     discountAmount?: number;
     finalAmount: number;
     walletAmountUsed?: number;
+    remainingWalletBalance?: number;
     totalPayable?: number;
     paymentMethod?: string;
     items?: any[];
@@ -1795,6 +1822,7 @@ export async function saveOrderToSupabase(order: Order): Promise<SaveOrderResult
 
     return {
       success: true,
+      deduplicated: Boolean(json.deduplicated),
       order: json.order,
     };
   } catch (err: any) {
