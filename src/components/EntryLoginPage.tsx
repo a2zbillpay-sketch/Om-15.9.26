@@ -76,7 +76,7 @@ export const EntryLoginPage: React.FC<EntryLoginPageProps> = ({
           return;
         }
 
-        loginWithPhone(
+        await loginWithPhone(
           phone.trim() || '9876543210',
           Role.SHOPKEEPER,
           name.trim() || 'Om Prakash Sharma'

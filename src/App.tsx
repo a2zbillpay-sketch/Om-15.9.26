@@ -42,6 +42,7 @@ const MainLayout: React.FC = () => {
     cancelEditingOrder,
     cart,
     isAdminSessionValid,
+    isVerifyingAdminSession,
     checkAdminSession,
   } = useApp();
 
@@ -81,7 +82,7 @@ const MainLayout: React.FC = () => {
   }, [editingOrder, setCustomerFlowStep]);
 
   const handleShopkeeperClick = async () => {
-    const isValid = isAdminSessionValid || (await checkAdminSession());
+    const isValid = await checkAdminSession();
     if (!isValid) {
       /* ===== TEMPORARY DEV ADMIN LOGIN BYPASS (REMOVE TO RESTORE STRICT DEV PW) ===== */
       if (import.meta.env.DEV) {
@@ -196,9 +197,15 @@ const MainLayout: React.FC = () => {
       )}
 
       <div className="flex-1 min-w-0 w-full max-w-full">
-        {activeRole === Role.SHOPKEEPER ||
-        activeRole === Role.SECONDARY_ADMIN ||
-        activeRole === Role.ACCOUNTS ? (
+        {isVerifyingAdminSession ? (
+          <div className="min-h-[60vh] flex flex-col items-center justify-center gap-3 text-gray-600">
+            <div className="w-8 h-8 border-4 border-[#0F2C59] border-t-[#D4AF37] rounded-full animate-spin" />
+            <p className="text-sm font-semibold">Verifying shopkeeper session...</p>
+          </div>
+        ) : (activeRole === Role.SHOPKEEPER ||
+            activeRole === Role.SECONDARY_ADMIN ||
+            activeRole === Role.ACCOUNTS) &&
+          isAdminSessionValid ? (
           <div className="w-full max-w-full min-w-0 overflow-x-hidden">
             <AdminDashboard />
           </div>
@@ -423,9 +430,12 @@ const MainLayout: React.FC = () => {
       <AdminLoginModal
         isOpen={isAdminLoginModalOpen}
         onClose={() => setIsAdminLoginModalOpen(false)}
-        onSuccess={() => {
-          setIsAdminLoginModalOpen(false);
-          setActiveRole(Role.SHOPKEEPER);
+        onSuccess={async () => {
+          const isValid = await checkAdminSession();
+          if (isValid) {
+            setIsAdminLoginModalOpen(false);
+            setActiveRole(Role.SHOPKEEPER);
+          }
         }}
       />
 

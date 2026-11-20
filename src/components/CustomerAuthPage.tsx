@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { ShoppingBag, Store, ShieldCheck, Phone, ArrowRight, UserPlus, UserCheck, Lock, Eye, EyeOff } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { Role } from '../types';
@@ -20,9 +20,23 @@ interface CustomerAuthPageProps {
 }
 
 export const CustomerAuthPage: React.FC<CustomerAuthPageProps> = ({ onSuccess }) => {
-  const { loginWithPhone, setActiveRole } = useApp();
+  const {
+    loginWithPhone,
+    setActiveRole,
+    shopkeeperLoginRedirect,
+    clearShopkeeperLoginRedirect,
+  } = useApp();
 
-  const [activePortal, setActivePortal] = useState<'CUSTOMER' | 'SHOPKEEPER'>('CUSTOMER');
+  const [activePortal, setActivePortal] = useState<'CUSTOMER' | 'SHOPKEEPER'>(() =>
+    shopkeeperLoginRedirect ? 'SHOPKEEPER' : 'CUSTOMER'
+  );
+
+  useEffect(() => {
+    if (shopkeeperLoginRedirect) {
+      setActivePortal('SHOPKEEPER');
+      clearShopkeeperLoginRedirect();
+    }
+  }, [shopkeeperLoginRedirect, clearShopkeeperLoginRedirect]);
   const [customerMode, setCustomerMode] = useState<'NEW' | 'EXISTING'>('NEW');
   const [phone, setPhone] = useState('');
   const [name, setName] = useState('');
@@ -112,7 +126,7 @@ export const CustomerAuthPage: React.FC<CustomerAuthPageProps> = ({ onSuccess })
         return;
       }
 
-      loginWithPhone('9876543210', Role.SHOPKEEPER, 'Om Prakash Sharma');
+      await loginWithPhone('9876543210', Role.SHOPKEEPER, 'Om Prakash Sharma');
       setActiveRole(Role.SHOPKEEPER);
       if (onSuccess) onSuccess();
     } catch {
@@ -373,7 +387,7 @@ export const CustomerAuthPage: React.FC<CustomerAuthPageProps> = ({ onSuccess })
                         });
                         const data = await res.json().catch(() => ({}));
                         if (data.authenticated) {
-                          loginWithPhone('9876543210', Role.SHOPKEEPER, 'Om Prakash Sharma');
+                          await loginWithPhone('9876543210', Role.SHOPKEEPER, 'Om Prakash Sharma');
                           setActiveRole(Role.SHOPKEEPER);
                           if (onSuccess) onSuccess();
                         } else {
@@ -459,11 +473,16 @@ export const CustomerAuthPage: React.FC<CustomerAuthPageProps> = ({ onSuccess })
         isOpen={isRecoveryModalOpen}
         initialMode="FORGOT_PASSWORD"
         onClose={() => setIsRecoveryModalOpen(false)}
-        onSuccess={() => {
-          setIsRecoveryModalOpen(false);
-          loginWithPhone('9876543210', Role.SHOPKEEPER, 'Om Prakash Sharma');
-          setActiveRole(Role.SHOPKEEPER);
-          if (onSuccess) onSuccess();
+        onSuccess={async () => {
+          try {
+            await loginWithPhone('9876543210', Role.SHOPKEEPER, 'Om Prakash Sharma');
+            setIsRecoveryModalOpen(false);
+            setActiveRole(Role.SHOPKEEPER);
+            if (onSuccess) onSuccess();
+          } catch (err: any) {
+            setIsRecoveryModalOpen(false);
+            setError(err?.message || 'Shopkeeper session verification failed.');
+          }
         }}
       />
     </div>

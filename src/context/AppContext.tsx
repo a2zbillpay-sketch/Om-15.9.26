@@ -44,8 +44,7 @@ import {
   updateOrderStatusInSupabase,
   creditCustomerWalletInSupabase,
   debitCustomerWalletInSupabase,
-  getCustomerWalletBalanceFromLedger,
-  fetchWalletTransactionsFromSupabase,
+  fetchCustomerWalletSummaryFromSupabase,
   saveCustomerProfileToSupabase,
   loginCustomerServerSession,
   logoutCustomerServerSession,
@@ -192,7 +191,7 @@ interface AppContextType {
     newProds: Omit<Product, 'id' | 'createdAt'>[]
   ) => Promise<{ successCount: number; failedCount: number; errors: string[] }>;
   updateProduct: (id: string, updates: Partial<Product>) => Promise<{ success: boolean; error?: string }>;
-  deleteProduct: (id: string) => void;
+  deleteProduct: (id: string) => Promise<{ success: boolean; error?: string }>;
   reorderProducts: (newProducts: Product[]) => Promise<{ success: boolean; error?: string }>;
   reorderVariants: (productId: string, newVariants: ProductVariant[]) => Promise<{ success: boolean; error?: string }>;
   cart: CartItem[];
@@ -270,9 +269,13 @@ interface AppContextType {
   ) => Promise<User>;
   logout: () => void;
   isSupabaseConfigured: boolean;
-  refreshOrders: () => Promise<void>;
+  refreshOrders: () => Promise<Order[] | null>;
+  refreshCustomerWallet: () => Promise<number | null>;
   refreshProducts: () => Promise<void>;
   isAdminSessionValid: boolean;
+  isVerifyingAdminSession: boolean;
+  shopkeeperLoginRedirect: boolean;
+  clearShopkeeperLoginRedirect: () => void;
   checkAdminSession: () => Promise<boolean>;
   logoutAdminSession: () => Promise<void>;
   walletTransactions: WalletTransaction[];
@@ -452,12 +455,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
   });
 
+  const isAdminRoleValue = (role: unknown): boolean =>
+    role === Role.SHOPKEEPER || role === Role.SECONDARY_ADMIN || role === Role.ACCOUNTS;
+
+  const [isVerifyingAdminSession, setIsVerifyingAdminSession] = useState<boolean>(() => {
+    const savedSession = localStorage.getItem('om_customer_session');
+    if (!savedSession) return false;
+    try {
+      const session: CustomerSession = JSON.parse(savedSession);
+      return isAdminRoleValue(session?.role);
+    } catch {
+      return false;
+    }
+  });
+
+  const [shopkeeperLoginRedirect, setShopkeeperLoginRedirect] = useState<boolean>(false);
+  const clearShopkeeperLoginRedirect = useCallback(() => {
+    setShopkeeperLoginRedirect(false);
+  }, []);
+
   const [customerFlowStep, setCustomerFlowStep] = useState<CustomerFlowStep>(() => {
     const savedSession = localStorage.getItem('om_customer_session');
     if (savedSession) {
       try {
         const session: CustomerSession = JSON.parse(savedSession);
-        if (session.role === Role.SHOPKEEPER) return 'SHOP';
+        if (isAdminRoleValue(session.role)) return 'AUTH';
         const cleanSessionPhone = normalizeIndianMobile(session.phone);
         if (!cleanSessionPhone) return 'AUTH';
         if (session.profileCompleted) {
@@ -486,8 +508,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (savedSession) {
       try {
         const session: CustomerSession = JSON.parse(savedSession);
-        if (session.role === Role.SHOPKEEPER) {
-          return INITIAL_USERS[0];
+        if (isAdminRoleValue(session.role)) {
+          return BLANK_CUSTOMER;
         }
 
         const cleanSessionPhone = normalizeIndianMobile(session.phone);
@@ -539,7 +561,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (savedSession) {
       try {
         const session = JSON.parse(savedSession);
-        return session.role;
+        if (isAdminRoleValue(session?.role)) {
+          return Role.CUSTOMER;
+        }
+        return session.role || Role.CUSTOMER;
       } catch {
         return Role.CUSTOMER;
       }
@@ -553,7 +578,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (savedSession) {
       try {
         const session: CustomerSession = JSON.parse(savedSession);
-        if (session.phone) {
+        if (session.phone && !isAdminRoleValue(session.role)) {
           return loadCustomerCart(session.phone);
         }
       } catch {
@@ -599,6 +624,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
 
   const [walletTransactions, setWalletTransactions] = useState<WalletTransaction[]>(() => {
+    if (isSupabaseConfigured) {
+      return [];
+    }
     const saved = localStorage.getItem('om_wallet_transactions');
     return saved ? JSON.parse(saved) : [];
   });
@@ -723,8 +751,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Synchronize product requests across tabs, windows, and remote Supabase
   useEffect(() => {
-    refreshProductRequests();
-
     const unsubscribeSupabase = subscribeToProductRequests((incoming) => {
       setProductRequests((prev) => {
         if (prev.some((r) => r.id === incoming.id)) return prev;
@@ -791,7 +817,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       window.removeEventListener('om_product_requests_updated', handleCustomUpdate);
       window.removeEventListener('storage', handleStorage);
     };
-  }, [refreshProductRequests]);
+  }, []);
 
   useEffect(() => {
     localStorage.setItem('om_wallet_transactions', JSON.stringify(walletTransactions));
@@ -867,6 +893,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const productsRef = useRef<Product[]>(products);
   const ordersRef = useRef<Order[]>(orders);
+  const hasSyncedProductsRef = useRef<boolean>(!isSupabaseConfigured);
 
   useEffect(() => {
     productsRef.current = products;
@@ -905,7 +932,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [orders]);
 
   // Synchronize orders with Supabase and persistent COD ledger
-  const refreshOrders = async () => {
+  const refreshOrders = async (): Promise<Order[] | null> => {
     try {
       let fetchedOrders: Order[] | null = null;
       const isAdminView =
@@ -913,23 +940,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         activeRole === Role.SECONDARY_ADMIN ||
         activeRole === Role.ACCOUNTS;
 
+      const cleanCustomerPhone = (currentUser.phone || '').replace(/\D/g, '').slice(-10);
+      if (!isAdminView && cleanCustomerPhone.length !== 10) {
+        return isSupabaseConfigured ? null : [];
+      }
+
       if (isSupabaseConfigured) {
         if (isAdminView) {
           fetchedOrders = await fetchAllOrdersForAdmin();
         } else {
-          fetchedOrders = await fetchCustomerOrdersFromSupabase(currentUser.id, currentUser.phone);
+          fetchedOrders = await fetchCustomerOrdersFromSupabase(currentUser.id, cleanCustomerPhone);
+        }
+
+        // Fail closed when authoritative DB/API fetch fails: never fall back to stale cached orders
+        if (fetchedOrders === null) {
+          return null;
         }
       }
 
       // When Supabase successfully returns [], set orders to []
       if (fetchedOrders !== null && fetchedOrders.length === 0) {
         setOrders([]);
-        return;
+        return [];
       }
 
       // Fetch persistent COD transactions and allocations from backend API
       const apiData = await fetchCodCollectionsFromApi(
-        isAdminView ? undefined : currentUser.phone
+        isAdminView ? undefined : cleanCustomerPhone
       );
 
       // Preserve rich item definitions and stock status from current orders
@@ -949,9 +986,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         : null;
 
       const baseOrders = resolvedFetched && resolvedFetched.length > 0 ? resolvedFetched : orders;
+      let finalOrders = baseOrders;
 
       if (apiData && apiData.success && apiData.ordersMap) {
-        const merged = baseOrders.map((o) => {
+        finalOrders = baseOrders.map((o) => {
           const persisted = apiData.ordersMap[o.id];
           if (persisted) {
             return {
@@ -968,20 +1006,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
           return o;
         });
-        setOrders(merged);
+        setOrders(finalOrders);
       } else if (resolvedFetched && resolvedFetched.length > 0) {
+        finalOrders = resolvedFetched;
         setOrders(resolvedFetched);
       } else if (fetchedOrders && fetchedOrders.length > 0) {
+        finalOrders = fetchedOrders;
         setOrders(fetchedOrders);
       }
-      refreshProductRequests().catch(() => {});
+
+      if (isAdminView) {
+        refreshProductRequests().catch(() => {});
+      }
+      return finalOrders;
     } catch (err) {
       console.warn('Error refreshing orders and COD ledger:', err);
+      return null;
     }
   };
 
-  // Synchronize with persistent database on initial mount
+  // Synchronize with persistent local COD ledger only in offline mode
   useEffect(() => {
+    if (isSupabaseConfigured) return;
     fetchCodCollectionsFromApi()
       .then((apiData) => {
         if (apiData && apiData.success && apiData.ordersMap) {
@@ -1013,11 +1059,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Synchronize central product catalog with Supabase
   const refreshProducts = async () => {
-    if (!isSupabaseConfigured) return;
+    if (!isSupabaseConfigured) {
+      hasSyncedProductsRef.current = true;
+      return;
+    }
     try {
       const dbProducts = await fetchProductsFromSupabase();
       // If Supabase is temporarily unavailable (returns null), do not overwrite central catalog
       if (dbProducts !== null) {
+        hasSyncedProductsRef.current = true;
+        productsRef.current = dbProducts;
+        try {
+          localStorage.setItem('om_products', JSON.stringify(dbProducts));
+        } catch {}
         setProducts(dbProducts);
       }
     } catch (err) {
@@ -1025,45 +1079,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-
-  useEffect(() => {
-    if (isSupabaseConfigured) {
-      refreshOrders();
+  // Synchronize customer wallet and persistent ledger from Supabase on demand
+  const refreshCustomerWallet = useCallback(async (): Promise<number | null> => {
+    if (!isSupabaseConfigured) {
+      return Math.max(0, currentUser.walletBalance || 0);
     }
-  }, [currentUser.id, currentUser.phone, activeRole]);
-
-  useEffect(() => {
-    if (typeof document === 'undefined') return;
-    const handleVisibilityChange = () => {
-      if (!document.hidden && isSupabaseConfigured) {
-        refreshOrders().catch(() => {});
-      }
-    };
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
-  }, [currentUser.id, currentUser.phone, activeRole]);
-
-  // Synchronize customer wallet and persistent ledger from Supabase
-  const refreshCustomerWallet = useCallback(async () => {
-    if (!isSupabaseConfigured || !currentUser || !currentUser.phone) return;
+    if (!currentUser || !currentUser.phone) return null;
     try {
       const cleanPhone = currentUser.phone.replace(/\D/g, '').slice(-10);
-      if (!cleanPhone) return;
+      if (cleanPhone.length !== 10) return null;
 
-      const authoritativeBalance = await getCustomerWalletBalanceFromLedger(
-        currentUser.id,
-        cleanPhone
-      );
+      const summary = await fetchCustomerWalletSummaryFromSupabase(currentUser.id, cleanPhone);
+      if (!summary) return null;
 
-      const txs = await fetchWalletTransactionsFromSupabase(currentUser.id, cleanPhone);
-      if (txs && txs.length > 0) {
-        setWalletTransactions(txs);
-        try {
-          localStorage.setItem('om_wallet_transactions', JSON.stringify(txs));
-        } catch {}
-      }
+      const authoritativeBalance = Math.max(0, summary.balance);
+      setWalletTransactions(summary.transactions);
+      try {
+        localStorage.setItem('om_wallet_transactions', JSON.stringify(summary.transactions));
+      } catch {}
 
       setCurrentUser((prev) => {
         const prevClean = prev.phone ? prev.phone.replace(/\D/g, '').slice(-10) : '';
@@ -1074,8 +1107,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           walletBalance: authoritativeBalance,
         };
         try {
-          localStorage.setItem('om_current_user', JSON.stringify(updated));
-          localStorage.setItem(`om_profile_${cleanPhone}`, JSON.stringify(updated));
+          localStorage.setItem('om_current_user', JSON.stringify({ ...updated, addresses: [] }));
+          localStorage.setItem(`om_profile_${cleanPhone}`, JSON.stringify({ ...updated, addresses: [] }));
         } catch {}
         return updated;
       });
@@ -1089,16 +1122,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           return u;
         })
       );
+
+      return authoritativeBalance;
     } catch (err) {
       console.warn('Error refreshing customer wallet:', err);
+      return null;
     }
-  }, [currentUser.id, currentUser.phone]);
-
-  useEffect(() => {
-    if (isSupabaseConfigured && currentUser.phone && activeRole === Role.CUSTOMER) {
-      refreshCustomerWallet();
-    }
-  }, [currentUser.phone, activeRole, refreshCustomerWallet]);
+  }, [currentUser.id, currentUser.phone, currentUser.walletBalance]);
 
   useEffect(() => {
     if (isSupabaseConfigured) {
@@ -1107,6 +1137,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [isSupabaseConfigured]);
 
   const [isAdminSessionValid, setIsAdminSessionValid] = useState<boolean>(false);
+  const isAdminSessionValidRef = useRef<boolean>(false);
+
+  // Admin-only background refreshes (never trigger unnecessary customer orders/requests fetches on refresh)
+  useEffect(() => {
+    if (isSupabaseConfigured && activeRole !== Role.CUSTOMER && isAdminSessionValid && !isVerifyingAdminSession) {
+      refreshOrders();
+      refreshProductRequests();
+    }
+  }, [activeRole, isAdminSessionValid, isVerifyingAdminSession]);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const handleVisibilityChange = () => {
+      if (!document.hidden && isSupabaseConfigured) {
+        if (activeRole !== Role.CUSTOMER && isAdminSessionValid) {
+          refreshOrders().catch(() => {});
+        }
+        refreshProducts().catch(() => {});
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [activeRole, isAdminSessionValid]);
 
   const checkAdminSession = useCallback(async (): Promise<boolean> => {
     try {
@@ -1115,20 +1170,69 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         credentials: 'include',
       });
       if (!res.ok) {
+        isAdminSessionValidRef.current = false;
         setIsAdminSessionValid(false);
         return false;
       }
       const data = await res.json().catch(() => ({}));
-      const isValid = Boolean(data?.authenticated && data?.role === 'SHOPKEEPER');
+      const isValid = Boolean(data?.authenticated === true && data?.role === 'SHOPKEEPER');
+      isAdminSessionValidRef.current = isValid;
       setIsAdminSessionValid(isValid);
       return isValid;
     } catch {
+      isAdminSessionValidRef.current = false;
       setIsAdminSessionValid(false);
       return false;
     }
   }, []);
 
+  useEffect(() => {
+    if (!isVerifyingAdminSession) return;
+    let cancelled = false;
+
+    const verifyStoredShopkeeperSession = async () => {
+      const isValid = await checkAdminSession();
+      if (cancelled) return;
+
+      if (isValid) {
+        const shopkeeper = users.find((u) => u.role === Role.SHOPKEEPER) || INITIAL_USERS[0];
+        setCurrentUser(shopkeeper);
+        setActiveRoleState(Role.SHOPKEEPER);
+        setCustomerFlowStep('SHOP');
+        setShopkeeperLoginRedirect(false);
+      } else {
+        isAdminSessionValidRef.current = false;
+        setIsAdminSessionValid(false);
+        setActiveRoleState(Role.CUSTOMER);
+        setCurrentUser(BLANK_CUSTOMER);
+        setCustomerFlowStep('AUTH');
+        setShopkeeperLoginRedirect(true);
+        try {
+          const saved = localStorage.getItem('om_customer_session');
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            if (isAdminRoleValue(parsed?.role)) {
+              localStorage.removeItem('om_customer_session');
+            }
+          }
+        } catch {
+          localStorage.removeItem('om_customer_session');
+        }
+      }
+      setIsVerifyingAdminSession(false);
+    };
+
+    verifyStoredShopkeeperSession();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isVerifyingAdminSession, checkAdminSession]);
+
   const logoutAdminSession = useCallback(async () => {
+    isAdminSessionValidRef.current = false;
+    setIsAdminSessionValid(false);
+    setActiveRoleState(Role.CUSTOMER);
     try {
       await fetch('/api/auth/logout', {
         method: 'POST',
@@ -1137,6 +1241,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch {
       // ignore network errors
     } finally {
+      isAdminSessionValidRef.current = false;
       setIsAdminSessionValid(false);
       setActiveRoleState(Role.CUSTOMER);
       localStorage.removeItem('om_customer_session');
@@ -1144,6 +1249,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, []);
 
   const setActiveRole = (role: Role) => {
+    if (isAdminRoleValue(role) && !isAdminSessionValidRef.current) {
+      setIsAdminSessionValid(false);
+      setShopkeeperLoginRedirect(true);
+      return;
+    }
+    if (role === Role.CUSTOMER) {
+      isAdminSessionValidRef.current = false;
+      setIsAdminSessionValid(false);
+    }
     setActiveRoleState(role);
     // If switching role, find matching user or switch current user's role
     const matchingUser = users.find((u) => u.role === role);
@@ -1225,7 +1339,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (resp.ok) {
         const data = await resp.json();
         const savedProduct = data.product || product;
-        setProducts((prev) => [savedProduct, ...prev]);
+        setProducts((prev) => {
+          const next = [savedProduct, ...prev];
+          productsRef.current = next;
+          try {
+            localStorage.setItem('om_products', JSON.stringify(next));
+          } catch {}
+          return next;
+        });
         return { success: true };
       } else if (resp.status === 401 && isSupabaseConfigured) {
         return {
@@ -1234,7 +1355,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         };
       } else {
         const errorData = await resp.json().catch(() => ({}));
-        if (errorData.error) {
+        if (errorData.error && (resp.status === 400 || resp.status === 401 || isSupabaseConfigured)) {
           return { success: false, error: errorData.error };
         }
       }
@@ -1255,7 +1376,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     // 3. Update React product state (which subsequently updates localStorage cache)
-    setProducts((prev) => [product, ...prev]);
+    setProducts((prev) => {
+      const next = [product, ...prev];
+      productsRef.current = next;
+      try {
+        localStorage.setItem('om_products', JSON.stringify(next));
+      } catch {}
+      return next;
+    });
     return { success: true };
   };
 
@@ -1356,24 +1484,53 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { success: true };
   };
 
-  const deleteProduct = async (id: string) => {
+  const deleteProduct = async (id: string): Promise<{ success: boolean; error?: string }> => {
     try {
       const resp = await fetch(`/api/products?id=${encodeURIComponent(id)}`, {
         method: 'DELETE',
         credentials: 'include',
       });
       if (resp.ok) {
-        setProducts((prev) => prev.filter((p) => p.id !== id));
+        setProducts((prev) => {
+          const next = prev.filter((p) => p.id !== id);
+          productsRef.current = next;
+          try {
+            localStorage.setItem('om_products', JSON.stringify(next));
+          } catch {}
+          return next;
+        });
         return { success: true };
       }
+      const errData = await resp.json().catch(() => ({}));
+      if (resp.status === 401 || resp.status === 400 || isSupabaseConfigured) {
+        return {
+          success: false,
+          error: errData?.error || `Failed to delete product (HTTP ${resp.status}).`,
+        };
+      }
     } catch {
-      // Offline fallback
+      // Offline/network fallback
     }
 
     if (isSupabaseConfigured) {
-      await deleteProductFromSupabase(id);
+      const dbDeleted = await deleteProductFromSupabase(id);
+      if (!dbDeleted) {
+        return {
+          success: false,
+          error: 'Failed to delete product from central database.',
+        };
+      }
     }
-    setProducts((prev) => prev.filter((p) => p.id !== id));
+
+    setProducts((prev) => {
+      const next = prev.filter((p) => p.id !== id);
+      productsRef.current = next;
+      try {
+        localStorage.setItem('om_products', JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+    return { success: true };
   };
 
   // Category operations: Supabase persistent handlers
@@ -1504,7 +1661,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Keep persisted cart items synchronized with live catalog prices, stock, and order limits after refresh
   useEffect(() => {
-    if (editingOrder || !Array.isArray(products) || products.length === 0) return;
+    if (editingOrder || !Array.isArray(products)) return;
+    if (products.length === 0 && !hasSyncedProductsRef.current) return;
 
     setCart((prev) => {
       if (!prev || prev.length === 0) return prev;
@@ -1514,6 +1672,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       for (const item of prev) {
         const liveProduct = products.find((p) => p.id === item.productId);
         if (!liveProduct) {
+          if (hasSyncedProductsRef.current) {
+            changed = true;
+            continue;
+          }
           nextCart.push(item);
           continue;
         }
@@ -2354,9 +2516,44 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // 6. Prevent double-counting: only sum each eligible order's individual unpaid portion: Math.max(0, finalAmount - codCollectedAmount)
     let eligiblePreviousOutstanding = 0;
     const customerIdentifier = currentUser.phone || currentUser.id;
+    let liveOrdersForOutstanding: Order[] = isSupabaseConfigured && !isAdvance ? [] : orders;
+    let freshDbOutstandingFallback = !isSupabaseConfigured
+      ? Math.max(0, Number(currentUser.outstandingBalance || 0))
+      : 0;
 
-    if (customerIdentifier && Array.isArray(orders)) {
-      const eligibleOrders = orders.filter((o) => {
+    if (!isAdvance && isSupabaseConfigured && activeRole === Role.CUSTOMER) {
+      const cleanCustPhone = (currentUser.phone || '').replace(/\D/g, '').slice(-10);
+      if (cleanCustPhone.length !== 10) {
+        throw new Error('Unable to verify customer mobile number for COD order. Please log in again.');
+      }
+
+      const fetchedLiveOrders = await refreshOrders();
+      if (fetchedLiveOrders === null) {
+        throw new Error('Unable to verify customer order history from database. Please try again.');
+      }
+      liveOrdersForOutstanding = fetchedLiveOrders;
+      const hasLiveCustomerOrders = liveOrdersForOutstanding.some((o) =>
+        isSameCustomer(o, customerIdentifier)
+      );
+      if (!hasLiveCustomerOrders) {
+        const freshProfile = await fetchCustomerProfileFromSupabase(currentUser.phone, {
+          includeLedger: false,
+        });
+        if (
+          !freshProfile ||
+          (freshProfile.outstandingBalance !== undefined &&
+            !Number.isFinite(Number(freshProfile.outstandingBalance)))
+        ) {
+          throw new Error(
+            'Unable to verify customer COD outstanding balance from database. Please try again.'
+          );
+        }
+        freshDbOutstandingFallback = Math.max(0, Number(freshProfile.outstandingBalance || 0));
+      }
+    }
+
+    if (customerIdentifier && Array.isArray(liveOrdersForOutstanding)) {
+      const eligibleOrders = liveOrdersForOutstanding.filter((o) => {
         if (data.orderId && o.id === data.orderId) return false;
         if (!isSameCustomer(o, customerIdentifier)) return false;
         if (o.status === OrderStatus.CANCELLED) return false;
@@ -2382,12 +2579,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
         eligiblePreviousOutstanding = Math.round(eligiblePreviousOutstanding * 100) / 100;
       } else {
-        // If no customer orders in state yet, check if customer has a pre-existing profile debt
-        const hasAnyCustomerOrders = orders.some((o) => isSameCustomer(o, customerIdentifier));
-        if (!hasAnyCustomerOrders) {
-          if (currentUser.outstandingBalance && currentUser.outstandingBalance > 0) {
-            eligiblePreviousOutstanding = Math.round(currentUser.outstandingBalance * 100) / 100;
-          }
+        const hasAnyCustomerOrders = liveOrdersForOutstanding.some((o) =>
+          isSameCustomer(o, customerIdentifier)
+        );
+        if (!hasAnyCustomerOrders && freshDbOutstandingFallback > 0) {
+          eligiblePreviousOutstanding = Math.round(freshDbOutstandingFallback * 100) / 100;
         }
       }
     }
@@ -2396,24 +2592,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const previousOutstanding = isAdvance ? 0 : eligiblePreviousOutstanding;
 
     // Wallet can ONLY be used inside Advance Payment as "Wallet Applied (Advance)"
-    // Wallet must be deducted ONLY when:
-    // 1. Customer explicitly selects "Advance Payment" (isAdvance === true), AND
-    // 2. Customer explicitly chooses to use Wallet in the Advance Payment flow (data.useWallet === true).
-    // If customer selects COD or does not select Advance Payment:
-    // → Wallet deduction = ₹0
-    // → Do not reduce Wallet balance
-    // → Do not record Wallet as payment.
+    // Always verify live wallet balance from Database for transactions (never read stale cache).
     let currentActualWallet = Math.max(0, currentUser.walletBalance || 0);
-    try {
-      const storedUserStr = localStorage.getItem('om_current_user') || localStorage.getItem('om_dist_current_user');
-      if (storedUserStr) {
-        const parsed = JSON.parse(storedUserStr);
-        if (typeof parsed.walletBalance === 'number' && parsed.walletBalance >= 0) {
-          currentActualWallet = parsed.walletBalance;
-        }
+    if (isSupabaseConfigured && isAdvance && Boolean(data.useWallet)) {
+      const liveWallet = await refreshCustomerWallet();
+      if (liveWallet === null) {
+        throw new Error('Unable to verify live wallet balance from database. Please try again.');
       }
-    } catch {
-      // ignore parsing error
+      currentActualWallet = Math.max(0, liveWallet);
     }
 
     // Explicit check: only apply wallet if advance payment AND customer explicitly chose to use wallet
@@ -3322,8 +3508,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   }, []);
 
+  const hasHydratedCustomerOnMountRef = useRef<boolean>(false);
+
+  const resetStaleCustomerClientSession = useCallback(() => {
+    try {
+      const saved = localStorage.getItem('om_customer_session');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (!isAdminRoleValue(parsed?.role)) {
+          localStorage.removeItem('om_customer_session');
+        }
+      }
+      localStorage.removeItem('om_current_user');
+    } catch {
+      localStorage.removeItem('om_customer_session');
+    }
+    setCurrentUser(BLANK_CUSTOMER);
+    setCart([]);
+    setOrders([]);
+    setWalletTransactions([]);
+    setSelectedAddressId(null);
+    setAddressesError(null);
+    setCustomerFlowStep('AUTH');
+  }, []);
+
   const ensureCustomerSessionCookie = useCallback(
-    async (phoneOverride?: string, nameOverride?: string, customerIdOverride?: string): Promise<boolean> => {
+    async (phoneOverride?: string, _nameOverride?: string, customerIdOverride?: string): Promise<boolean> => {
       if (!isSupabaseConfigured) return true;
       const cleanPhone = normalizeIndianMobile(phoneOverride || currentUser.phone);
       if (cleanPhone.length !== 10) return false;
@@ -3337,14 +3547,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return true;
       }
 
-      const loginRes = await loginCustomerServerSession(cleanPhone, {
-        name: nameOverride ?? currentUser.name,
-        customerId: customerIdOverride ?? currentUser.id,
-        isExisting: currentUser.isDatabaseVerified ? true : undefined,
-      });
-      return loginRes.authenticated;
+      // Never auto-create a session via customer-login when cookie verification fails.
+      resetStaleCustomerClientSession();
+      return false;
     },
-    [currentUser.id, currentUser.isDatabaseVerified, currentUser.name, currentUser.phone]
+    [currentUser.phone, resetStaleCustomerClientSession]
   );
 
   const refreshAddresses = useCallback(async (): Promise<Address[]> => {
@@ -3384,103 +3591,94 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [activeRole, applyAuthoritativeAddresses, currentUser.addresses, currentUser.phone, ensureCustomerSessionCookie]);
 
-  // Fetch authoritative addresses from Supabase on app mount / customer change
+  // Single unified customer session restore on mount:
+  // 1. Checks /api/auth/customer-me first (never calls customer-login automatically).
+  // 2. If invalid, resets safely to AUTH state.
+  // 3. If valid, fetches profile + delivery addresses ONCE in parallel.
   useEffect(() => {
-    const cleanPhone = (currentUser.phone || '').replace(/\D/g, '').slice(-10);
-    if (isSupabaseConfigured && activeRole === Role.CUSTOMER && cleanPhone.length === 10) {
-      refreshAddresses();
+    if (
+      !isSupabaseConfigured ||
+      activeRole !== Role.CUSTOMER ||
+      isVerifyingAdminSession ||
+      shopkeeperLoginRedirect ||
+      hasHydratedCustomerOnMountRef.current
+    ) {
+      return;
     }
-  }, [currentUser.phone, activeRole]);
 
-  // Restore/hydrate customer session & profile from HttpOnly cookie + Supabase DB on page refresh
-  useEffect(() => {
-    if (!isSupabaseConfigured || activeRole !== Role.CUSTOMER) return;
     let cancelled = false;
 
     const hydrateCustomerSessionOnMount = async () => {
       try {
-        const initialCleanPhone = normalizeIndianMobile(currentUser.phone);
+        const serverSession = await checkCustomerServerSession();
+        if (cancelled) return;
+        hasHydratedCustomerOnMountRef.current = true;
 
-        if (customerFlowStep === 'AUTH' || !initialCleanPhone) {
-          const serverSession = await checkCustomerServerSession();
-          if (cancelled || !serverSession.authenticated || !serverSession.phone) return;
-
-          const cleanPhone = normalizeIndianMobile(serverSession.phone);
-          if (!cleanPhone) return;
-
-          const [dbProfile, addrRes] = await Promise.all([
-            fetchCustomerProfileFromSupabase(cleanPhone),
-            fetchAddressesFromSupabase(),
-          ]);
-          if (cancelled || localStorage.getItem('om_customer_session')) return;
-
-          const dbAddresses = addrRes.success ? addrRes.addresses : [];
-          const resolvedName = dbProfile?.name?.trim() || '';
-          const shouldEnterShop = Boolean(resolvedName || dbAddresses.length > 0);
-          const restoredUser: User = {
-            id: dbProfile?.id || serverSession.customerId || `user-${cleanPhone}`,
-            name: resolvedName,
-            phone: cleanPhone,
-            role: Role.CUSTOMER,
-            walletBalance: Math.max(0, Number(dbProfile?.walletBalance || 0)),
-            outstandingBalance: Number(dbProfile?.outstandingBalance || 0),
-            codOrderCount: Number(dbProfile?.codOrderCount || 0),
-            addresses: dbAddresses,
-            createdAt: dbProfile?.createdAt || new Date().toISOString(),
-            isDatabaseVerified: Boolean(dbProfile?.id || serverSession.customerId),
-          };
-
-          setCurrentUser(restoredUser);
-          setActiveRoleState(Role.CUSTOMER);
-          const defaultAddr = dbAddresses.find((a) => a.isDefault) || dbAddresses[0];
-          setSelectedAddressId(defaultAddr?.id || null);
-          setCart(loadCustomerCart(cleanPhone));
-          setCustomerFlowStep(shouldEnterShop ? 'SHOP' : 'PROFILE');
-
-          try {
-            localStorage.setItem(
-              `om_profile_${cleanPhone}`,
-              JSON.stringify({ ...restoredUser, addresses: [] })
-            );
-            localStorage.setItem(
-              'om_customer_session',
-              JSON.stringify({
-                phone: cleanPhone,
-                role: Role.CUSTOMER,
-                profileCompleted: shouldEnterShop,
-              })
-            );
-          } catch {}
+        if (!serverSession.authenticated || !serverSession.phone) {
+          resetStaleCustomerClientSession();
           return;
         }
 
-        if (!currentUser.isDatabaseVerified || !currentUser.name || !currentUser.id || currentUser.id.startsWith('user-')) {
-          const dbProfile = await fetchCustomerProfileFromSupabase(initialCleanPhone);
-          if (cancelled || !dbProfile) return;
-
-          setCurrentUser((prev) => {
-            if (normalizeIndianMobile(prev.phone) !== initialCleanPhone) return prev;
-            const merged: User = {
-              ...prev,
-              id: dbProfile.id || prev.id,
-              name: prev.name?.trim() || dbProfile.name?.trim() || '',
-              walletBalance: Math.max(prev.walletBalance || 0, Number(dbProfile.walletBalance || 0)),
-              outstandingBalance: dbProfile.outstandingBalance ?? prev.outstandingBalance ?? 0,
-              codOrderCount: dbProfile.codOrderCount ?? prev.codOrderCount ?? 0,
-              createdAt: dbProfile.createdAt || prev.createdAt,
-              isDatabaseVerified: true,
-            };
-            try {
-              localStorage.setItem(
-                `om_profile_${initialCleanPhone}`,
-                JSON.stringify({ ...merged, addresses: [] })
-              );
-            } catch {}
-            return merged;
-          });
+        const cleanPhone = normalizeIndianMobile(serverSession.phone);
+        if (!cleanPhone) {
+          resetStaleCustomerClientSession();
+          return;
         }
+
+        setAddressesLoading(true);
+        setAddressesError(null);
+
+        const [dbProfile, addrRes] = await Promise.all([
+          fetchCustomerProfileFromSupabase(cleanPhone, { includeLedger: false }),
+          fetchAddressesFromSupabase(),
+        ]);
+        if (cancelled) return;
+        setAddressesLoading(false);
+
+        if (!addrRes.success) {
+          setAddressesError(addrRes.error || 'Failed to load delivery addresses.');
+        }
+
+        const dbAddresses = addrRes.success ? addrRes.addresses : [];
+        const resolvedName = dbProfile?.name?.trim() || '';
+        const shouldEnterShop = Boolean(resolvedName || dbAddresses.length > 0);
+        const restoredUser: User = {
+          id: dbProfile?.id || serverSession.customerId || `user-${cleanPhone}`,
+          name: resolvedName,
+          phone: cleanPhone,
+          role: Role.CUSTOMER,
+          walletBalance: Math.max(0, Number(dbProfile?.walletBalance || 0)),
+          outstandingBalance: Number(dbProfile?.outstandingBalance || 0),
+          codOrderCount: Number(dbProfile?.codOrderCount || 0),
+          addresses: dbAddresses,
+          createdAt: dbProfile?.createdAt || new Date().toISOString(),
+          isDatabaseVerified: Boolean(dbProfile?.id || serverSession.customerId),
+        };
+
+        setCurrentUser(restoredUser);
+        setActiveRoleState(Role.CUSTOMER);
+        const defaultAddr = dbAddresses.find((a) => a.isDefault) || dbAddresses[0];
+        setSelectedAddressId(defaultAddr?.id || null);
+        setCart(loadCustomerCart(cleanPhone));
+        setCustomerFlowStep(shouldEnterShop ? 'SHOP' : 'PROFILE');
+
+        try {
+          localStorage.setItem(
+            `om_profile_${cleanPhone}`,
+            JSON.stringify({ ...restoredUser, addresses: [] })
+          );
+          localStorage.setItem(
+            'om_customer_session',
+            JSON.stringify({
+              phone: cleanPhone,
+              role: Role.CUSTOMER,
+              profileCompleted: shouldEnterShop,
+            })
+          );
+        } catch {}
       } catch {
-        // Keep existing cached session gracefully if offline
+        setAddressesLoading(false);
+        // On check failure, do not auto-create session; stay safely in AUTH if unverified
       }
     };
 
@@ -3488,7 +3686,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [isSupabaseConfigured, activeRole, isVerifyingAdminSession, shopkeeperLoginRedirect, resetStaleCustomerClientSession]);
 
   const persistLocalOfflineAddresses = (updatedUser: User) => {
     if (isSupabaseConfigured) return;
@@ -4025,10 +4223,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const cleanPhone = phone.replace(/\D/g, '');
 
     if (role === Role.SHOPKEEPER) {
+      const verified = await checkAdminSession();
+      if (!verified) {
+        isAdminSessionValidRef.current = false;
+        setIsAdminSessionValid(false);
+        setActiveRoleState(Role.CUSTOMER);
+        setShopkeeperLoginRedirect(true);
+        throw new Error('Shopkeeper session verification failed. Please log in again.');
+      }
       const shopkeeper = users.find((u) => u.role === Role.SHOPKEEPER) || INITIAL_USERS[0];
       setCurrentUser(shopkeeper);
       setActiveRoleState(Role.SHOPKEEPER);
       setCustomerFlowStep('SHOP');
+      setShopkeeperLoginRedirect(false);
       localStorage.setItem(
         'om_customer_session',
         JSON.stringify({
@@ -4085,7 +4292,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
 
       const dbAddresses = addrRes.success ? addrRes.addresses : [];
-      const dbUserProfile = await fetchCustomerProfileFromSupabase(cleanPhone10);
+      const dbUserProfile = serverAuth.user
+        ? null
+        : await fetchCustomerProfileFromSupabase(cleanPhone10, { includeLedger: false });
 
       const resolvedName =
         serverAuth.user?.name?.trim() || dbUserProfile?.name?.trim() || name?.trim() || '';
@@ -4098,7 +4307,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const resolvedOutstanding = Number(
         dbUserProfile?.outstandingBalance ??
           serverAuth.user?.outstandingBalance ??
-          calculateCustomerOutstanding(orders, cleanPhone10)
+          0
       );
 
       const hasExistingProfileData = Boolean(resolvedName || dbAddresses.length > 0);
@@ -4117,6 +4326,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isDatabaseVerified: true,
       };
 
+      hasHydratedCustomerOnMountRef.current = true;
       setCurrentUser(finalUser);
       setActiveRoleState(Role.CUSTOMER);
       const defaultAddr = dbAddresses.find((a) => a.isDefault) || dbAddresses[0];
@@ -4151,13 +4361,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return [...prev, cachedProfile];
       });
 
-      fetchCustomerOrdersFromSupabase(finalUser.id, cleanPhone10).then((dbOrders) => {
-        if (dbOrders !== null) {
-          setOrders(dbOrders.length === 0 ? [] : dbOrders);
-        }
-      });
       refreshProducts();
-      refreshCustomerWallet();
 
       setCustomerFlowStep(shouldEnterShop ? 'SHOP' : 'PROFILE');
       notifyShopkeeperCustomerLogin(finalUser);
@@ -4323,10 +4527,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const logout = () => {
+    hasHydratedCustomerOnMountRef.current = false;
     localStorage.removeItem('om_customer_session');
+    localStorage.removeItem('om_current_user');
     logoutCustomerServerSession();
     setCurrentUser(BLANK_CUSTOMER);
     setCart([]);
+    setOrders([]);
+    setWalletTransactions([]);
     setActiveRoleState(Role.CUSTOMER);
     setSelectedAddressId(null);
     setAddressesError(null);
@@ -4402,8 +4610,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         logout,
         isSupabaseConfigured,
         refreshOrders,
+        refreshCustomerWallet,
         refreshProducts,
         isAdminSessionValid,
+        isVerifyingAdminSession,
+        shopkeeperLoginRedirect,
+        clearShopkeeperLoginRedirect,
         checkAdminSession,
         logoutAdminSession,
         walletTransactions,

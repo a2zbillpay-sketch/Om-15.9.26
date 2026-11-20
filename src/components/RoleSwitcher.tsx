@@ -4,7 +4,7 @@ import { Role } from '../types';
 import { AdminLoginModal } from './AdminLoginModal';
 
 export const RoleSwitcher: React.FC = () => {
-  const { activeRole, setActiveRole, isAdminSessionValid, checkAdminSession } = useApp();
+  const { activeRole, setActiveRole, checkAdminSession } = useApp();
   const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
 
   const roles: { role: Role; label: string }[] = [
@@ -15,7 +15,7 @@ export const RoleSwitcher: React.FC = () => {
   const handleRoleClick = async (role: Role) => {
     if (role === Role.SHOPKEEPER) {
       // Must verify server session before activating Shopkeeper UI
-      const isValid = isAdminSessionValid || (await checkAdminSession());
+      const isValid = await checkAdminSession();
       if (!isValid) {
         /* ===== TEMPORARY DEV ADMIN LOGIN BYPASS (REMOVE TO RESTORE STRICT DEV PW) ===== */
         if (import.meta.env.DEV) {
@@ -70,9 +70,12 @@ export const RoleSwitcher: React.FC = () => {
       <AdminLoginModal
         isOpen={isLoginModalOpen}
         onClose={() => setIsLoginModalOpen(false)}
-        onSuccess={() => {
-          setIsLoginModalOpen(false);
-          setActiveRole(Role.SHOPKEEPER);
+        onSuccess={async () => {
+          const isValid = await checkAdminSession();
+          if (isValid) {
+            setIsLoginModalOpen(false);
+            setActiveRole(Role.SHOPKEEPER);
+          }
         }}
       />
     </>

@@ -131,7 +131,10 @@ export function lookupProductByBarcode(
 
   // Exact match (case-insensitive for safety, preserving leading zeros and exact length)
   const matches = products.filter(
-    (p) => p.barcode && p.barcode.trim().toLowerCase() === targetBarcode.toLowerCase()
+    (p) =>
+      (p.barcode && p.barcode.trim().toLowerCase() === targetBarcode.toLowerCase()) ||
+      (Array.isArray(p.variants) &&
+        p.variants.some((v) => v.barcode && v.barcode.trim().toLowerCase() === targetBarcode.toLowerCase()))
   );
 
   if (matches.length === 1) {
@@ -264,7 +267,7 @@ export function normalizeAndValidateVariant(
   // Stock Quantity (defaults to 0 if left empty)
   const stockQuantity =
     raw.stockQuantity !== undefined && raw.stockQuantity !== null && String(raw.stockQuantity).trim() !== ''
-      ? Math.max(0, Number(raw.stockQuantity))
+      ? Math.max(0, Math.floor(Number(raw.stockQuantity) || 0))
       : 0;
 
   // Max Order Limit (defaults to 12 if left empty)
@@ -302,7 +305,13 @@ export function normalizeAndValidateVariant(
   }
 
   const barcodeValidation = normalizeAndValidateBarcode(raw.barcode);
-  const variantBarcode = barcodeValidation.valid ? barcodeValidation.barcode : null;
+  if (!barcodeValidation.valid) {
+    return {
+      valid: false,
+      error: `Variant #${index + 1}: ${barcodeValidation.error || 'Invalid barcode format.'}`,
+    };
+  }
+  const variantBarcode = barcodeValidation.barcode;
   const variantImageUrl = raw.imageUrl || raw.image_url ? String(raw.imageUrl || raw.image_url).trim() : undefined;
   const purchasePrice =
     raw.purchasePrice !== undefined && raw.purchasePrice !== null && !isNaN(Number(raw.purchasePrice))
@@ -620,6 +629,12 @@ export async function saveProductWithCascadeSync(
             .upsert(variantsPayload, { onConflict: 'id' });
 
           if (varInsert.error) {
+            if (varInsert.error.code === '23505') {
+              return {
+                success: false,
+                error: 'Duplicate variant barcode detected. Each variant must have a unique barcode.',
+              };
+            }
             // Strip any optional columns not yet added to PostgreSQL table
             const stripped = variantsPayload.map((row) => {
               const r: Record<string, any> = { ...row };
@@ -629,8 +644,49 @@ export async function saveProductWithCascadeSync(
               if (varInsert.error?.message?.includes('display_order')) delete r.display_order;
               return r;
             });
-            await supabaseClient.from('product_variants').upsert(stripped, { onConflict: 'id' });
+            const retryInsert = await supabaseClient.from('product_variants').upsert(stripped, { onConflict: 'id' });
+            if (retryInsert.error && retryInsert.error.code === '23505') {
+              return {
+                success: false,
+                error: 'Duplicate variant barcode detected. Each variant must have a unique barcode.',
+              };
+            }
           }
+        }
+
+        // 4. Optional: Sync relational tiered_prices table for incoming & removed variants
+        try {
+          const incomingVarIds = incomingVariants.map((v) => v.id);
+          const allAffectedVarIds = [...removedVarIds, ...incomingVarIds];
+          if (allAffectedVarIds.length > 0) {
+            await supabaseClient
+              .from('tiered_prices')
+              .delete()
+              .in('variant_id', allAffectedVarIds);
+          }
+
+          const allTieredRows: any[] = [];
+          for (const v of incomingVariants) {
+            if (Array.isArray(v.tieredPrices) && v.tieredPrices.length > 0) {
+              for (const tp of v.tieredPrices) {
+                allTieredRows.push({
+                  id: tp.id || `tp-${v.id}-${tp.minQty}-${Date.now()}`,
+                  variant_id: v.id,
+                  min_qty: Number(tp.minQty),
+                  max_qty: tp.maxQty !== undefined && tp.maxQty !== null ? Number(tp.maxQty) : 9999,
+                  unit_price: Number(tp.unitPrice),
+                });
+              }
+            }
+          }
+
+          if (allTieredRows.length > 0) {
+            await supabaseClient
+              .from('tiered_prices')
+              .upsert(allTieredRows, { onConflict: 'id' });
+          }
+        } catch {
+          // tiered_prices table not available; wholesale_tier_discount JSONB preserves slabs
         }
       }
     } catch {
@@ -659,6 +715,11 @@ export async function deleteProductWithCascade(
   }
 
   try {
+    try {
+      await supabaseClient.from('product_variants').delete().eq('product_id', productId);
+    } catch {
+      // Fallback relies on ON DELETE CASCADE if direct delete isn't applicable
+    }
     const { error } = await supabaseClient.from('products').delete().eq('id', productId);
     if (error) {
       return { success: false, error: error.message };

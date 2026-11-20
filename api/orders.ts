@@ -743,20 +743,39 @@ export async function processCreateOrderRequest(
   }
 
   // Check customer active status in database (resolve via phone, UUID, or phone variants)
-  let { data: dbCustomer } = await supabase
-    .from('users')
-    .select('*')
-    .eq('phone', cleanPhone)
-    .maybeSingle();
+  let dbCustomer: any = null;
+  let dbCustomerLookupError: any = null;
 
-  if (!dbCustomer && customerSession?.customerId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(customerSession.customerId)) {
-    const byIdRes = await supabase
+  try {
+    const byPhoneRes = await supabase
       .from('users')
       .select('*')
-      .eq('id', customerSession.customerId)
+      .eq('phone', cleanPhone)
       .maybeSingle();
-    if (byIdRes?.data) {
-      dbCustomer = byIdRes.data;
+    if (byPhoneRes?.error) {
+      dbCustomerLookupError = byPhoneRes.error;
+    } else if (byPhoneRes?.data) {
+      dbCustomer = byPhoneRes.data;
+    }
+  } catch (err: any) {
+    dbCustomerLookupError = err;
+  }
+
+  if (!dbCustomer && customerSession?.customerId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(customerSession.customerId)) {
+    try {
+      const byIdRes = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', customerSession.customerId)
+        .maybeSingle();
+      if (byIdRes?.error) {
+        dbCustomerLookupError = dbCustomerLookupError || byIdRes.error;
+      } else if (byIdRes?.data) {
+        dbCustomer = byIdRes.data;
+        dbCustomerLookupError = null;
+      }
+    } catch (err: any) {
+      dbCustomerLookupError = dbCustomerLookupError || err;
     }
   }
 
@@ -767,11 +786,14 @@ export async function processCreateOrderRequest(
         .select('*')
         .in('phone', [cleanPhone, `+91${cleanPhone}`, `91${cleanPhone}`, `0${cleanPhone}`])
         .limit(1);
-      if (Array.isArray(byVarRes?.data) && byVarRes.data.length > 0) {
+      if (byVarRes?.error) {
+        dbCustomerLookupError = dbCustomerLookupError || byVarRes.error;
+      } else if (Array.isArray(byVarRes?.data) && byVarRes.data.length > 0) {
         dbCustomer = byVarRes.data[0];
+        dbCustomerLookupError = null;
       }
-    } catch {
-      // Non-fatal fallback for minimal query mocks
+    } catch (err: any) {
+      dbCustomerLookupError = dbCustomerLookupError || err;
     }
   }
 
@@ -1190,6 +1212,137 @@ export async function processCreateOrderRequest(
 
   const finalPayable = Math.max(0, Math.round((orderFinalAmount - walletAmountUsed) * 100) / 100);
 
+  // Authoritative Previous COD Outstanding Verification (never trust client body.previousOutstanding)
+  let authoritativePreviousOutstanding = 0;
+
+  if (!isAdvance) {
+    if (!dbCustomer && dbCustomerLookupError) {
+      return {
+        statusCode: 500,
+        payload: {
+          success: false,
+          error: 'Failed to verify customer profile from database. Unable to process COD order.',
+        },
+      };
+    }
+
+    if (!isShopkeeper && !dbCustomer) {
+      return {
+        statusCode: 500,
+        payload: {
+          success: false,
+          error: 'Customer profile is missing or incomplete in database. Unable to verify COD outstanding balance.',
+        },
+      };
+    }
+
+    const lateFeeRes = await enforceOverdueCodLateFees(supabase, { phone: cleanPhone });
+    if (lateFeeRes.errors.length > 0) {
+      return {
+        statusCode: 500,
+        payload: {
+          success: false,
+          error: 'Unable to verify overdue COD charges against database. Please try again.',
+        },
+      };
+    }
+
+    const phoneVariants = [cleanPhone, `+91${cleanPhone}`, `91${cleanPhone}`, `0${cleanPhone}`];
+    let custOrdersData: any[] | null = null;
+    let custOrdersErr: any = null;
+
+    try {
+      const custOrdersRes = await supabase
+        .from('orders')
+        .select('*')
+        .in('customer_phone', phoneVariants);
+      custOrdersData = custOrdersRes?.data ?? null;
+      custOrdersErr = custOrdersRes?.error ?? null;
+    } catch (err: any) {
+      custOrdersErr = err;
+    }
+
+    if (custOrdersErr || !Array.isArray(custOrdersData)) {
+      return {
+        statusCode: 500,
+        payload: {
+          success: false,
+          error: 'Failed to verify previous COD outstanding balance from database. Please try again.',
+        },
+      };
+    }
+
+    const customerCodOrders = custOrdersData.filter((o: any) => {
+      if (!o) return false;
+      if (requestedOrderId && o.id === requestedOrderId) return false;
+      const oPhone = String(o.customer_phone || '').replace(/\D/g, '').slice(-10);
+      if (oPhone && oPhone !== cleanPhone) return false;
+      if (String(o.status || '').toUpperCase() === 'CANCELLED') return false;
+      if (String(o.payment_method || '').toUpperCase() !== 'COD') return false;
+      return true;
+    });
+
+    const eligibleUnpaidCodOrders = customerCodOrders.filter((o: any) => {
+      const pStatus = String(o.payment_status || '').toUpperCase();
+      if (o.is_paid === true || pStatus === 'RECEIVED' || pStatus === 'PAID') return false;
+
+      const { meta } = parseCodMetaFromNotes(o.notes);
+      const statusUpper = String(o.status || '').toUpperCase();
+      const codCollected = Number(meta?.codCollected ?? 0) || 0;
+
+      const isUnpaidPending =
+        statusUpper === 'ORDER_PENDING' ||
+        (statusUpper !== 'DELIVERED' && codCollected <= 0);
+      if (isUnpaidPending) return false;
+
+      return true;
+    });
+
+    if (eligibleUnpaidCodOrders.length > 0) {
+      let sumOutstanding = 0;
+      for (const o of eligibleUnpaidCodOrders) {
+        const { meta } = parseCodMetaFromNotes(o.notes);
+        const rawBill = o.final_total ?? o.subtotal;
+        const bill = Number(rawBill);
+        const collected = Number(meta?.codCollected ?? 0);
+        if (
+          rawBill === null ||
+          rawBill === undefined ||
+          !Number.isFinite(bill) ||
+          !Number.isFinite(collected)
+        ) {
+          return {
+            statusCode: 500,
+            payload: {
+              success: false,
+              error: 'Incomplete COD order record in database. Unable to verify previous outstanding balance.',
+            },
+          };
+        }
+        sumOutstanding += Math.max(0, bill - collected);
+      }
+      authoritativePreviousOutstanding = Math.round(sumOutstanding * 100) / 100;
+    } else if (customerCodOrders.length === 0 && dbCustomer) {
+      const rawUserOutstanding = dbCustomer.outstanding_balance;
+      if (rawUserOutstanding !== undefined && rawUserOutstanding !== null) {
+        const parsedUserOutstanding = Number(rawUserOutstanding);
+        if (!Number.isFinite(parsedUserOutstanding)) {
+          return {
+            statusCode: 500,
+            payload: {
+              success: false,
+              error: 'Incomplete customer outstanding balance record in database. Unable to verify COD order.',
+            },
+          };
+        }
+        authoritativePreviousOutstanding = Math.max(
+          0,
+          Math.round(parsedUserOutstanding * 100) / 100
+        );
+      }
+    }
+  }
+
   // Construct verified order payload
   const orderId = body.orderId || `ord-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
   const orderNumber = body.orderNumber || `OM-${Math.floor(10000 + Math.random() * 90000)}`;
@@ -1199,7 +1352,7 @@ export async function processCreateOrderRequest(
     codCharge,
     codLateFeeApplied: false,
     codLateFeeAmount: 0,
-    prevOutstanding: Number(body.previousOutstanding) || 0,
+    prevOutstanding: authoritativePreviousOutstanding,
     totalPayable: isAdvance ? finalPayable : orderFinalAmount,
     walletAmountUsed,
     previousOnlinePaid: isAdvance ? finalPayable : 0,
@@ -1521,7 +1674,7 @@ export async function processCreateOrderRequest(
         paymentStatus: isAdvance ? 'RECEIVED' : 'PENDING',
         isPaid: isAdvance,
         createdAt: insertPayload.created_at,
-        previousOutstanding: Number(body.previousOutstanding) || 0,
+        previousOutstanding: authoritativePreviousOutstanding,
         subtotal: verifiedSubtotal,
         deliveryFee,
         codCharge,

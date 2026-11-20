@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { X, Wallet } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { Role } from '../types';
 
 interface ReferralWalletModalProps {
   isOpen: boolean;
@@ -8,7 +9,22 @@ interface ReferralWalletModalProps {
 }
 
 export const ReferralWalletModal: React.FC<ReferralWalletModalProps> = ({ isOpen, onClose }) => {
-  const { currentUser, customerOutstanding, walletTransactions } = useApp();
+  const {
+    currentUser,
+    activeRole,
+    isSupabaseConfigured,
+    customerOutstanding,
+    walletTransactions,
+    refreshCustomerWallet,
+    refreshOrders,
+  } = useApp();
+
+  useEffect(() => {
+    if (isOpen && isSupabaseConfigured && activeRole === Role.CUSTOMER && currentUser.phone) {
+      refreshCustomerWallet().catch(() => {});
+      refreshOrders().catch(() => {});
+    }
+  }, [isOpen]);
 
   if (!isOpen) return null;
 

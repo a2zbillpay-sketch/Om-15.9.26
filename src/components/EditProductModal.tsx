@@ -482,12 +482,13 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
             : undefined,
         barcode: v.barcode ? String(v.barcode).trim() : null,
         imageUrl: v.imageUrl ? String(v.imageUrl).trim() : undefined,
-        stockQuantity: Number(v.stockQuantity) || 0,
+        stockQuantity: Math.max(0, Math.floor(Number(v.stockQuantity) || 0)),
         maxOrderLimit: Number(v.maxOrderLimit || 12),
         tieredPrices: validTieredPrices,
       };
     });
 
+    const seenVariantBarcodes = new Set<string>();
     for (let i = 0; i < processedVariants.length; i++) {
       const v = processedVariants[i];
       if (!v.packSize || Number(v.packSize) <= 0) {
@@ -519,6 +520,43 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({
         setIsSaving(false);
         isSubmittingRef.current = false;
         return;
+      }
+      if (v.purchasePrice !== undefined && (isNaN(v.purchasePrice) || v.purchasePrice < 0)) {
+        setVariantError(`Variant #${i + 1}: Purchase Price cannot be negative.`);
+        setIsSaving(false);
+        isSubmittingRef.current = false;
+        return;
+      }
+      if (v.barcode) {
+        const vBarcodeCheck = normalizeAndValidateBarcode(v.barcode);
+        if (!vBarcodeCheck.valid) {
+          setVariantError(`Variant #${i + 1}: ${vBarcodeCheck.error || 'Invalid barcode format.'}`);
+          setIsSaving(false);
+          isSubmittingRef.current = false;
+          return;
+        }
+        const normalizedKey = (vBarcodeCheck.barcode || '').toLowerCase();
+        if (seenVariantBarcodes.has(normalizedKey)) {
+          setVariantError(`Variant #${i + 1}: Duplicate barcode "${vBarcodeCheck.barcode}" within the same product.`);
+          setIsSaving(false);
+          isSubmittingRef.current = false;
+          return;
+        }
+        seenVariantBarcodes.add(normalizedKey);
+        const catalogConflict = existingProducts.find(
+          (p) =>
+            p.id !== product.id &&
+            ((p.barcode && p.barcode.trim().toLowerCase() === normalizedKey) ||
+              (Array.isArray(p.variants) &&
+                p.variants.some((ov) => ov.barcode && ov.barcode.trim().toLowerCase() === normalizedKey)))
+        );
+        if (catalogConflict) {
+          setVariantError(`Variant #${i + 1}: Barcode "${vBarcodeCheck.barcode}" is already assigned to "${catalogConflict.name}".`);
+          setIsSaving(false);
+          isSubmittingRef.current = false;
+          return;
+        }
+        v.barcode = vBarcodeCheck.barcode;
       }
     }
 

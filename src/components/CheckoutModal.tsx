@@ -23,6 +23,7 @@ import {
   PaymentMethod,
   Order,
   GoogleLocation,
+  Role,
   formatFullAddress,
   normalizeAddressLabel,
 } from '../types';
@@ -47,11 +48,15 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
 }) => {
   const {
     currentUser,
+    activeRole,
+    isSupabaseConfigured,
     cart,
     userAddresses,
     addressesLoading,
     addressesError,
     refreshAddresses,
+    refreshCustomerWallet,
+    refreshOrders,
     addAddress,
     selectedAddressId,
     setSelectedAddressId,
@@ -110,6 +115,10 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
       setIsSimulatingRazorpay(false);
     } else {
       getOrCreateCheckoutAttempt();
+      if (isSupabaseConfigured && activeRole === Role.CUSTOMER && currentUser.phone) {
+        refreshCustomerWallet().catch(() => {});
+        refreshOrders().catch(() => {});
+      }
     }
   }, [isOpen]);
 

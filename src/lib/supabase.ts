@@ -390,7 +390,8 @@ function isWalletLedgerEntry(r: any): boolean {
  */
 export async function getCustomerWalletBalanceFromLedger(
   customerId?: string,
-  phone?: string
+  phone?: string,
+  options?: { skipLocalFallback?: boolean }
 ): Promise<number> {
   const { allIds, cleanPhone } = await resolveCustomerIdentityAliases(customerId, phone);
   if (allIds.length === 0) return 0;
@@ -404,8 +405,8 @@ export async function getCustomerWalletBalanceFromLedger(
         .or(filters.join(','))
         .order('date', { ascending: true }); // chronological order
 
-      if (!error && ledgerRows && ledgerRows.length > 0) {
-        const walletRows = ledgerRows.filter(isWalletLedgerEntry);
+      if (!error) {
+        const walletRows = (ledgerRows || []).filter(isWalletLedgerEntry);
 
         if (walletRows.length > 0) {
           // Authoritative replay of all wallet transactions (credits - debits)
@@ -420,13 +421,21 @@ export async function getCustomerWalletBalanceFromLedger(
           }
           return Math.round(running * 100) / 100;
         }
+        return 0;
       }
     } catch (err) {
       console.warn('Error querying ledger for wallet balance:', err);
     }
+    if (options?.skipLocalFallback) {
+      return 0;
+    }
   }
 
-  // Fallback to localStorage cache only if offline or no Supabase ledger rows exist
+  if (options?.skipLocalFallback) {
+    return 0;
+  }
+
+  // Fallback to localStorage cache only when Supabase client is not configured/offline
   if (typeof localStorage !== 'undefined') {
     try {
       const txStr = localStorage.getItem('om_wallet_transactions');
@@ -504,6 +513,76 @@ export async function fetchWalletTransactionsFromSupabase(
     });
   } catch (err) {
     console.warn('Error fetching wallet transactions from Supabase:', err);
+    return null;
+  }
+}
+
+/**
+ * Fetches both authoritative wallet balance and wallet transaction history in a single ledger query.
+ * Never falls back to localStorage cache when querying live database.
+ */
+export async function fetchCustomerWalletSummaryFromSupabase(
+  customerId?: string,
+  phone?: string
+): Promise<{ balance: number; transactions: WalletTransaction[] } | null> {
+  if (!supabase) return null;
+  const { allIds, cleanPhone } = await resolveCustomerIdentityAliases(customerId, phone);
+  if (allIds.length === 0) return null;
+
+  try {
+    const filters = allIds.map((id) => `customer_id.eq.${id}`);
+    const { data: rows, error } = await supabase
+      .from('ledger')
+      .select('*')
+      .or(filters.join(','))
+      .order('date', { ascending: true });
+
+    if (error || !rows) return null;
+
+    const walletRows = rows.filter(isWalletLedgerEntry);
+    let balance = 0;
+
+    if (walletRows.length > 0) {
+      for (const tx of walletRows) {
+        const amt = Number(tx.amount) || 0;
+        if (tx.type === 'CREDIT') {
+          balance += amt;
+        } else if (tx.type === 'DEBIT') {
+          balance = Math.max(0, balance - amt);
+        }
+      }
+      balance = Math.round(balance * 100) / 100;
+    } else if (cleanPhone) {
+      const { user: dbUser } = await findCustomerByNormalizedPhone(cleanPhone, 'CUSTOMER');
+      if (dbUser) {
+        balance = Math.max(0, Number(dbUser.wallet_balance || 0));
+      }
+    }
+
+    const transactions: WalletTransaction[] = [...walletRows]
+      .reverse()
+      .map((r) => {
+        let orderNum: string | undefined = undefined;
+        const match = r.description?.match(/#([A-Z0-9-]+)/i);
+        if (match) orderNum = match[1];
+
+        return {
+          id: r.id,
+          userId: r.customer_id,
+          userPhone: cleanPhone || r.customer_id,
+          orderId: r.order_id || undefined,
+          orderNumber: orderNum,
+          type: r.type as 'CREDIT' | 'DEBIT',
+          amount: Number(r.amount) || 0,
+          balanceAfter: Number(r.balance_after) || 0,
+          description: r.description,
+          createdAt: r.date,
+        };
+      });
+
+    return { balance, transactions };
+  } catch (err) {
+    console.warn('Error fetching customer wallet summary from Supabase:', err);
     return null;
   }
 }
@@ -1323,7 +1402,10 @@ export async function saveAddressToSupabase(address: Address): Promise<boolean> 
  * Fetch customer profile (Name, Address, Landmark, Contact Number) from Supabase by phone.
  * Queries public.users filtering strictly by phone AND role = CUSTOMER.
  */
-export async function fetchCustomerProfileFromSupabase(phone: string): Promise<User | null> {
+export async function fetchCustomerProfileFromSupabase(
+  phone: string,
+  options?: { includeLedger?: boolean }
+): Promise<User | null> {
   if (!supabase) return null;
   const cleanPhone = normalizeIndianMobile(phone);
   if (!INDIAN_MOBILE_REGEX.test(cleanPhone)) return null;
@@ -1361,7 +1443,10 @@ export async function fetchCustomerProfileFromSupabase(phone: string): Promise<U
       : [];
 
     const dbOutstanding = Number(dbUser.outstanding_balance || 0);
-    const ledgerCredits = await getCustomerWalletBalanceFromLedger(dbUser.id, cleanPhone);
+    const includeLedger = options?.includeLedger !== false;
+    const ledgerCredits = includeLedger
+      ? await getCustomerWalletBalanceFromLedger(dbUser.id, cleanPhone, { skipLocalFallback: true })
+      : 0;
     const dbCredits = Math.max(Number(dbUser.wallet_balance || 0), ledgerCredits);
 
     return {
@@ -2445,8 +2530,66 @@ export async function fetchProductsFromSupabase(): Promise<Product[] | null> {
       // Prioritize explicit category_id or category from database
       const categoryId = p.category_id || p.category || '';
 
+      // Build lookup map of embedded JSONB variants so purchasePrice, discount, lowStockThreshold & tieredPrices
+      // are preserved even when relational product_variants select omits restricted/optional columns
+      const embeddedVariantById = new Map<string, any>();
+      if (Array.isArray(p.wholesale_tier_discount)) {
+        for (const ev of p.wholesale_tier_discount) {
+          if (ev && ev.id) {
+            embeddedVariantById.set(String(ev.id), ev);
+          }
+        }
+      }
+
       // 1. Use relational variants if resolved
-      let variants: ProductVariant[] = variantsByProduct[p.id] || [];
+      let variants: ProductVariant[] = (variantsByProduct[p.id] || []).map((relV) => {
+        const embedded = embeddedVariantById.get(relV.id);
+        if (!embedded) return relV;
+
+        const embeddedTieredPrices: TieredPrice[] = Array.isArray(embedded.tieredPrices)
+          ? embedded.tieredPrices.map((tp: any, tpIdx: number) => ({
+              id: tp.id || `tp_${relV.id}_${tpIdx}`,
+              variantId: tp.variantId || tp.variant_id || relV.id,
+              minQty: Number(tp.minQty ?? tp.min_qty ?? 1),
+              maxQty: Number(tp.maxQty ?? tp.max_qty ?? 9999),
+              unitPrice: Number(tp.unitPrice ?? tp.unit_price ?? relV.baseSellingPrice ?? 0),
+            }))
+          : [];
+
+        const resolvedPurchasePrice =
+          relV.purchasePrice !== undefined
+            ? relV.purchasePrice
+            : embedded.purchasePrice !== undefined && embedded.purchasePrice !== null
+            ? Number(embedded.purchasePrice)
+            : embedded.purchase_price !== undefined && embedded.purchase_price !== null
+            ? Number(embedded.purchase_price)
+            : undefined;
+
+        const resolvedDiscount =
+          relV.discount !== undefined
+            ? relV.discount
+            : embedded.discount !== undefined && embedded.discount !== null
+            ? Number(embedded.discount)
+            : undefined;
+
+        const resolvedLowStock =
+          relV.lowStockThreshold !== undefined
+            ? relV.lowStockThreshold
+            : embedded.lowStockThreshold !== undefined && embedded.lowStockThreshold !== null
+            ? Number(embedded.lowStockThreshold)
+            : undefined;
+
+        return {
+          ...relV,
+          purchasePrice: resolvedPurchasePrice,
+          discount: resolvedDiscount,
+          lowStockThreshold: resolvedLowStock,
+          tieredPrices:
+            relV.tieredPrices && relV.tieredPrices.length > 0
+              ? relV.tieredPrices
+              : embeddedTieredPrices,
+        };
+      });
 
       // 2. Otherwise extract from embedded wholesale_tier_discount (JSONB) if it contains variant objects
       if (variants.length === 0 && Array.isArray(p.wholesale_tier_discount) && p.wholesale_tier_discount.length > 0) {
@@ -2480,6 +2623,7 @@ export async function fetchProductsFromSupabase(): Promise<Product[] | null> {
               stockQuantity: Number(v.stockQuantity ?? v.stock_quantity ?? p.stock ?? 0),
               maxOrderLimit: Number(v.maxOrderLimit ?? v.max_order_limit ?? 20),
               tieredPrices: vTieredPrices,
+              lowStockThreshold: v.lowStockThreshold !== undefined && v.lowStockThreshold !== null ? Number(v.lowStockThreshold) : undefined,
               barcode: v.barcode ? String(v.barcode).trim() : null,
               imageUrl: v.imageUrl || v.image_url ? String(v.imageUrl || v.image_url).trim() : undefined,
               displayOrder: typeof v.displayOrder === 'number' ? v.displayOrder : (typeof v.display_order === 'number' ? v.display_order : idx + 1),
@@ -2523,8 +2667,8 @@ export async function fetchProductsFromSupabase(): Promise<Product[] | null> {
         barcode: p.barcode ? String(p.barcode).trim() : null,
         isDiscountExcluded: p.is_discount_excluded ?? false,
         searchKeywords: (p.search_keywords || p.badge || '').trim() || undefined,
-        purchasePrice: p.purchase_price !== undefined ? Number(p.purchase_price) : (variants[0]?.purchasePrice || undefined),
-        discount: p.discount !== undefined ? Number(p.discount) : (variants[0]?.discount || undefined),
+        purchasePrice: p.purchase_price !== undefined && p.purchase_price !== null ? Number(p.purchase_price) : variants[0]?.purchasePrice,
+        discount: p.discount !== undefined && p.discount !== null ? Number(p.discount) : variants[0]?.discount,
         displayOrder: typeof p.display_order === 'number' ? p.display_order : undefined,
         price: p.price !== undefined ? Number(p.price) : (variants[0]?.baseSellingPrice || 0),
         mrp: p.mrp !== undefined ? Number(p.mrp) : (variants[0]?.mrp || 0),

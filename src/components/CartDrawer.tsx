@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   X,
   Trash2,
@@ -16,7 +16,7 @@ import {
   RotateCcw,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { PaymentMethod, PaymentStatus, Order } from '../types';
+import { PaymentMethod, PaymentStatus, Order, Role } from '../types';
 import { getActiveUnitPrice } from '../lib/engine/checkout-calculator';
 import { formatVariantPack } from '../utils/variantFormatter';
 import { ImageLightboxModal } from './ImageLightboxModal';
@@ -54,12 +54,23 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
     saveEditedOrder,
     orders,
     currentUser,
+    activeRole,
+    isSupabaseConfigured,
+    refreshCustomerWallet,
+    refreshOrders,
     repeatLastOrder,
     repeatOrderNotice,
     setRepeatOrderNotice,
   } = useApp();
   const [zoomImage, setZoomImage] = useState<{ url: string; name: string; brand?: string } | null>(null);
   const [isSavingOrder, setIsSavingOrder] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (isOpen && isSupabaseConfigured && activeRole === Role.CUSTOMER && currentUser.phone) {
+      refreshCustomerWallet().catch(() => {});
+      refreshOrders().catch(() => {});
+    }
+  }, [isOpen]);
 
   // Customer past orders
   const customerOrders = useMemo(() => {

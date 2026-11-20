@@ -1250,8 +1250,8 @@ export const AdminDashboard: React.FC = () => {
             ? Number(row.purchasePrice)
             : undefined,
         discount: rowDiscount > 0 ? rowDiscount : undefined,
-        stockQuantity: row.stockQuantity ? Number(row.stockQuantity) : 0,
-        maxOrderLimit: row.maxOrderLimit ? Number(row.maxOrderLimit) : 12,
+        stockQuantity: row.stockQuantity ? Math.max(0, Math.floor(Number(row.stockQuantity) || 0)) : 0,
+        maxOrderLimit: row.maxOrderLimit ? Math.max(1, Math.floor(Number(row.maxOrderLimit) || 12)) : 12,
         tieredPrices,
       };
     });
@@ -2528,9 +2528,12 @@ export const AdminDashboard: React.FC = () => {
                         </span>
                         <button
                           type="button"
-                          onClick={() => {
+                          onClick={async () => {
                             if (window.confirm(`खरोखर हे प्रॉडक्ट हटवायचे आहे का? (${p.name})\nAre you sure you want to delete "${p.name}"? This action cannot be undone.`)) {
-                              deleteProduct(p.id);
+                              const res = await deleteProduct(p.id);
+                              if (res && !res.success) {
+                                setBarcodeLookupError(res.error || `Failed to delete "${p.name}".`);
+                              }
                             }
                           }}
                           className="text-gray-400 hover:text-red-600 transition cursor-pointer p-1 rounded-md hover:bg-red-50"
