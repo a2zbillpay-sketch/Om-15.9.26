@@ -37,13 +37,11 @@ import {
 } from '../lib/engine/checkout-calculator';
 import {
   isSupabaseConfigured,
-  getOrCreateCustomerByPhone,
   fetchCustomerOrdersFromSupabase,
   saveOrderToSupabase,
   fetchAllOrdersForAdmin,
   updateOrderStatusInSupabase,
-  creditCustomerWalletInSupabase,
-  debitCustomerWalletInSupabase,
+  cancelOrderInSupabase,
   fetchCustomerWalletSummaryFromSupabase,
   saveCustomerProfileToSupabase,
   loginCustomerServerSession,
@@ -151,6 +149,20 @@ const saveCustomerCart = (phone: string | undefined, cartItems: CartItem[]): voi
   }
 };
 
+export interface CancelOrderResult {
+  success: boolean;
+  alreadyCancelled?: boolean;
+  refunded?: boolean;
+  refundAmount?: number;
+  walletUsed?: number;
+  onlinePaid?: number;
+  codPaid?: number;
+  stockRestored?: boolean;
+  offlineOnly?: boolean;
+  order?: Order;
+  error?: string;
+}
+
 interface AppContextType {
   currentUser: User;
   setCurrentUser: (user: User) => void;
@@ -237,8 +249,8 @@ interface AppContextType {
     isWalletPayment?: boolean;
     googleLocation?: GoogleLocation;
   }) => Promise<Order>;
-  cancelOrder: (orderId: string, isShopkeeperOverride?: boolean) => boolean;
-  updateOrderStatus: (orderId: string, newStatus: OrderStatus) => { success: boolean; error?: string } | void;
+  cancelOrder: (orderId: string, isShopkeeperOverride?: boolean) => Promise<CancelOrderResult>;
+  updateOrderStatus: (orderId: string, newStatus: OrderStatus) => Promise<{ success: boolean; error?: string }>;
   recordCodCollection: (
     orderId: string,
     collectedAmount: number,
@@ -468,6 +480,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return false;
     }
   });
+
+  const [isAdminSessionValid, setIsAdminSessionValid] = useState<boolean>(false);
+  const isAdminSessionValidRef = useRef<boolean>(false);
 
   const [shopkeeperLoginRedirect, setShopkeeperLoginRedirect] = useState<boolean>(false);
   const clearShopkeeperLoginRedirect = useCallback(() => {
@@ -964,10 +979,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return [];
       }
 
-      // Fetch persistent COD transactions and allocations from backend API
-      const apiData = await fetchCodCollectionsFromApi(
-        isAdminView ? undefined : cleanCustomerPhone
-      );
+      // Fetch persistent COD transactions and allocations from backend API strictly in verified SHOPKEEPER Admin View
+      const canFetchCodCollections =
+        isAdminView &&
+        activeRole === Role.SHOPKEEPER &&
+        (isAdminSessionValid || isAdminSessionValidRef.current) &&
+        !isVerifyingAdminSession;
+      const apiData = canFetchCodCollections ? await fetchCodCollectionsFromApi() : null;
 
       // Preserve rich item definitions and stock status from current orders
       const resolvedFetched = fetchedOrders
@@ -1025,9 +1043,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Synchronize with persistent local COD ledger only in offline mode
+  // Synchronize with persistent local COD ledger only in offline mode with a verified SHOPKEEPER session
   useEffect(() => {
-    if (isSupabaseConfigured) return;
+    if (
+      isSupabaseConfigured !== false ||
+      activeRole !== Role.SHOPKEEPER ||
+      isAdminSessionValid !== true ||
+      isVerifyingAdminSession !== false
+    ) {
+      return;
+    }
     fetchCodCollectionsFromApi()
       .then((apiData) => {
         if (apiData && apiData.success && apiData.ordersMap) {
@@ -1055,7 +1080,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       .catch((err) => {
         console.warn('Initial COD ledger sync notice:', err);
       });
-  }, []);
+  }, [isSupabaseConfigured, activeRole, isAdminSessionValid, isVerifyingAdminSession]);
 
   // Synchronize central product catalog with Supabase
   const refreshProducts = async () => {
@@ -1135,9 +1160,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       refreshProducts();
     }
   }, [isSupabaseConfigured]);
-
-  const [isAdminSessionValid, setIsAdminSessionValid] = useState<boolean>(false);
-  const isAdminSessionValidRef = useRef<boolean>(false);
 
   // Admin-only background refreshes (never trigger unnecessary customer orders/requests fetches on refresh)
   useEffect(() => {
@@ -1566,6 +1588,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setCategories((prev) => [...prev, res.category!]);
         return res;
       }
+      return res;
     }
     setCategories((prev) => [...prev, newCategory]);
     return { success: true, category: newCategory };
@@ -1591,6 +1614,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setCategories((prev) => prev.map((c) => (c.id === id ? res.category! : c)));
         return res;
       }
+      return res;
     }
     setCategories((prev) => prev.map((c) => (c.id === id ? updated : c)));
     return { success: true, category: updated };
@@ -2850,25 +2874,234 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  const cancelOrder = (orderId: string, isShopkeeperOverride: boolean = false): boolean => {
+  const cancelOrder = async (
+    orderId: string,
+    isShopkeeperOverride: boolean = false
+  ): Promise<CancelOrderResult> => {
     const liveOrders = ordersRef.current.length > 0 ? ordersRef.current : orders;
     const target = liveOrders.find((o) => o.id === orderId || o.orderNumber === orderId);
-    if (!target) return false;
 
-    // Check if order is already cancelled or delivered (prevent duplicate/invalid processing)
+    if (target?.status === OrderStatus.DELIVERED) {
+      return { success: false, error: 'Delivered orders cannot be cancelled.' };
+    }
+
+    // Authoritative Server-First Cancellation when Supabase is configured:
+    // Never mutate products, orders, wallet, or localStorage before server confirms success.
+    if (isSupabaseConfigured) {
+      const targetId = target?.id || orderId;
+      const apiRes = await cancelOrderInSupabase(targetId);
+      if (!apiRes.success) {
+        return {
+          success: false,
+          error: apiRes.error || 'Failed to cancel order on server. Please try again.',
+        };
+      }
+
+      const serverOrder = apiRes.order;
+      const resolvedOrder: Order | undefined = serverOrder
+        ? {
+            ...(target || ({} as Order)),
+            ...serverOrder,
+            items:
+              serverOrder.items && serverOrder.items.length > 0
+                ? serverOrder.items
+                : target?.items || [],
+          }
+        : target
+        ? {
+            ...target,
+            status: OrderStatus.CANCELLED,
+            paymentStatus: apiRes.refund?.refunded ? PaymentStatus.REFUNDED : target.paymentStatus,
+            stockDeducted: false,
+            stockRestored: Boolean(apiRes.stockRestored),
+          }
+        : undefined;
+
+      if (resolvedOrder) {
+        setOrders((prev) => {
+          const exists = prev.some(
+            (o) => o.id === resolvedOrder.id || o.orderNumber === resolvedOrder.orderNumber
+          );
+          const updated = exists
+            ? prev.map((o) =>
+                o.id === resolvedOrder.id || o.orderNumber === resolvedOrder.orderNumber
+                  ? resolvedOrder
+                  : o
+              )
+            : [resolvedOrder, ...prev];
+          ordersRef.current = updated;
+          try {
+            localStorage.setItem('om_orders', JSON.stringify(updated));
+          } catch {}
+          return updated;
+        });
+
+        if (resolvedOrder.stockRestored) {
+          markStockRestoredForOrder(resolvedOrder.id, resolvedOrder.orderNumber);
+        }
+      }
+
+      const refundInfo = apiRes.refund;
+      if (refundInfo && refundInfo.refunded && typeof refundInfo.newWalletBalance === 'number') {
+        const targetPhoneClean = (resolvedOrder?.userPhone || '')
+          .replace(/\D/g, '')
+          .slice(-10);
+        const currentPhoneClean = (currentUser.phone || '').replace(/\D/g, '').slice(-10);
+        const matchesCurrentCustomer =
+          !isShopkeeperOverride &&
+          currentUser.role === Role.CUSTOMER &&
+          ((resolvedOrder?.userId && currentUser.id === resolvedOrder.userId) ||
+            (targetPhoneClean && currentPhoneClean === targetPhoneClean));
+
+        if (matchesCurrentCustomer) {
+          setCurrentUser((prev) => {
+            const updatedCurrentUser: User = {
+              ...prev,
+              walletBalance: refundInfo.newWalletBalance,
+            };
+            try {
+              localStorage.setItem(
+                'om_current_user',
+                JSON.stringify({ ...updatedCurrentUser, addresses: [] })
+              );
+              if (currentPhoneClean) {
+                localStorage.setItem(
+                  `om_profile_${currentPhoneClean}`,
+                  JSON.stringify({ ...updatedCurrentUser, addresses: [] })
+                );
+              }
+            } catch {}
+            return updatedCurrentUser;
+          });
+        }
+
+        if (targetPhoneClean || resolvedOrder?.userId) {
+          setUsers((prev) =>
+            prev.map((u) => {
+              const uClean = u.phone ? u.phone.replace(/\D/g, '').slice(-10) : '';
+              if (
+                (resolvedOrder?.userId && u.id === resolvedOrder.userId) ||
+                (targetPhoneClean && uClean === targetPhoneClean)
+              ) {
+                return { ...u, walletBalance: refundInfo.newWalletBalance };
+              }
+              return u;
+            })
+          );
+        }
+
+        if (
+          refundInfo.creditedNow > 0 &&
+          refundInfo.ledgerTransactionId &&
+          resolvedOrder
+        ) {
+          setWalletTransactions((prev) => {
+            if (
+              prev.some(
+                (tx) =>
+                  tx.id === refundInfo.ledgerTransactionId ||
+                  (tx.type === 'CREDIT' && tx.orderId === resolvedOrder.id)
+              )
+            ) {
+              return prev;
+            }
+            const nextTx: WalletTransaction = {
+              id: refundInfo.ledgerTransactionId!,
+              userId: resolvedOrder.userId || currentUser.id,
+              userPhone: resolvedOrder.userPhone || currentUser.phone,
+              orderId: resolvedOrder.id,
+              orderNumber: resolvedOrder.orderNumber,
+              type: 'CREDIT',
+              amount: refundInfo.creditedNow,
+              balanceAfter: refundInfo.newWalletBalance,
+              description:
+                refundInfo.description ||
+                `Refund for Cancelled Order #${resolvedOrder.orderNumber}`,
+              createdAt: new Date().toISOString(),
+            };
+            const updated = [nextTx, ...prev];
+            try {
+              localStorage.setItem('om_wallet_transactions', JSON.stringify(updated));
+            } catch {}
+            return updated;
+          });
+        }
+      }
+
+      // Refresh authoritative server state across orders, catalog stock, and customer wallet
+      const refreshTasks: Promise<any>[] = [refreshOrders(), refreshProducts()];
+      if (!isShopkeeperOverride && currentUser.role === Role.CUSTOMER) {
+        refreshTasks.push(refreshCustomerWallet());
+      }
+      await Promise.allSettled(refreshTasks);
+
+      if (!apiRes.alreadyCancelled && resolvedOrder) {
+        const refundAmt = refundInfo?.amount || 0;
+        const newAdminNotification: AdminNotification = {
+          id: `notif-${Date.now()}`,
+          type: 'ORDER_CANCELLED',
+          title: `Order #${resolvedOrder.orderNumber} Cancelled`,
+          message: isShopkeeperOverride
+            ? `Order #${resolvedOrder.orderNumber} cancelled by shopkeeper${
+                refundInfo?.refunded && refundAmt > 0
+                  ? ` (₹${refundAmt} advance refunded to customer store wallet)`
+                  : ''
+              }.`
+            : `Customer ${
+                resolvedOrder.userName || resolvedOrder.userPhone || 'Customer'
+              } cancelled order #${resolvedOrder.orderNumber}${
+                refundInfo?.refunded && refundAmt > 0
+                  ? ` (₹${refundAmt} advance refunded to store wallet)`
+                  : ''
+              }.`,
+          orderId: resolvedOrder.id,
+          orderNumber: resolvedOrder.orderNumber,
+          amount: refundAmt,
+          read: false,
+          createdAt: new Date().toISOString(),
+        };
+
+        setAdminNotifications((prev) => {
+          const updated = [newAdminNotification, ...prev];
+          try {
+            localStorage.setItem('om_admin_notifications', JSON.stringify(updated));
+          } catch {}
+          return updated;
+        });
+      }
+
+      return {
+        success: true,
+        alreadyCancelled: Boolean(apiRes.alreadyCancelled),
+        refunded: Boolean(refundInfo?.refunded),
+        refundAmount: refundInfo?.amount || 0,
+        walletUsed: refundInfo?.walletUsed || 0,
+        onlinePaid: refundInfo?.onlinePaid || 0,
+        codPaid: refundInfo?.codPaid || 0,
+        stockRestored: Boolean(apiRes.stockRestored),
+        order: resolvedOrder,
+      };
+    }
+
+    // Offline-only fallback mode (!isSupabaseConfigured): localStorage state only
+    if (!target) {
+      return { success: false, error: 'Order not found.' };
+    }
+
     if (target.status === OrderStatus.CANCELLED || target.status === OrderStatus.DELIVERED) {
-      return false;
+      return { success: false, error: 'Order cannot be cancelled in its current state.' };
     }
 
-    // Check 15-minute cancellation window rule (bypassed if shopkeeper/admin cancels)
     if (!isShopkeeperOverride && !canCancelOrder(target.createdAt)) {
-      return false;
+      return {
+        success: false,
+        error: 'The 15-minute cancellation window for this order has expired.',
+      };
     }
 
-    // Restore stock ONLY if stock was actually deducted upon acceptance and has not yet been restored.
-    // Never change stock when an unaccepted ORDER_PENDING order is cancelled.
     const wasDeducted = isStockDeductedForOrder(target.id, target.orderNumber, target);
     const alreadyRestored = isStockRestoredForOrder(target.id, target.orderNumber, target);
+    let didRestoreStock = false;
 
     if (wasDeducted && !alreadyRestored) {
       const currentCatalog = productsRef.current.length > 0 ? productsRef.current : products;
@@ -2877,14 +3110,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         productsRef.current = updatedProducts;
         setProducts(updatedProducts);
         markStockRestoredForOrder(target.id, target.orderNumber);
-
-        if (isSupabaseConfigured) {
-          affectedProducts.forEach((p) => {
-            updateProductStockInSupabase(p.id, p.variants, p).catch((err) => {
-              console.warn('Background Supabase product stock restore error:', err);
-            });
-          });
-        }
+        didRestoreStock = true;
       }
     }
 
@@ -2892,11 +3118,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       target.paymentMethod === PaymentMethod.ADVANCE_ONLINE ||
       target.paymentStatus === PaymentStatus.RECEIVED;
 
-    // Track both components of advance payment to refund the full order amount:
-    // 1. wallet amount used in the cancelled order (strictly actual wallet usage only)
     let walletAmountUsed = Math.max(0, target.walletAmountUsed || 0);
     if (walletAmountUsed === 0) {
-      // Check walletTransactions for a DEBIT tx for this order
       const debitTx = walletTransactions.find(
         (tx) =>
           (tx.orderId === target.id || tx.orderNumber === target.orderNumber) &&
@@ -2907,15 +3130,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     }
 
-    // 2. online advance payment amount paid by customer (strictly actual online payment only, never adding wallet amount)
     const isFinalAmountNetOfWallet =
       walletAmountUsed > 0 &&
       target.subtotal !== undefined &&
-      Math.abs(target.finalAmount - (target.subtotal - (target.discountAmount || 0) + (target.deliveryFee || 0) - walletAmountUsed)) < 2;
+      Math.abs(
+        target.finalAmount -
+          (target.subtotal - (target.discountAmount || 0) + (target.deliveryFee || 0) - walletAmountUsed)
+      ) < 2;
 
     const onlineAdvancePayment =
       target.previousOnlinePaid !== undefined && target.previousOnlinePaid > 0
-        ? (isAdvancePaid ? (isFinalAmountNetOfWallet ? target.finalAmount : Math.max(0, target.finalAmount - walletAmountUsed)) : target.previousOnlinePaid)
+        ? isAdvancePaid
+          ? isFinalAmountNetOfWallet
+            ? target.finalAmount
+            : Math.max(0, target.finalAmount - walletAmountUsed)
+          : target.previousOnlinePaid
         : isAdvancePaid
         ? Math.max(
             0,
@@ -2929,10 +3158,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           )
         : 0;
 
-    // Total refund is based on actual payment sources: wallet amount used + actual online advance payment
     const advancePaidAmount = walletAmountUsed + (isAdvancePaid ? onlineAdvancePayment : 0);
 
-    // Prevent duplicate refunds for the same order
     const existingRefundTx = walletTransactions.find(
       (tx) =>
         (tx.orderId === target.id || tx.orderNumber === target.orderNumber) &&
@@ -2945,15 +3172,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const amountToCredit = isAlreadyRefunded ? 0 : Math.max(0, advancePaidAmount - alreadyRefundedAmount);
 
     let walletCreditSucceeded = isAlreadyRefunded;
-    let pendingRefundMeta: {
-      refundAmount: number;
-      refundDescription: string;
-      customerId?: string;
-      customerPhone?: string;
-      customerName?: string;
-    } | null = null;
 
-    // Credit refundable amount to customer's Store Wallet
     if (advancePaidAmount > 0 && amountToCredit > 0) {
       const customerPhone = target.userPhone || '';
       const cleanCustomerPhone = customerPhone ? customerPhone.replace(/\D/g, '').slice(-10) : '';
@@ -2998,7 +3217,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       const newCustomerWalletBalance = customerBaseWallet + amountToCredit;
 
-      // Update customer in users list
       setUsers((prev) => {
         let matched = false;
         const updated = prev.map((u) => {
@@ -3031,7 +3249,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return updated;
       });
 
-      // Update currentUser only if current user is the customer
       if (isCurrentCustomer) {
         const updatedCurrentUser: User = {
           ...currentUser,
@@ -3042,7 +3259,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         localStorage.setItem('om_current_user', JSON.stringify(updatedCurrentUser));
       }
 
-      // Update cached customer profile
       if (cleanCustomerPhone) {
         try {
           const rawDigits = customerPhone.replace(/\D/g, '');
@@ -3069,7 +3285,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         } catch {}
       }
 
-      // Record wallet credit ledger transaction (deduplicated)
       const refundDescription =
         walletAmountUsed > 0 && onlineAdvancePayment > 0
           ? `Refund for Cancelled Order #${target.orderNumber} (₹${walletAmountUsed} wallet + ₹${onlineAdvancePayment} online advance)`
@@ -3077,8 +3292,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           ? `Refund for Cancelled Order #${target.orderNumber} (₹${walletAmountUsed} wallet used)`
           : `Refund for Cancelled Order #${target.orderNumber} (₹${onlineAdvancePayment} online advance)`;
 
-      const resolvedCustId = target.userId || (customerInUsers ? customerInUsers.id : (isCurrentCustomer ? currentUser.id : `user-${cleanCustomerPhone}`));
-      const resolvedCustPhone = customerPhone || (customerInUsers ? customerInUsers.phone : (isCurrentCustomer ? currentUser.phone : cleanCustomerPhone));
+      const resolvedCustId =
+        target.userId ||
+        (customerInUsers ? customerInUsers.id : isCurrentCustomer ? currentUser.id : `user-${cleanCustomerPhone}`);
+      const resolvedCustPhone =
+        customerPhone ||
+        (customerInUsers ? customerInUsers.phone : isCurrentCustomer ? currentUser.phone : cleanCustomerPhone);
 
       const newWalletTx: WalletTransaction = {
         id: `wtx-${Date.now()}`,
@@ -3103,103 +3322,44 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return updated;
       });
 
-      pendingRefundMeta = {
-        refundAmount: amountToCredit,
-        refundDescription,
-        customerId: resolvedCustId,
-        customerPhone: resolvedCustPhone,
-        customerName: target.userName || (customerInUsers ? customerInUsers.name : 'Customer'),
-      };
-
-      if (isSupabaseConfigured && !isShopkeeperOverride) {
-        creditCustomerWalletInSupabase({
-          userId: resolvedCustId,
-          customerPhone: resolvedCustPhone,
-          customerName: target.userName || (customerInUsers ? customerInUsers.name : 'Customer'),
-          orderId: target.id,
-          orderNumber: target.orderNumber,
-          amount: amountToCredit,
-          newWalletBalance: newCustomerWalletBalance,
-          description: refundDescription,
-        })
-          .then(() => {
-            refreshCustomerWallet();
-          })
-          .catch((err) => {
-            console.warn('Background Supabase wallet credit error:', err);
-          });
-      }
-
       walletCreditSucceeded = true;
     }
 
-    // Update Payment Status to REFUNDED only after the wallet credit succeeds
     const updatedPaymentStatus =
       advancePaidAmount > 0
-        ? (walletCreditSucceeded ? PaymentStatus.REFUNDED : target.paymentStatus)
+        ? walletCreditSucceeded
+          ? PaymentStatus.REFUNDED
+          : target.paymentStatus
         : target.paymentStatus;
+
+    const cancelledLocalOrder: Order = {
+      ...target,
+      status: OrderStatus.CANCELLED,
+      paymentStatus: updatedPaymentStatus,
+      stockDeducted: false,
+      stockRestored: wasDeducted ? true : false,
+    };
 
     setOrders((prev) => {
       const updated = prev.map((o) =>
-        o.id === target.id || o.orderNumber === target.orderNumber
-          ? {
-              ...o,
-              status: OrderStatus.CANCELLED,
-              paymentStatus: updatedPaymentStatus,
-              stockDeducted: false,
-              stockRestored: wasDeducted ? true : false,
-            }
-          : o
+        o.id === target.id || o.orderNumber === target.orderNumber ? cancelledLocalOrder : o
       );
       ordersRef.current = updated;
       localStorage.setItem('om_orders', JSON.stringify(updated));
       return updated;
     });
 
-    if (isSupabaseConfigured) {
-      updateOrderStatusInSupabase(
-        target.id,
-        OrderStatus.CANCELLED,
-        false,
-        {
-          stockDeducted: false,
-          stockRestored: wasDeducted ? true : false,
-          orderNumber: target.orderNumber,
-          walletAmountUsed: target.walletAmountUsed || walletAmountUsed || 0,
-          items: target.items,
-          codCollected: target.codCollectedAmount || 0,
-          prevOutstanding: target.previousOutstanding || 0,
-          totalPayable: target.totalPayable !== undefined ? target.totalPayable : target.finalAmount,
-          paymentStatus: updatedPaymentStatus,
-          ...(isShopkeeperOverride && pendingRefundMeta ? pendingRefundMeta : {}),
-        }
-      )
-        .then((ok) => {
-          if (ok && isShopkeeperOverride && pendingRefundMeta) {
-            refreshCustomerWallet();
-          }
-        })
-        .catch((err) => {
-          console.warn('Background Supabase cancel order error:', err);
-        });
-    }
-
-    // Notify the shopkeeper/admin that the order was cancelled
     const newAdminNotification: AdminNotification = {
       id: `notif-${Date.now()}`,
       type: 'ORDER_CANCELLED',
       title: `Order #${target.orderNumber} Cancelled`,
       message: isShopkeeperOverride
-        ? `Order #${target.orderNumber} cancelled by shopkeeper${
+        ? `Order #${target.orderNumber} cancelled offline by shopkeeper${
             updatedPaymentStatus === PaymentStatus.REFUNDED
-              ? ` (₹${advancePaidAmount} advance refunded to customer store wallet)`
+              ? ` (₹${advancePaidAmount} local wallet refund)`
               : ''
           }.`
-        : `Customer ${target.userName || target.userPhone || 'Customer'} cancelled order #${target.orderNumber}${
-            updatedPaymentStatus === PaymentStatus.REFUNDED
-              ? ` (₹${advancePaidAmount} advance refunded to store wallet)`
-              : ''
-          }.`,
+        : `Customer ${target.userName || target.userPhone || 'Customer'} cancelled order #${target.orderNumber} offline.`,
       orderId: target.id,
       orderNumber: target.orderNumber,
       amount: advancePaidAmount,
@@ -3213,22 +3373,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return updated;
     });
 
-    return true;
+    return {
+      success: true,
+      refunded: updatedPaymentStatus === PaymentStatus.REFUNDED && advancePaidAmount > 0,
+      refundAmount: advancePaidAmount,
+      walletUsed: walletAmountUsed,
+      onlinePaid: isAdvancePaid ? onlineAdvancePayment : 0,
+      stockRestored: didRestoreStock,
+      offlineOnly: true,
+      order: cancelledLocalOrder,
+    };
   };
 
-  const updateOrderStatus = (
+  const updateOrderStatus = async (
     orderId: string,
     newStatus: OrderStatus
-  ): { success: boolean; error?: string } => {
+  ): Promise<{ success: boolean; error?: string }> => {
     const liveOrders = ordersRef.current.length > 0 ? ordersRef.current : orders;
     const target = liveOrders.find((o) => o.id === orderId || o.orderNumber === orderId);
     if (!target) return { success: false, error: 'Order not found.' };
 
     if (newStatus === OrderStatus.CANCELLED) {
-      const cancelled = cancelOrder(orderId, true);
-      return cancelled
+      const res = await cancelOrder(orderId, true);
+      return res.success
         ? { success: true }
-        : { success: false, error: 'Order cannot be cancelled in its current state.' };
+        : { success: false, error: res.error || 'Order cannot be cancelled in its current state.' };
     }
 
     // Prevent invalid status changes on already cancelled or delivered orders
@@ -3254,8 +3423,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     let nextStockDeducted = Boolean(alreadyDeducted || target.stockDeducted);
+    const shouldDeductStockOnAccept = isAcceptedOrProgressing && !alreadyDeducted;
 
-    if (isAcceptedOrProgressing && !alreadyDeducted) {
+    if (shouldDeductStockOnAccept) {
       const currentCatalog = productsRef.current.length > 0 ? productsRef.current : products;
       const stockCheck = validateOrderStockAvailability(target, currentCatalog);
       if (!stockCheck.available) {
@@ -3264,26 +3434,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           error: stockCheck.errorMessage || 'Insufficient stock available to accept this order.',
         };
       }
-
-      const { updatedProducts, affectedProducts } = deductStockForOrder(target, currentCatalog);
-      if (affectedProducts.length > 0) {
-        productsRef.current = updatedProducts;
-        setProducts(updatedProducts);
-        markStockDeductedForOrder(target.id, target.orderNumber);
-        nextStockDeducted = true;
-
-        if (isSupabaseConfigured) {
-          affectedProducts.forEach((p) => {
-            updateProductStockInSupabase(p.id, p.variants, p).catch((err) => {
-              console.warn('Background Supabase product stock deduction error:', err);
-            });
-          });
-        }
-      }
     }
 
     const isDelivered = newStatus === OrderStatus.DELIVERED;
-    const deliveryTimestamp = isDelivered ? (target.deliveredAt || new Date().toISOString()) : target.deliveredAt;
+    const deliveryTimestamp = isDelivered
+      ? target.deliveredAt || new Date().toISOString()
+      : target.deliveredAt;
 
     let nextPaymentStatus = target.paymentStatus;
     let nextCodCollected = target.codCollectedAmount;
@@ -3305,29 +3461,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const nextIsPaid = nextPaymentStatus === PaymentStatus.RECEIVED ? true : undefined;
 
-    setOrders((prev) => {
-      const nextOrders = prev.map((o) => {
-        if (o.id === orderId || o.orderNumber === orderId) {
-          return {
-            ...o,
-            status: newStatus,
-            deliveredAt: isDelivered ? (o.deliveredAt || deliveryTimestamp) : o.deliveredAt,
-            paymentStatus: nextPaymentStatus,
-            codCollectedAmount: nextCodCollected,
-            stockDeducted: nextStockDeducted || Boolean(o.stockDeducted),
-            stockRestored: false,
-          };
-        }
-        return o;
-      });
-      ordersRef.current = nextOrders;
-      return nextOrders;
-    });
-
     if (isSupabaseConfigured) {
-      updateOrderStatusInSupabase(orderId, newStatus, nextIsPaid, {
-        stockDeducted: nextStockDeducted,
+      const res = await updateOrderStatusInSupabase(target.id, newStatus, nextIsPaid, {
+        stockDeducted: nextStockDeducted || shouldDeductStockOnAccept,
         stockRestored: false,
+        deductStockOnAccept: shouldDeductStockOnAccept,
+        expectedUpdatedAt: target.updatedAt,
         orderNumber: target.orderNumber,
         walletAmountUsed: target.walletAmountUsed,
         items: target.items,
@@ -3340,10 +3479,80 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         prevOutstanding: target.previousOutstanding || 0,
         totalPayable: target.totalPayable !== undefined ? target.totalPayable : target.finalAmount,
         paymentStatus: nextPaymentStatus,
-      }).catch((err) => {
-        console.warn('Background Supabase status update error:', err);
       });
+
+      if (!res.success) {
+        await Promise.allSettled([refreshOrders(), refreshProducts()]);
+        return {
+          success: false,
+          error: res.error || 'Failed to update order status on server.',
+        };
+      }
+
+      if (res.stockDeducted || shouldDeductStockOnAccept) {
+        markStockDeductedForOrder(target.id, target.orderNumber);
+        nextStockDeducted = true;
+      }
+
+      const committedOrder: Order = res.order
+        ? {
+            ...target,
+            ...res.order,
+            items:
+              res.order.items && res.order.items.length > 0 ? res.order.items : target.items,
+          }
+        : {
+            ...target,
+            status: newStatus,
+            deliveredAt: isDelivered ? target.deliveredAt || deliveryTimestamp : target.deliveredAt,
+            paymentStatus: nextPaymentStatus,
+            codCollectedAmount: nextCodCollected,
+            stockDeducted: nextStockDeducted,
+            stockRestored: false,
+          };
+
+      setOrders((prev) => {
+        const nextOrders = prev.map((o) =>
+          o.id === target.id || o.orderNumber === target.orderNumber ? committedOrder : o
+        );
+        ordersRef.current = nextOrders;
+        return nextOrders;
+      });
+
+      await Promise.allSettled([refreshOrders(), refreshProducts()]);
+      return { success: true };
     }
+
+    // Offline-only fallback mode (!isSupabaseConfigured): localStorage state only
+    if (shouldDeductStockOnAccept) {
+      const currentCatalog = productsRef.current.length > 0 ? productsRef.current : products;
+      const { updatedProducts, affectedProducts } = deductStockForOrder(target, currentCatalog);
+      if (affectedProducts.length > 0) {
+        productsRef.current = updatedProducts;
+        setProducts(updatedProducts);
+        markStockDeductedForOrder(target.id, target.orderNumber);
+        nextStockDeducted = true;
+      }
+    }
+
+    setOrders((prev) => {
+      const nextOrders = prev.map((o) => {
+        if (o.id === orderId || o.orderNumber === orderId) {
+          return {
+            ...o,
+            status: newStatus,
+            deliveredAt: isDelivered ? o.deliveredAt || deliveryTimestamp : o.deliveredAt,
+            paymentStatus: nextPaymentStatus,
+            codCollectedAmount: nextCodCollected,
+            stockDeducted: nextStockDeducted || Boolean(o.stockDeducted),
+            stockRestored: false,
+          };
+        }
+        return o;
+      });
+      ordersRef.current = nextOrders;
+      return nextOrders;
+    });
 
     return { success: true };
   };
@@ -4023,6 +4232,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     let authoritativeAddresses: Address[] = currentUser.addresses || [];
 
     if (isSupabaseConfigured) {
+      const hasSession = await ensureCustomerSessionCookie(cleanPhone);
+      if (!hasSession) {
+        throw new Error('Unable to establish customer database session. Please try again.');
+      }
+
       const savedProfileUser = await saveCustomerProfileToSupabase(
         targetUserId,
         cleanPhone,
@@ -4033,11 +4247,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       );
       if (savedProfileUser?.id) {
         resolvedUserId = savedProfileUser.id;
-      }
-
-      const hasSession = await ensureCustomerSessionCookie(cleanPhone, data.name.trim(), resolvedUserId);
-      if (!hasSession) {
-        throw new Error('Unable to establish customer database session. Please try again.');
       }
 
       const currentDbRes = await fetchAddressesFromSupabase();

@@ -341,139 +341,190 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
   if (req.method === 'POST') {
     try {
       const body = await parseJsonBody(req);
-      const {
-        orderId,
-        orderNumber,
-        customerPhone,
-        customerId,
-        customerName,
-        collectedAmount,
-        previousOutstanding = 0,
-        orderAmount,
-        markAsDelivered = false,
-        notes = '',
-      } = body;
+      const result = await processCodCollectionPost(supabase, body);
+      return sendJson(res, result.statusCode, result.payload);
+    } catch (err: any) {
+      console.error('Error in /api/cod-collections POST:', err);
+      return sendJson(res, 500, {
+        success: false,
+        error: err.message || 'Internal server error',
+      });
+    }
+  }
 
-      if (!orderId) {
-        return sendJson(res, 400, { success: false, error: 'Missing orderId' });
+  return sendJson(res, 405, { success: false, error: 'Method Not Allowed' });
+}
+
+export async function processCodCollectionPost(
+  supabase: SupabaseClient,
+  body: any
+): Promise<{ statusCode: number; payload: any }> {
+  const {
+    orderId,
+    orderNumber,
+    customerPhone,
+    customerId,
+    customerName,
+    collectedAmount,
+    previousOutstanding = 0,
+    orderAmount,
+    markAsDelivered = false,
+    notes = '',
+  } = body;
+
+  if (!orderId) {
+    return { statusCode: 400, payload: { success: false, error: 'Missing orderId' } };
+  }
+
+  // Check in-process lock to prevent duplicate concurrent executions within this instance
+  if (inFlightOrderLocks.has(orderId)) {
+    console.warn(`In-process lock prevented duplicate concurrent collection for order ${orderId}`);
+    return {
+      statusCode: 409,
+      payload: {
+        success: false,
+        duplicate: true,
+        conflict: true,
+        error: `Collection is already being processed for order ${orderId}`,
+      },
+    };
+  }
+
+  inFlightOrderLocks.add(orderId);
+  try {
+    const cleanPhone = normalizePhone(customerPhone);
+    const cleanCollected = Math.max(0, Math.round(Number(collectedAmount) * 100) / 100);
+
+    // Enforce overdue COD late fees (from store_settings) first (does NOT apply on delivery calendar day)
+    if (cleanPhone) {
+      const enf = await enforceOverdueCodLateFees(supabase, { phone: cleanPhone });
+      if (enf.errors.length > 0) {
+        return {
+          statusCode: 500,
+          payload: {
+            success: false,
+            error: `Failed to verify COD late fee before collection: ${enf.errors.join('; ')}`,
+          },
+        };
       }
+    }
 
-      // Check in-process lock to prevent duplicate concurrent executions within this instance
-      if (inFlightOrderLocks.has(orderId)) {
-        console.warn(`In-process lock prevented duplicate concurrent collection for order ${orderId}`);
-        return sendJson(res, 409, {
+    // 1. Verify target order exists in Supabase. Never recreate deleted test data!
+    let { data: targetOrderRow, error: targetOrderErr } = await supabase
+      .from('orders')
+      .select('*')
+      .eq('id', orderId)
+      .maybeSingle();
+
+    if (targetOrderErr) {
+      return {
+        statusCode: 500,
+        payload: {
           success: false,
-          duplicate: true,
-          conflict: true,
-          error: `Collection is already being processed for order ${orderId}`,
-        });
+          error: `Failed to query target order: ${targetOrderErr.message}`,
+        },
+      };
+    }
+
+    if (!targetOrderRow) {
+      return {
+        statusCode: 404,
+        payload: {
+          success: false,
+          error: `Order ${orderId} does not exist in Supabase or was deleted.`,
+        },
+      };
+    }
+
+    // If phone wasn't passed in payload, run enforcement for targetOrderRow's phone and reload if updated
+    const targetRowPhone = normalizePhone(targetOrderRow.customer_phone);
+    if (!cleanPhone && targetRowPhone) {
+      const enf = await enforceOverdueCodLateFees(supabase, { phone: targetRowPhone });
+      if (enf.errors.length > 0) {
+        return {
+          statusCode: 500,
+          payload: {
+            success: false,
+            error: `Failed to verify COD late fee before collection: ${enf.errors.join('; ')}`,
+          },
+        };
       }
-
-      inFlightOrderLocks.add(orderId);
-      try {
-        const cleanPhone = normalizePhone(customerPhone);
-        const cleanCollected = Math.max(0, Math.round(Number(collectedAmount) * 100) / 100);
-
-        // Enforce overdue COD late fees (from store_settings) first (does NOT apply on delivery calendar day)
-        if (cleanPhone) {
-          const enf = await enforceOverdueCodLateFees(supabase, { phone: cleanPhone });
-          if (enf.errors.length > 0) {
-            return sendJson(res, 500, {
-              success: false,
-              error: `Failed to verify COD late fee before collection: ${enf.errors.join('; ')}`,
-            });
-          }
-        }
-
-        // 1. Verify target order exists in Supabase. Never recreate deleted test data!
-        let { data: targetOrderRow, error: targetOrderErr } = await supabase
+      if (enf.updatedOrderIds.includes(orderId)) {
+        const { data: refreshedOrderRow } = await supabase
           .from('orders')
           .select('*')
           .eq('id', orderId)
           .maybeSingle();
-
-        if (targetOrderErr) {
-          return sendJson(res, 500, {
-            success: false,
-            error: `Failed to query target order: ${targetOrderErr.message}`,
-          });
+        if (refreshedOrderRow) {
+          targetOrderRow = refreshedOrderRow;
         }
+      }
+    }
 
-        if (!targetOrderRow) {
-          return sendJson(res, 404, {
-            success: false,
-            error: `Order ${orderId} does not exist in Supabase or was deleted.`,
-          });
-        }
+    if (String(targetOrderRow.status || '').toUpperCase() === 'CANCELLED') {
+      return {
+        statusCode: 409,
+        payload: {
+          success: false,
+          conflict: true,
+          error: `Order ${orderId} was cancelled and cannot receive COD collections.`,
+        },
+      };
+    }
 
-        // If phone wasn't passed in payload, run enforcement for targetOrderRow's phone and reload if updated
-        const targetRowPhone = normalizePhone(targetOrderRow.customer_phone);
-        if (!cleanPhone && targetRowPhone) {
-          const enf = await enforceOverdueCodLateFees(supabase, { phone: targetRowPhone });
-          if (enf.errors.length > 0) {
-            return sendJson(res, 500, {
-              success: false,
-              error: `Failed to verify COD late fee before collection: ${enf.errors.join('; ')}`,
-            });
-          }
-          if (enf.updatedOrderIds.includes(orderId)) {
-            const { data: refreshedOrderRow } = await supabase
-              .from('orders')
-              .select('*')
-              .eq('id', orderId)
-              .maybeSingle();
-            if (refreshedOrderRow) {
-              targetOrderRow = refreshedOrderRow;
-            }
-          }
-        }
+    const targetInitialUpdatedAt = targetOrderRow.updated_at;
 
-        const targetInitialUpdatedAt = targetOrderRow.updated_at;
+    // 2. Prevent duplicate collections: check recent COD collection transaction on this order
+    const { data: recentTxRows, error: txCheckErr } = await supabase
+      .from('ledger')
+      .select('*')
+      .eq('order_id', orderId)
+      .like('id', 'cod_tx_%')
+      .order('date', { ascending: false })
+      .limit(1);
 
-      // 2. Prevent duplicate collections: check recent transaction on this order
-      const { data: recentTxRows, error: txCheckErr } = await supabase
-        .from('ledger')
-        .select('*')
-        .eq('order_id', orderId)
-        .order('date', { ascending: false })
-        .limit(1);
-
-      if (!txCheckErr && recentTxRows && recentTxRows.length > 0) {
-        const lastTx = recentTxRows[0];
-        const timeSinceLastMs = Date.now() - new Date(lastTx.date).getTime();
-        // If exact same amount collected within 30 seconds, treat as idempotent duplicate prevention
-        if (timeSinceLastMs < 30000 && Number(lastTx.amount) === cleanCollected) {
-          console.log(`Prevented duplicate COD collection for order ${orderId}`);
-          return sendJson(res, 200, {
+    if (!txCheckErr && recentTxRows && recentTxRows.length > 0) {
+      const lastTx = recentTxRows[0];
+      const timeSinceLastMs = Date.now() - new Date(lastTx.date).getTime();
+      // If exact same amount collected within 30 seconds, treat as idempotent duplicate prevention
+      if (timeSinceLastMs < 30000 && Number(lastTx.amount) === cleanCollected) {
+        console.log(`Prevented duplicate COD collection for order ${orderId}`);
+        return {
+          statusCode: 200,
+          payload: {
             success: true,
             duplicate: true,
             message: 'Collection already processed',
             transaction: parseLedgerRowToTransaction(lastTx, cleanPhone),
             remainingOutstanding: Number(lastTx.balance_after) || 0,
-          });
-        }
+          },
+        };
       }
+    }
 
-      // Check if order is already fully paid and collected
-      const targetRawNotes = targetOrderRow.notes || '';
-      let targetExistingMeta: any = {};
-      if (targetRawNotes.includes('COD_META:')) {
-        try {
-          targetExistingMeta = JSON.parse(targetRawNotes.split('COD_META:')[1].trim());
-        } catch {}
-      }
+    // Check if order is already fully paid and collected
+    const targetRawNotes = targetOrderRow.notes || '';
+    let targetExistingMeta: any = {};
+    if (targetRawNotes.includes('COD_META:')) {
+      try {
+        targetExistingMeta = JSON.parse(targetRawNotes.split('COD_META:')[1].trim());
+      } catch {}
+    }
 
-      const targetFinalBill = Number(targetOrderRow.final_total ?? targetOrderRow.subtotal ?? 0);
-      const targetAlreadyCollected = Number(
-        targetExistingMeta.codCollected ?? (targetOrderRow.is_paid ? targetFinalBill : 0)
-      );
+    const targetFinalBill = Number(targetOrderRow.final_total ?? targetOrderRow.subtotal ?? 0);
+    const targetAlreadyCollected = Number(
+      targetExistingMeta.codCollected ?? (targetOrderRow.is_paid ? targetFinalBill : 0)
+    );
 
-      if (targetOrderRow.is_paid && targetAlreadyCollected >= targetFinalBill && cleanCollected > 0) {
-        return sendJson(res, 400, {
+    if (targetOrderRow.is_paid && targetAlreadyCollected >= targetFinalBill && cleanCollected > 0) {
+      return {
+        statusCode: 400,
+        payload: {
           success: false,
           error: `Order ${orderId} is already fully paid (₹${targetAlreadyCollected} collected).`,
-        });
-      }
+        },
+      };
+    }
 
       // 3. Fetch all active orders for this customer from Supabase for FIFO allocation
       const resolvedCustomerId = customerId || targetOrderRow.customer_id;
@@ -500,10 +551,13 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
 
       const { data: rawCustomerOrders, error: custOrdersErr } = await customerOrdersQuery;
       if (custOrdersErr) {
-        return sendJson(res, 500, {
-          success: false,
-          error: `Failed to fetch customer orders from Supabase: ${custOrdersErr.message}`,
-        });
+        return {
+          statusCode: 500,
+          payload: {
+            success: false,
+            error: `Failed to fetch customer orders from Supabase: ${custOrdersErr.message}`,
+          },
+        };
       }
 
       const parsedCustomerOrders = (rawCustomerOrders || []).map((row: any) => {
@@ -541,6 +595,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
               : 'PENDING',
           status: row.status,
           createdAt: row.created_at,
+          updatedAt: row.updated_at ?? null,
           notes: row.notes,
           meta,
         };
@@ -603,6 +658,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
             existingMeta: ord.meta,
             finalAmount: oBill,
             previousOutstanding: ord.previousOutstanding,
+            previousUpdatedAt: ord.updatedAt ?? null,
           };
 
           cashForOlder = Math.round((cashForOlder - alloc) * 100) / 100;
@@ -690,6 +746,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
       // 6. AWAIT AND VERIFY ALL SUPABASE WRITES BEFORE REPORTING SUCCESS
 
       // 6a. Perform Optimistic Concurrency Control (OCC) update on the target order FIRST
+      let appliedTargetUpdatedAt: string | null = null;
       const targetUpd = updatedOrdersMap[orderId];
       if (targetUpd) {
         const isPaid = targetUpd.paymentStatus === 'RECEIVED';
@@ -714,9 +771,10 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
             payment_status: targetUpd.paymentStatus,
             is_paid: isPaid,
             notes: orderNotes,
-            updated_at: new Date().toISOString(),
+            updated_at: nowISO,
           })
-          .eq('id', orderId);
+          .eq('id', orderId)
+          .neq('status', 'CANCELLED');
 
         if (targetInitialUpdatedAt) {
           occQuery = occQuery.eq('updated_at', targetInitialUpdatedAt);
@@ -733,37 +791,63 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
 
         // If OCC updates zero rows, stop all further writes and return a safe conflict response!
         if (!occResult || occResult.length === 0) {
+          const { data: latestTarget } = await supabase
+            .from('orders')
+            .select('id, status')
+            .eq('id', orderId)
+            .maybeSingle();
+
+          if (latestTarget && String(latestTarget.status || '').toUpperCase() === 'CANCELLED') {
+            return {
+              statusCode: 409,
+              payload: {
+                success: false,
+                conflict: true,
+                error: `Conflict: Order ${orderId} was cancelled concurrently. Collection aborted.`,
+              },
+            };
+          }
+
           console.warn(`OCC prevented concurrent duplicate COD collection for order ${orderId}`);
 
-          // Fetch recent ledger record if collection was already processed concurrently
+          // Fetch recent COD ledger record if collection was already processed concurrently
           const { data: latestLedger } = await supabase
             .from('ledger')
             .select('*')
             .eq('order_id', orderId)
+            .like('id', 'cod_tx_%')
             .order('date', { ascending: false })
             .limit(1);
 
           if (latestLedger && latestLedger.length > 0) {
-            return sendJson(res, 200, {
-              success: true,
-              duplicate: true,
-              conflict: true,
-              message: 'Collection already processed concurrently',
-              transaction: parseLedgerRowToTransaction(latestLedger[0], cleanPhone),
-              remainingOutstanding: Number(latestLedger[0].balance_after) || 0,
-            });
+            return {
+              statusCode: 200,
+              payload: {
+                success: true,
+                duplicate: true,
+                conflict: true,
+                message: 'Collection already processed concurrently',
+                transaction: parseLedgerRowToTransaction(latestLedger[0], cleanPhone),
+                remainingOutstanding: Number(latestLedger[0].balance_after) || 0,
+              },
+            };
           }
 
-          return sendJson(res, 409, {
-            success: false,
-            duplicate: true,
-            conflict: true,
-            error: 'Conflict: Order was modified concurrently by another request. No changes were applied.',
-          });
+          return {
+            statusCode: 409,
+            payload: {
+              success: false,
+              duplicate: true,
+              conflict: true,
+              error: 'Conflict: Order was modified concurrently by another request. No changes were applied.',
+            },
+          };
         }
+
+        appliedTargetUpdatedAt = occResult[0]?.updated_at || nowISO;
       }
 
-      // 6b. Update any older orders affected by FIFO allocation
+      // 6b. Update any older orders affected by FIFO allocation with CANCELLED guard & OCC
       for (const [updId, updData] of Object.entries(updatedOrdersMap)) {
         if (updId === orderId) continue; // Target order was already atomically updated above
         const isPaid = updData.paymentStatus === 'RECEIVED';
@@ -776,7 +860,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
         const metaString = JSON.stringify(mergedMeta);
         const orderNotes = `Order #${updData.orderNumber || updId.slice(0, 8)} | COD_META:${metaString}`;
 
-        const { error: orderUpdateErr } = await supabase
+        let olderOccQuery = supabase
           .from('orders')
           .update({
             status: updData.status,
@@ -785,11 +869,48 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
             notes: orderNotes,
             updated_at: new Date().toISOString(),
           })
-          .eq('id', updId);
+          .eq('id', updId)
+          .neq('status', 'CANCELLED');
+
+        if (updData.previousUpdatedAt !== null && updData.previousUpdatedAt !== undefined) {
+          olderOccQuery = olderOccQuery.eq('updated_at', updData.previousUpdatedAt);
+        } else {
+          olderOccQuery = olderOccQuery.is('updated_at', null);
+        }
+
+        const { data: olderOccRows, error: orderUpdateErr } = await olderOccQuery.select('id');
 
         if (orderUpdateErr) {
           console.error(`Failed to update order ${updId} in Supabase:`, orderUpdateErr);
           throw new Error(`Failed to update order ${updId}: ${orderUpdateErr.message}`);
+        }
+
+        if (!olderOccRows || olderOccRows.length === 0) {
+          // Conditionally revert targetOrderRow back to pre-collection state only if updated_at matches our exact write
+          if (targetUpd && appliedTargetUpdatedAt) {
+            try {
+              await supabase
+                .from('orders')
+                .update({
+                  status: targetOrderRow.status,
+                  payment_status: targetOrderRow.payment_status,
+                  is_paid: targetOrderRow.is_paid,
+                  notes: targetOrderRow.notes,
+                  updated_at: targetInitialUpdatedAt ?? null,
+                })
+                .eq('id', orderId)
+                .eq('updated_at', appliedTargetUpdatedAt);
+            } catch {}
+          }
+
+          return {
+            statusCode: 409,
+            payload: {
+              success: false,
+              conflict: true,
+              error: `Conflict: Older order ${updId} was cancelled or modified concurrently. Collection aborted.`,
+            },
+          };
         }
       }
 
@@ -845,23 +966,16 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
       }
 
       // Return verified success response
-      return sendJson(res, 200, {
-        success: true,
-        transaction: newTransaction,
-        updatedOrdersMap,
-        remainingOutstanding: remainingCustomerDebt,
-      });
-    } finally {
-      inFlightOrderLocks.delete(orderId);
-    }
-  } catch (err: any) {
-    console.error('Error in /api/cod-collections POST:', err);
-    return sendJson(res, 500, {
-      success: false,
-      error: err.message || 'Internal server error',
-    });
+      return {
+        statusCode: 200,
+        payload: {
+          success: true,
+          transaction: newTransaction,
+          updatedOrdersMap,
+          remainingOutstanding: remainingCustomerDebt,
+        },
+      };
+  } finally {
+    inFlightOrderLocks.delete(orderId);
   }
-}
-
-  return sendJson(res, 405, { success: false, error: 'Method Not Allowed' });
 }

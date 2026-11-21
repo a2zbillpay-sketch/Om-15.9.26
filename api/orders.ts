@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'http';
+import crypto from 'crypto';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import {
   verifyAdminSession,
@@ -9,8 +10,8 @@ import {
 import {
   enforceOverdueCodLateFees,
   parseCodMetaFromNotes,
-  buildOrderNotesWithMeta,
 } from './_codLateFee.js';
+import { processCancelOrderRequest } from './_orderCancellation.js';
 
 export interface OrderAuthContext {
   adminSession: AdminSession | null;
@@ -311,280 +312,189 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
   }
 
   // ============================================================================
-  // 3. PUT: Order Status, Edits, Refunds & Payment Updates (Verified Shopkeeper Session ONLY)
+  // 3. PUT: Order Status, Edits, Refunds & Payment Updates
+  //    - Cancellation (status === 'CANCELLED'): Integrated server-side workflow
+  //      for verified CUSTOMER (own order <= 15m) and SHOPKEEPER
+  //    - All other status transitions/edits: Verified SHOPKEEPER session only
   // ============================================================================
   if (method === 'PUT') {
     const adminSession = verifyAdminSession(req);
-    if (!adminSession || adminSession.role !== 'SHOPKEEPER') {
-      return sendJson(res, 401, {
-        success: false,
-        error: 'Unauthorized: Shopkeeper session required to update orders',
-      });
-    }
+    const customerSession = !adminSession || adminSession.role !== 'SHOPKEEPER'
+      ? verifyCustomerSession(req)
+      : null;
 
     try {
       const body = await parseJsonBody(req);
-      const rawOrderId = String(body.id || body.orderId || '').trim();
-      if (!rawOrderId) {
-        return sendJson(res, 400, { success: false, error: 'Order ID is required' });
-      }
-
-      // Resolve existing order row (by id or order_number)
-      const { data: existingOrder } = rawOrderId.startsWith('OM-')
-        ? await supabase.from('orders').select('*').eq('order_number', rawOrderId).maybeSingle()
-        : await supabase.from('orders').select('*').eq('id', rawOrderId).maybeSingle();
-
-      const resolvedOrderId = existingOrder?.id || rawOrderId;
-
-      const updatePayload: Record<string, any> = {
-        updated_at: new Date().toISOString(),
-      };
-
-      if (body.status) updatePayload.status = body.status;
-
-      if (body.paymentStatus) {
-        updatePayload.payment_status = body.paymentStatus;
-        if (body.paymentStatus === 'RECEIVED') {
-          updatePayload.is_paid = true;
-        } else if (body.paymentStatus === 'PENDING' || body.paymentStatus === 'REFUNDED' || body.paymentStatus === 'FAILED') {
-          updatePayload.is_paid = false;
-        }
-      }
-
-      if (body.isPaid !== undefined) {
-        updatePayload.is_paid = Boolean(body.isPaid);
-        if (body.isPaid && !updatePayload.payment_status) {
-          updatePayload.payment_status = 'RECEIVED';
-        } else if (!body.isPaid && !updatePayload.payment_status) {
-          updatePayload.payment_status = 'PENDING';
-        }
-      }
-
-      if (body.subtotal !== undefined && !isNaN(Number(body.subtotal))) {
-        updatePayload.subtotal = Number(body.subtotal);
-      }
-      if (body.discountAmount !== undefined && !isNaN(Number(body.discountAmount))) {
-        updatePayload.discount_amount = Number(body.discountAmount);
-      }
-      const resolvedFinalTotal =
-        body.finalAmount !== undefined ? Number(body.finalAmount) :
-        body.finalTotal !== undefined ? Number(body.finalTotal) :
-        undefined;
-      if (resolvedFinalTotal !== undefined && !isNaN(resolvedFinalTotal)) {
-        updatePayload.final_total = resolvedFinalTotal;
-      }
-      if (typeof body.productNameSerialized === 'string') {
-        updatePayload['Product Name'] = body.productNameSerialized;
-      }
-      if (body.weightKg !== undefined && body.weightKg !== null && !isNaN(Number(body.weightKg))) {
-        updatePayload.weight_kg = Number(body.weightKg);
-      }
-      if (body.notes !== undefined || body.status === 'DELIVERED') {
-        const { orderNumber: existingOrdNum, meta: existingMeta } = parseCodMetaFromNotes(existingOrder?.notes);
-        const { orderNumber: incomingOrdNum, meta: incomingMeta } = parseCodMetaFromNotes(body.notes);
-        const resolvedNum =
-          existingOrder?.order_number ||
-          incomingOrdNum ||
-          existingOrdNum ||
-          resolvedOrderId.replace(/^ord[-_]/i, '').slice(0, 8);
-
-        const nowISO = new Date().toISOString();
-        const isDeliveredTransition = body.status === 'DELIVERED';
-        const mergedMeta: Record<string, any> = {
-          ...existingMeta,
-          ...incomingMeta,
-          ...(existingMeta.codCharge !== undefined
-            ? { codCharge: Math.max(Number(existingMeta.codCharge) || 0, Number(incomingMeta.codCharge) || 0) }
-            : {}),
-          ...(existingMeta.codLateFeeApplied
-            ? {
-                codLateFeeApplied: true,
-                codLateFeeAmount: Number(existingMeta.codLateFeeAmount) || 0,
-                codLateFeeAppliedAt: existingMeta.codLateFeeAppliedAt,
-              }
-            : {}),
-        };
-
-        if (isDeliveredTransition && !mergedMeta.deliveredAt) {
-          mergedMeta.deliveredAt = body.deliveredAt || nowISO;
-        }
-
-        // Protect authoritative late-fee-adjusted final_total if late fee already applied
-        if (existingMeta.codLateFeeApplied && existingOrder?.final_total !== undefined) {
-          updatePayload.final_total = Number(existingOrder.final_total);
-          mergedMeta.totalPayable = Number(existingOrder.final_total);
-        }
-
-        updatePayload.notes = buildOrderNotesWithMeta(String(resolvedNum), mergedMeta);
-      }
-
-      // Idempotent server-side wallet refund on Shopkeeper order cancellation
-      const refundAmount = Number(body.refundAmount) || 0;
-      if (body.status === 'CANCELLED' && refundAmount > 0) {
-        const cleanPhone = String(
-          body.customerPhone || existingOrder?.customer_phone || ''
-        )
-          .replace(/\D/g, '')
-          .slice(-10);
-        const customerId = String(
-          body.customerId || existingOrder?.customer_id || (cleanPhone ? `usr_${cleanPhone}` : 'Customer')
-        );
-        const customerName = String(
-          body.customerName || existingOrder?.customer_name || 'Customer'
-        );
-
-        // Check existing CREDIT refund in ledger to prevent duplicates
-        const { data: existingRefunds } = await supabase
-          .from('ledger')
-          .select('id, amount')
-          .eq('order_id', resolvedOrderId)
-          .eq('type', 'CREDIT');
-
-        const alreadyCredited = (existingRefunds || []).reduce(
-          (sum: number, row: any) => sum + (Number(row.amount) || 0),
-          0
-        );
-
-        if (alreadyCredited < refundAmount) {
-          const amountToCredit = Math.round((refundAmount - alreadyCredited) * 100) / 100;
-          let currentWallet = 0;
-          let matchedDbUser: { id?: string; wallet_balance?: any } | null = null;
-
-          if (cleanPhone) {
-            const { data: normUsers, error: normErr } = await supabase
-              .from('users')
-              .select('id, wallet_balance')
-              .eq('phone_normalized', cleanPhone)
-              .limit(1);
-            if (!normErr && Array.isArray(normUsers) && normUsers.length > 0) {
-              matchedDbUser = normUsers[0];
-            }
-          }
-          if (!matchedDbUser && cleanPhone) {
-            const { data: dbUser } = await supabase
-              .from('users')
-              .select('id, wallet_balance')
-              .eq('phone', cleanPhone)
-              .maybeSingle();
-            if (dbUser) matchedDbUser = dbUser;
-          }
-          if (!matchedDbUser && existingOrder?.customer_id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(existingOrder.customer_id))) {
-            const { data: dbUserById } = await supabase
-              .from('users')
-              .select('id, wallet_balance')
-              .eq('id', existingOrder.customer_id)
-              .maybeSingle();
-            if (dbUserById) matchedDbUser = dbUserById;
-          }
-          if (!matchedDbUser && cleanPhone) {
-            try {
-              const { data: varUsers } = await supabase
-                .from('users')
-                .select('id, wallet_balance, phone')
-                .in('phone', [cleanPhone, `+91${cleanPhone}`, `+91 ${cleanPhone}`, `91${cleanPhone}`, `0${cleanPhone}`])
-                .limit(1);
-              if (Array.isArray(varUsers) && varUsers.length > 0) {
-                matchedDbUser = varUsers[0];
-              } else {
-                const { data: fuzzyUsers } = await supabase
-                  .from('users')
-                  .select('id, wallet_balance, phone')
-                  .ilike('phone', `%${cleanPhone}%`)
-                  .limit(5);
-                if (Array.isArray(fuzzyUsers)) {
-                  matchedDbUser =
-                    fuzzyUsers.find((u: any) => String(u?.phone || '').replace(/\D/g, '').slice(-10) === cleanPhone) ||
-                    null;
-                }
-              }
-            } catch {}
-          }
-          if (matchedDbUser && matchedDbUser.wallet_balance !== undefined) {
-            currentWallet = Math.max(0, Number(matchedDbUser.wallet_balance) || 0);
-          }
-
-          const newBalanceAfter = Math.round((currentWallet + amountToCredit) * 100) / 100;
-          const refundDesc =
-            typeof body.refundDescription === 'string' && body.refundDescription.trim()
-              ? body.refundDescription.trim()
-              : `Refund for Cancelled Order #${existingOrder?.order_number || resolvedOrderId}`;
-
-          const { error: ledgerErr } = await supabase.from('ledger').insert({
-            id: `wtx_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-            customer_id: customerId,
-            customer_name: customerName,
-            order_id: resolvedOrderId,
-            date: new Date().toISOString(),
-            type: 'CREDIT',
-            amount: amountToCredit,
-            description: refundDesc,
-            balance_after: newBalanceAfter,
-          });
-
-          if (!ledgerErr) {
-            if (matchedDbUser?.id) {
-              await supabase
-                .from('users')
-                .update({
-                  wallet_balance: newBalanceAfter,
-                  updated_at: new Date().toISOString(),
-                })
-                .eq('id', matchedDbUser.id);
-            } else if (cleanPhone) {
-              await supabase
-                .from('users')
-                .update({
-                  wallet_balance: newBalanceAfter,
-                  updated_at: new Date().toISOString(),
-                })
-                .eq('phone', cleanPhone);
-            }
-            updatePayload.payment_status = 'REFUNDED';
-            updatePayload.is_paid = false;
-          }
-        } else {
-          updatePayload.payment_status = 'REFUNDED';
-          updatePayload.is_paid = false;
-        }
-      }
-
-      const { error } = await supabase
-        .from('orders')
-        .update(updatePayload)
-        .eq('id', resolvedOrderId);
-
-      if (error) return sendJson(res, 500, { success: false, error: error.message });
-
-      // Relational order_items sync if updated items are provided (edited order)
-      if (Array.isArray(body.items) && body.items.length > 0) {
-        await supabase.from('order_items').delete().eq('order_id', resolvedOrderId);
-        const orderItemsPayload = body.items.map((it: any, idx: number) => ({
-          id: it.id || `item-${Date.now()}-${idx}`,
-          order_id: resolvedOrderId,
-          product_id: it.productId || null,
-          product_variant_id: it.variantId || null,
-          product_name: it.productName || 'Grocery Item',
-          variant_name: it.variantName || null,
-          brand: it.brand || null,
-          unit: it.unit || 'PIECE',
-          pack_size: Number(it.packSize) || 1,
-          quantity: Math.max(1, Number(it.quantity) || 1),
-          unit_price: Number(it.unitPrice) || 0,
-          total_price: Number(it.price) || 0,
-          is_discount_excluded: Boolean(it.isDiscountExcluded),
-          created_at: new Date().toISOString(),
-        }));
-        await supabase.from('order_items').insert(orderItemsPayload);
-      }
-
-      return sendJson(res, 200, { success: true });
+      const result = await processUpdateOrderRequest(supabase, body, {
+        adminSession,
+        customerSession,
+      });
+      return sendJson(res, result.statusCode, result.payload);
     } catch (err: any) {
-      return sendJson(res, 500, { success: false, error: err?.message || 'Server error updating order' });
+      return sendJson(res, 500, {
+        success: false,
+        error: err?.message || 'Server error updating order',
+      });
     }
   }
 
   res.setHeader('Allow', 'GET, POST, PUT');
   return sendJson(res, 405, { success: false, error: `Method ${method} Not Allowed` });
+}
+
+export async function processUpdateOrderRequest(
+  supabase: SupabaseClient,
+  body: any,
+  auth: OrderAuthContext
+): Promise<{ statusCode: number; payload: any }> {
+  const isShopkeeper = Boolean(auth?.adminSession && auth.adminSession.role === 'SHOPKEEPER');
+  const customerSession =
+    !isShopkeeper && auth?.customerSession && auth.customerSession.role === 'CUSTOMER'
+      ? auth.customerSession
+      : null;
+
+  if (!isShopkeeper && !customerSession) {
+    return {
+      statusCode: 401,
+      payload: {
+        success: false,
+        error: 'Unauthorized: Verified session required to update orders',
+      },
+    };
+  }
+
+  const normalizedStatus = String(body?.status || '').trim().toUpperCase();
+
+  // Route ALL cancellation requests (Customer & Shopkeeper) through the integrated server workflow
+  if (normalizedStatus === 'CANCELLED') {
+    return processCancelOrderRequest(supabase, body, {
+      adminSession: auth?.adminSession || null,
+      customerSession,
+    });
+  }
+
+  if (!isShopkeeper) {
+    return {
+      statusCode: 403,
+      payload: {
+        success: false,
+        error: 'Forbidden: Customers can only cancel eligible orders.',
+      },
+    };
+  }
+
+  const rawOrderId = String(body?.id || body?.orderId || '').trim();
+  if (!rawOrderId) {
+    return { statusCode: 400, payload: { success: false, error: 'Order ID is required' } };
+  }
+
+  const resolvedFinalTotal =
+    body.finalAmount !== undefined
+      ? Number(body.finalAmount)
+      : body.finalTotal !== undefined
+      ? Number(body.finalTotal)
+      : null;
+
+  const parsedSubtotal =
+    body.subtotal !== undefined && !isNaN(Number(body.subtotal)) ? Number(body.subtotal) : null;
+  const parsedDiscount =
+    body.discountAmount !== undefined && !isNaN(Number(body.discountAmount))
+      ? Number(body.discountAmount)
+      : null;
+  const parsedWeightKg =
+    body.weightKg !== undefined && body.weightKg !== null && !isNaN(Number(body.weightKg))
+      ? Number(body.weightKg)
+      : null;
+
+  const { data: rpcData, error: rpcError } = await supabase.rpc('transition_order_status_atomic', {
+    p_order_id: rawOrderId,
+    p_new_status: body.status ? String(body.status) : null,
+    p_payment_status: body.paymentStatus ? String(body.paymentStatus) : null,
+    p_is_paid: typeof body.isPaid === 'boolean' ? body.isPaid : null,
+    p_subtotal: parsedSubtotal,
+    p_discount_amount: parsedDiscount,
+    p_final_total:
+      resolvedFinalTotal !== null && !isNaN(resolvedFinalTotal) ? resolvedFinalTotal : null,
+    p_product_name_serialized:
+      typeof body.productNameSerialized === 'string' ? body.productNameSerialized : null,
+    p_weight_kg: parsedWeightKg,
+    p_notes: typeof body.notes === 'string' ? body.notes : null,
+    p_delivered_at: body.deliveredAt ? String(body.deliveredAt) : null,
+    p_deduct_stock: Boolean(body.deductStockOnAccept),
+    p_expected_updated_at: body.expectedUpdatedAt ? String(body.expectedUpdatedAt) : null,
+  });
+
+  if (rpcError) {
+    const code = String(rpcError.code || '').trim();
+    const msg = String(rpcError.message || 'Atomic order update RPC failed');
+    const isMissingRpc =
+      code === '42883' ||
+      code === 'PGRST202' ||
+      /could not find the function|transition_order_status_atomic/i.test(msg);
+
+    return {
+      statusCode: 500,
+      payload: {
+        success: false,
+        error: isMissingRpc
+          ? 'Atomic order transition database function is not installed. Please apply supabase_order_cancellation_atomic_v1.sql.'
+          : msg,
+      },
+    };
+  }
+
+  if (!rpcData || typeof rpcData !== 'object') {
+    return {
+      statusCode: 500,
+      payload: {
+        success: false,
+        error: 'Atomic order transition returned an empty database response.',
+      },
+    };
+  }
+
+  const rpcStatusCode = Number(rpcData.statusCode) || (rpcData.ok ? 200 : 500);
+  if (!rpcData.ok) {
+    return {
+      statusCode: rpcStatusCode,
+      payload: {
+        success: false,
+        error: String(rpcData.error || 'Failed to update order.'),
+      },
+    };
+  }
+
+  const resolvedOrderId = String(rpcData.order?.id || rawOrderId);
+
+  if (Array.isArray(body.items) && body.items.length > 0) {
+    await supabase.from('order_items').delete().eq('order_id', resolvedOrderId);
+    const orderItemsPayload = body.items.map((it: any, idx: number) => ({
+      id: it.id || `item-${Date.now()}-${idx}`,
+      order_id: resolvedOrderId,
+      product_id: it.productId || null,
+      product_variant_id: it.variantId || null,
+      product_name: it.productName || 'Grocery Item',
+      variant_name: it.variantName || null,
+      brand: it.brand || null,
+      unit: it.unit || 'PIECE',
+      pack_size: Number(it.packSize) || 1,
+      quantity: Math.max(1, Number(it.quantity) || 1),
+      unit_price: Number(it.unitPrice) || 0,
+      total_price: Number(it.price) || 0,
+      is_discount_excluded: Boolean(it.isDiscountExcluded),
+      created_at: new Date().toISOString(),
+    }));
+    await supabase.from('order_items').insert(orderItemsPayload);
+  }
+
+  return {
+    statusCode: 200,
+    payload: {
+      success: true,
+      stockDeducted: Boolean(rpcData.stockDeducted),
+      order: rpcData.order,
+    },
+  };
 }
 
 export async function processCreateOrderRequest(
@@ -1104,7 +1014,7 @@ export async function processCreateOrderRequest(
     }
 
     verifiedLineItems.push({
-      id: item.id || `item-${Date.now()}-${i}`,
+      id: item.id || `item-${crypto.randomUUID()}`,
       productId: matchedProd.id,
       variantId: matchedVar ? matchedVar.id : null,
       productName: matchedProd.name,
@@ -1209,8 +1119,6 @@ export async function processCreateOrderRequest(
 
     walletAmountUsed = Math.round(Math.min(authoritativeWalletBalance, orderFinalAmount) * 100) / 100;
   }
-
-  const finalPayable = Math.max(0, Math.round((orderFinalAmount - walletAmountUsed) * 100) / 100);
 
   // Authoritative Previous COD Outstanding Verification (never trust client body.previousOutstanding)
   let authoritativePreviousOutstanding = 0;
@@ -1344,22 +1252,8 @@ export async function processCreateOrderRequest(
   }
 
   // Construct verified order payload
-  const orderId = body.orderId || `ord-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+  const orderId = body.orderId || `ord-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
   const orderNumber = body.orderNumber || `OM-${Math.floor(10000 + Math.random() * 90000)}`;
-
-  const metaPayload = JSON.stringify({
-    codCollected: 0,
-    codCharge,
-    codLateFeeApplied: false,
-    codLateFeeAmount: 0,
-    prevOutstanding: authoritativePreviousOutstanding,
-    totalPayable: isAdvance ? finalPayable : orderFinalAmount,
-    walletAmountUsed,
-    previousOnlinePaid: isAdvance ? finalPayable : 0,
-    stockDeducted: false,
-    stockRestored: false,
-    items: verifiedLineItems,
-  });
 
   const productNameSerialized = verifiedLineItems
     .map((it, idx) => `${idx + 1}. ${it.productName} (${it.variantName || it.packSize}) - ${it.quantity} Qty @ ₹${it.unitPrice} = ₹${it.price}`)
@@ -1527,165 +1421,96 @@ export async function processCreateOrderRequest(
     // Non-fatal: continue to insert
   }
 
-  // 1. Insert into public.orders table
-  const insertPayload = {
-    id: orderId,
-    order_number: orderNumber,
-    customer_id: customerId,
-    customer_name: customerName,
-    customer_phone: cleanPhone,
-    shop_name: shopName,
-    'Product Name': productNameSerialized,
-    subtotal: verifiedSubtotal,
-    discount_amount: advanceDiscountAmount,
-    final_total: orderFinalAmount,
-    status: 'ORDER_PENDING',
-    payment_method: isAdvance ? 'ADVANCE_ONLINE' : 'COD',
-    payment_status: isAdvance ? 'RECEIVED' : 'PENDING',
-    is_paid: isAdvance,
-    address_id: verifiedAddressId,
-    delivery_address: deliveryAddressJsonb,
-    preferred_slot: body.deliveryDate || body.preferredSlot || new Date().toISOString().split('T')[0],
-    notes: `Order #${orderNumber} | COD_META:${metaPayload}`,
-    weight_kg: Number(body.weightKg) || null,
-    razorpay_order_id: body.razorpayOrderId || null,
-    razorpay_payment_id: body.razorpayPaymentId || null,
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-  };
+  // Execute single ACID PostgreSQL transaction: lock wallet + verify balance + insert orders + order_items + wallet DEBIT ledger + update users.wallet_balance
+  const preferredSlot =
+    body.deliveryDate || body.preferredSlot || new Date().toISOString().split('T')[0];
 
-  const { error: insertOrderError } = await supabase.from('orders').insert(insertPayload);
-
-  if (insertOrderError) {
-    const isDuplicateKey =
-      insertOrderError.code === '23505' ||
-      /duplicate key|unique constraint/i.test(String(insertOrderError.message || ''));
-    if (isDuplicateKey) {
-      const { data: racedExisting } = await supabase
-        .from('orders')
-        .select('*')
-        .eq('id', orderId)
-        .maybeSingle();
-      if (racedExisting) {
-        const racedPhone = String(racedExisting.customer_phone || '').replace(/\D/g, '').slice(-10);
-        if (isShopkeeper || !racedPhone || racedPhone === cleanPhone) {
-          return {
-            statusCode: 200,
-            payload: {
-              success: true,
-              deduplicated: true,
-              order: formatExistingOrderPayload(racedExisting),
-            },
-          };
-        }
-      }
+  const { data: rpcData, error: rpcError } = await supabase.rpc(
+    'create_order_with_wallet_atomic',
+    {
+      p_actor_role: isShopkeeper ? 'SHOPKEEPER' : 'CUSTOMER',
+      p_session_customer_id: customerSession?.customerId || null,
+      p_session_phone: customerSession?.phone || null,
+      p_order_id: orderId,
+      p_order_number: orderNumber,
+      p_customer_id: customerId,
+      p_customer_name: customerName,
+      p_customer_phone: cleanPhone,
+      p_shop_name: shopName,
+      p_payment_method: expectedPaymentMethod,
+      p_use_wallet: Boolean(isAdvance && body.useWallet),
+      p_min_expected_wallet_used:
+        isAdvance && body.useWallet && walletAmountUsed > 0 ? walletAmountUsed : null,
+      p_subtotal: verifiedSubtotal,
+      p_discount_amount: advanceDiscountAmount,
+      p_delivery_fee: deliveryFee,
+      p_cod_charge: codCharge,
+      p_final_total: orderFinalAmount,
+      p_previous_outstanding: authoritativePreviousOutstanding,
+      p_product_name_serialized: productNameSerialized,
+      p_address_id: verifiedAddressId,
+      p_delivery_address: deliveryAddressJsonb,
+      p_preferred_slot: preferredSlot,
+      p_weight_kg: Number(body.weightKg) || null,
+      p_razorpay_order_id: isAdvance ? body.razorpayOrderId || null : null,
+      p_razorpay_payment_id: isAdvance ? body.razorpayPaymentId || null : null,
+      p_items: verifiedLineItems,
     }
-    return { statusCode: 500, payload: { success: false, error: insertOrderError.message } };
+  );
+
+  if (rpcError) {
+    const code = String(rpcError.code || '').trim();
+    const msg = String(rpcError.message || 'Atomic order creation RPC failed');
+    const isMissingRpc =
+      code === '42883' ||
+      code === 'PGRST202' ||
+      /could not find the function|create_order_with_wallet_atomic/i.test(msg);
+
+    return {
+      statusCode: 500,
+      payload: {
+        success: false,
+        code: isMissingRpc ? 'MISSING_ATOMIC_RPC' : 'ORDER_CREATION_FAILED',
+        error: isMissingRpc
+          ? 'Atomic order creation database function is not installed. Please apply supabase_order_creation_atomic_v1.sql.'
+          : msg,
+      },
+    };
   }
 
-  // 2. Insert line items into public.order_items table (Relational Line-Item Mirror)
-  const orderItemsPayload = verifiedLineItems.map((it, idx) => ({
-    id: it.id || `item-${Date.now()}-${idx}`,
-    order_id: orderId,
-    product_id: it.productId || null,
-    product_variant_id: it.variantId || null,
-    product_name: it.productName,
-    variant_name: it.variantName || null,
-    brand: it.brand || null,
-    unit: it.unit || 'PIECE',
-    pack_size: it.packSize || 1,
-    quantity: it.quantity,
-    unit_price: it.unitPrice,
-    total_price: it.price,
-    is_discount_excluded: it.isDiscountExcluded,
-    created_at: new Date().toISOString(),
-  }));
-
-  const { error: insertItemsError } = await supabase
-    .from('order_items')
-    .insert(orderItemsPayload);
-
-  if (insertItemsError) {
-    // Log warning but proceed since orders table has COD_META and "Product Name" redundancy
-    console.warn('Warning: Could not mirror order items into public.order_items:', insertItemsError.message);
+  if (!rpcData || typeof rpcData !== 'object') {
+    return {
+      statusCode: 500,
+      payload: {
+        success: false,
+        code: 'ORDER_CREATION_FAILED',
+        error: 'Atomic order creation returned an empty database response.',
+      },
+    };
   }
 
-  // 3. If wallet was used, record debit in ledger (idempotently) and deduct user's wallet_balance
-  const remainingWallet =
-    walletAmountUsed > 0
-      ? Math.max(0, Math.round((authoritativeWalletBalance - walletAmountUsed) * 100) / 100)
-      : authoritativeWalletBalance;
-
-  if (walletAmountUsed > 0) {
-    let alreadyDebited = false;
-    try {
-      const { data: existingDebits } = await supabase
-        .from('ledger')
-        .select('id')
-        .eq('order_id', orderId)
-        .eq('type', 'DEBIT')
-        .limit(1);
-      if (Array.isArray(existingDebits) && existingDebits.length > 0) {
-        alreadyDebited = true;
-      }
-    } catch {
-      // Non-fatal: proceed carefully
-    }
-
-    if (!alreadyDebited) {
-      const { error: ledgerDebitErr } = await supabase.from('ledger').insert({
-        id: `wtx_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-        customer_id: customerId,
-        customer_name: customerName,
-        order_id: orderId,
-        date: new Date().toISOString(),
-        type: 'DEBIT',
-        amount: walletAmountUsed,
-        description: `Wallet Applied on Order #${orderNumber}`,
-        balance_after: remainingWallet,
-      });
-      if (ledgerDebitErr) {
-        console.warn('Warning: Could not insert wallet debit into ledger:', ledgerDebitErr.message);
-      }
-
-      if (dbCustomer?.id) {
-        await supabase
-          .from('users')
-          .update({ wallet_balance: remainingWallet, updated_at: new Date().toISOString() })
-          .eq('id', dbCustomer.id);
-      } else {
-        await supabase
-          .from('users')
-          .update({ wallet_balance: remainingWallet, updated_at: new Date().toISOString() })
-          .eq('phone', cleanPhone);
-      }
-    }
+  if (!rpcData.ok) {
+    const errStatus = Number(rpcData.statusCode) || 409;
+    return {
+      statusCode: errStatus,
+      payload: {
+        success: false,
+        code: rpcData.code || 'ORDER_CREATION_FAILED',
+        ...(rpcData.availableBalance !== undefined
+          ? { availableBalance: rpcData.availableBalance }
+          : {}),
+        error: String(rpcData.error || 'Failed to create order atomically.'),
+      },
+    };
   }
 
+  const responseStatus = Number(rpcData.statusCode) || (rpcData.deduplicated ? 200 : 201);
   return {
-    statusCode: 201,
+    statusCode: responseStatus,
     payload: {
       success: true,
-      order: {
-        id: orderId,
-        orderNumber,
-        customerPhone: cleanPhone,
-        status: 'ORDER_PENDING',
-        paymentStatus: isAdvance ? 'RECEIVED' : 'PENDING',
-        isPaid: isAdvance,
-        createdAt: insertPayload.created_at,
-        previousOutstanding: authoritativePreviousOutstanding,
-        subtotal: verifiedSubtotal,
-        deliveryFee,
-        codCharge,
-        discountAmount: advanceDiscountAmount,
-        finalAmount: orderFinalAmount,
-        walletAmountUsed,
-        ...(walletAmountUsed > 0 ? { remainingWalletBalance: remainingWallet } : {}),
-        totalPayable: isAdvance ? finalPayable : orderFinalAmount,
-        paymentMethod: isAdvance ? 'ADVANCE_ONLINE' : 'COD',
-        items: verifiedLineItems,
-      },
+      ...(rpcData.deduplicated ? { deduplicated: true } : {}),
+      order: rpcData.order,
     },
   };
 }

@@ -1853,10 +1853,10 @@ export const AdminDashboard: React.FC = () => {
                                 {order.status === OrderStatus.ORDER_PENDING && (
                                   <button
                                     id={`accept-order-btn-${order.id}`}
-                                    onClick={(e) => {
+                                    onClick={async (e) => {
                                       e.stopPropagation();
                                       setOrderActionError(null);
-                                      const res = updateOrderStatus(order.id, OrderStatus.ORDER_ACCEPTED);
+                                      const res = await updateOrderStatus(order.id, OrderStatus.ORDER_ACCEPTED);
                                       if (res && !res.success && res.error) {
                                         setOrderActionError(res.error);
                                       }
@@ -1871,7 +1871,7 @@ export const AdminDashboard: React.FC = () => {
                                 <select
                                   value={order.status}
                                   onClick={(e) => e.stopPropagation()}
-                                  onChange={(e) => {
+                                  onChange={async (e) => {
                                     e.stopPropagation();
                                     setOrderActionError(null);
                                     const newStatus = e.target.value as OrderStatus;
@@ -1883,7 +1883,7 @@ export const AdminDashboard: React.FC = () => {
                                       setSelectedOrderForDetails(null);
                                       setCodCollectingOrder(order);
                                     } else {
-                                      const res = updateOrderStatus(order.id, newStatus);
+                                      const res = await updateOrderStatus(order.id, newStatus);
                                       if (res && !res.success && res.error) {
                                         setOrderActionError(res.error);
                                       }

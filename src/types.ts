@@ -236,6 +236,7 @@ export interface Order {
   razorpayOrderId?: string;
   razorpayPaymentId?: string;
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface CodTransactionAllocation {

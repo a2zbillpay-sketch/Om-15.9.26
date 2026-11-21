@@ -95,69 +95,7 @@ export function getIndianMobileVariants(cleanPhone10: string): string[] {
   );
 }
 
-function isMissingColumnError(err: any, columnName: string): boolean {
-  if (!err) return false;
-  const code = String(err.code || '').trim();
-  const msg = String(err.message || '');
-  return (
-    (code === 'PGRST204' || code === '42703' || msg.toLowerCase().includes('schema cache')) &&
-    new RegExp(columnName, 'i').test(msg)
-  );
-}
 
-function isUniqueViolationError(err: any): boolean {
-  if (!err) return false;
-  const code = String(err.code || '').trim();
-  const msg = String(err.message || '').toLowerCase();
-  return code === '23505' || msg.includes('duplicate key') || msg.includes('unique constraint');
-}
-
-async function findCustomerByNormalizedPhone(
-  cleanPhone: string,
-  role?: string
-): Promise<{ user: any | null; error: any | null }> {
-  if (!supabase || !cleanPhone || cleanPhone.length !== 10) {
-    return { user: null, error: null };
-  }
-
-  const phoneNormalized = normalizeIndianMobileE164(cleanPhone);
-  if (phoneNormalized) {
-    let normQuery = supabase
-      .from('users')
-      .select('*')
-      .eq('phone_normalized', phoneNormalized);
-    if (role) {
-      normQuery = normQuery.eq('role', role);
-    }
-    const { data: normRows, error: normError } = await normQuery
-      .order('created_at', { ascending: true })
-      .limit(1);
-
-    if (!normError && normRows && normRows.length > 0) {
-      return { user: normRows[0], error: null };
-    }
-    if (normError && !isMissingColumnError(normError, 'phone_normalized')) {
-      return { user: null, error: normError };
-    }
-  }
-
-  const phoneVariants = getIndianMobileVariants(cleanPhone);
-  let varQuery = supabase
-    .from('users')
-    .select('*')
-    .in('phone', phoneVariants.length > 0 ? phoneVariants : [cleanPhone, `+91${cleanPhone}`]);
-  if (role) {
-    varQuery = varQuery.eq('role', role);
-  }
-  const { data: varRows, error: varError } = await varQuery
-    .order('created_at', { ascending: true })
-    .limit(1);
-
-  if (varError) {
-    return { user: null, error: varError };
-  }
-  return { user: varRows && varRows.length > 0 ? varRows[0] : null, error: null };
-}
 
 function parseCustomerAddress(rawAddress?: unknown): {
   id?: string;
@@ -261,173 +199,32 @@ function parseCustomerAddress(rawAddress?: unknown): {
   };
 }
 
-const SUPABASE_UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-function isUuid(value?: string | null): boolean {
-  return Boolean(value && SUPABASE_UUID_REGEX.test(value.trim()));
-}
-
-function generateUuid(): string {
-  if (typeof globalThis !== 'undefined' && globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function') {
-    return globalThis.crypto.randomUUID();
-  }
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0;
-    const v = c === 'x' ? r : (r & 0x3) | 0x8;
-    return v.toString(16);
-  });
-}
-
-/**
- * Safely resolves all known identity aliases for a customer (canonical db ID, phone, synthetic user-ID)
- */
-async function resolveCustomerIdentityAliases(
-  customerId?: string,
-  phone?: string
-): Promise<{ canonicalId: string; allIds: string[]; cleanPhone: string }> {
-  let cleanPhone = normalizeIndianMobile(phone) || (phone ? phone.replace(/\D/g, '').slice(-10) : '');
-  if (!cleanPhone && customerId && customerId.startsWith('user-')) {
-    const raw = customerId.slice(5).replace(/\D/g, '').slice(-10);
-    if (raw.length === 10) cleanPhone = raw;
-  }
-
-  const targetIds = new Set<string>();
-  if (customerId) targetIds.add(customerId);
-  if (cleanPhone) {
-    targetIds.add(cleanPhone);
-    targetIds.add(`user-${cleanPhone}`);
-  }
-
-  let canonicalId = customerId && isUuid(customerId) ? customerId : '';
-
-  if (supabase) {
-    try {
-      if (cleanPhone) {
-        const phoneNormalized = normalizeIndianMobileE164(cleanPhone);
-        let dbUsers: any[] | null = null;
-
-        if (phoneNormalized) {
-          const normRes = await supabase
-            .from('users')
-            .select('id, phone')
-            .eq('phone_normalized', phoneNormalized)
-            .limit(5);
-          if (!normRes.error && normRes.data && normRes.data.length > 0) {
-            dbUsers = normRes.data;
-          }
-        }
-
-        if (!dbUsers || dbUsers.length === 0) {
-          const phoneVariants = getIndianMobileVariants(cleanPhone);
-          const varRes = await supabase
-            .from('users')
-            .select('id, phone')
-            .in('phone', phoneVariants.length > 0 ? phoneVariants : [cleanPhone, `+91${cleanPhone}`])
-            .limit(5);
-          dbUsers = varRes.data;
-        }
-
-        if (dbUsers && dbUsers.length > 0) {
-          dbUsers.forEach((u) => {
-            if (u.id) {
-              targetIds.add(u.id);
-              if (!canonicalId) canonicalId = u.id;
-            }
-          });
-        }
-      } else if (customerId && isUuid(customerId) && !cleanPhone) {
-        const { data: userRow } = await supabase
-          .from('users')
-          .select('id, phone')
-          .eq('id', customerId)
-          .maybeSingle();
-
-        if (userRow?.phone) {
-          const userPhone = userRow.phone.replace(/\D/g, '').slice(-10);
-          if (userPhone) {
-            cleanPhone = userPhone;
-            targetIds.add(userPhone);
-            targetIds.add(`user-${userPhone}`);
-          }
-        }
-      }
-    } catch {}
-  }
-
-  if (!canonicalId) {
-    canonicalId = customerId || (cleanPhone ? `usr_${cleanPhone}` : 'Customer');
-  }
-
-  return {
-    canonicalId,
-    allIds: Array.from(targetIds).filter(Boolean),
-    cleanPhone,
-  };
-}
-
-/**
- * Filter strictly for wallet transactions (excludes COD collections and order debts)
- */
-function isWalletLedgerEntry(r: any): boolean {
-  if (!r) return false;
-  const desc = (r.description || '').toLowerCase();
-  if (desc.includes('cod payment') || desc.includes('cod collection')) return false;
-  if (r.id && (r.id.startsWith('cod_tx_') || r.id.startsWith('led_ord_'))) return false;
-
-  if (r.type === 'DEBIT' && (desc.includes('wallet') || r.id?.startsWith('wtx_'))) return true;
-  if (
-    r.type === 'CREDIT' &&
-    (desc.includes('refund') || desc.includes('wallet') || r.id?.startsWith('wtx_'))
-  )
-    return true;
-
-  return false;
-}
-
 /**
  * Safely fetches the customer's persistent wallet balance calculated authoritatively
- * from Supabase's ledger table across all linked customer IDs.
+ * via the authenticated server endpoint (/api/auth/customer-wallet).
  */
 export async function getCustomerWalletBalanceFromLedger(
   customerId?: string,
   phone?: string,
   options?: { skipLocalFallback?: boolean }
 ): Promise<number> {
-  const { allIds, cleanPhone } = await resolveCustomerIdentityAliases(customerId, phone);
-  if (allIds.length === 0) return 0;
+  const cleanPhone = normalizeIndianMobile(phone) || (phone ? phone.replace(/\D/g, '').slice(-10) : '');
 
-  if (supabase) {
+  if (typeof window !== 'undefined' && typeof fetch === 'function') {
     try {
-      const filters = allIds.map((id) => `customer_id.eq.${id}`);
-      const { data: ledgerRows, error } = await supabase
-        .from('ledger')
-        .select('id, balance_after, date, type, amount, description')
-        .or(filters.join(','))
-        .order('date', { ascending: true }); // chronological order
-
-      if (!error) {
-        const walletRows = (ledgerRows || []).filter(isWalletLedgerEntry);
-
-        if (walletRows.length > 0) {
-          // Authoritative replay of all wallet transactions (credits - debits)
-          let running = 0;
-          for (const tx of walletRows) {
-            const amt = Number(tx.amount) || 0;
-            if (tx.type === 'CREDIT') {
-              running += amt;
-            } else if (tx.type === 'DEBIT') {
-              running = Math.max(0, running - amt);
-            }
-          }
-          return Math.round(running * 100) / 100;
+      const res = await fetch('/api/auth/customer-wallet', {
+        method: 'GET',
+        credentials: 'include',
+        cache: 'no-store',
+      });
+      if (res.ok) {
+        const json = await res.json().catch(() => null);
+        if (json?.success && typeof json.balance === 'number') {
+          return json.balance;
         }
-        return 0;
       }
     } catch (err) {
-      console.warn('Error querying ledger for wallet balance:', err);
-    }
-    if (options?.skipLocalFallback) {
-      return 0;
+      console.warn('Error querying /api/auth/customer-wallet for wallet balance:', err);
     }
   }
 
@@ -435,7 +232,7 @@ export async function getCustomerWalletBalanceFromLedger(
     return 0;
   }
 
-  // Fallback to localStorage cache only when Supabase client is not configured/offline
+  // Fallback to localStorage cache only when offline / API unavailable
   if (typeof localStorage !== 'undefined') {
     try {
       const txStr = localStorage.getItem('om_wallet_transactions');
@@ -471,281 +268,100 @@ export async function getCustomerWalletBalanceFromLedger(
 }
 
 /**
- * Fetches all persistent wallet transactions from Supabase ledger for a customer across linked IDs.
+ * Fetches all persistent wallet transactions via authenticated server endpoint (/api/auth/customer-wallet).
  */
 export async function fetchWalletTransactionsFromSupabase(
-  customerId?: string,
-  phone?: string
+  _customerId?: string,
+  _phone?: string
 ): Promise<WalletTransaction[] | null> {
-  if (!supabase) return null;
-  const { allIds, cleanPhone } = await resolveCustomerIdentityAliases(customerId, phone);
-  if (allIds.length === 0) return null;
+  if (typeof window === 'undefined' || typeof fetch !== 'function') return null;
 
   try {
-    const filters = allIds.map((id) => `customer_id.eq.${id}`);
-    const { data: rows, error } = await supabase
-      .from('ledger')
-      .select('*')
-      .or(filters.join(','))
-      .order('date', { ascending: false });
-
-    if (error || !rows) return null;
-
-    const walletRows = rows.filter(isWalletLedgerEntry);
-
-    return walletRows.map((r) => {
-      let orderNum: string | undefined = undefined;
-      const match = r.description?.match(/#([A-Z0-9-]+)/i);
-      if (match) orderNum = match[1];
-
-      return {
-        id: r.id,
-        userId: r.customer_id,
-        userPhone: cleanPhone || r.customer_id,
-        orderId: r.order_id || undefined,
-        orderNumber: orderNum,
-        type: r.type as 'CREDIT' | 'DEBIT',
-        amount: Number(r.amount) || 0,
-        balanceAfter: Number(r.balance_after) || 0,
-        description: r.description,
-        createdAt: r.date,
-      };
+    const res = await fetch('/api/auth/customer-wallet', {
+      method: 'GET',
+      credentials: 'include',
+      cache: 'no-store',
     });
+    if (!res.ok) return null;
+    const json = await res.json().catch(() => null);
+    if (!json?.success || !Array.isArray(json.transactions)) return null;
+    return json.transactions as WalletTransaction[];
   } catch (err) {
-    console.warn('Error fetching wallet transactions from Supabase:', err);
+    console.warn('Error fetching wallet transactions from /api/auth/customer-wallet:', err);
     return null;
   }
 }
 
 /**
- * Fetches both authoritative wallet balance and wallet transaction history in a single ledger query.
+ * Fetches both authoritative wallet balance and wallet transaction history via /api/auth/customer-wallet.
  * Never falls back to localStorage cache when querying live database.
  */
 export async function fetchCustomerWalletSummaryFromSupabase(
-  customerId?: string,
-  phone?: string
+  _customerId?: string,
+  _phone?: string
 ): Promise<{ balance: number; transactions: WalletTransaction[] } | null> {
-  if (!supabase) return null;
-  const { allIds, cleanPhone } = await resolveCustomerIdentityAliases(customerId, phone);
-  if (allIds.length === 0) return null;
+  if (typeof window === 'undefined' || typeof fetch !== 'function') return null;
 
   try {
-    const filters = allIds.map((id) => `customer_id.eq.${id}`);
-    const { data: rows, error } = await supabase
-      .from('ledger')
-      .select('*')
-      .or(filters.join(','))
-      .order('date', { ascending: true });
-
-    if (error || !rows) return null;
-
-    const walletRows = rows.filter(isWalletLedgerEntry);
-    let balance = 0;
-
-    if (walletRows.length > 0) {
-      for (const tx of walletRows) {
-        const amt = Number(tx.amount) || 0;
-        if (tx.type === 'CREDIT') {
-          balance += amt;
-        } else if (tx.type === 'DEBIT') {
-          balance = Math.max(0, balance - amt);
-        }
-      }
-      balance = Math.round(balance * 100) / 100;
-    } else if (cleanPhone) {
-      const { user: dbUser } = await findCustomerByNormalizedPhone(cleanPhone, 'CUSTOMER');
-      if (dbUser) {
-        balance = Math.max(0, Number(dbUser.wallet_balance || 0));
-      }
+    const res = await fetch('/api/auth/customer-wallet', {
+      method: 'GET',
+      credentials: 'include',
+      cache: 'no-store',
+    });
+    if (!res.ok) return null;
+    const json = await res.json().catch(() => null);
+    if (
+      !json?.success ||
+      typeof json.balance !== 'number' ||
+      !Array.isArray(json.transactions)
+    ) {
+      return null;
     }
-
-    const transactions: WalletTransaction[] = [...walletRows]
-      .reverse()
-      .map((r) => {
-        let orderNum: string | undefined = undefined;
-        const match = r.description?.match(/#([A-Z0-9-]+)/i);
-        if (match) orderNum = match[1];
-
-        return {
-          id: r.id,
-          userId: r.customer_id,
-          userPhone: cleanPhone || r.customer_id,
-          orderId: r.order_id || undefined,
-          orderNumber: orderNum,
-          type: r.type as 'CREDIT' | 'DEBIT',
-          amount: Number(r.amount) || 0,
-          balanceAfter: Number(r.balance_after) || 0,
-          description: r.description,
-          createdAt: r.date,
-        };
-      });
-
-    return { balance, transactions };
+    return {
+      balance: json.balance,
+      transactions: json.transactions as WalletTransaction[],
+    };
   } catch (err) {
-    console.warn('Error fetching customer wallet summary from Supabase:', err);
+    console.warn('Error fetching customer wallet summary from /api/auth/customer-wallet:', err);
     return null;
   }
 }
 
 /**
- * Deterministically resolves or creates a customer by their phone number.
- * This guarantees that Chrome, Samsung Internet, Safari, Firefox, Edge, etc.
- * all resolve to the EXACT SAME customer account.
+ * Deterministically resolves or creates a customer via the server-side /api/auth/customer-login endpoint.
  */
 export async function getOrCreateCustomerByPhone(
   phone: string,
   role: Role = Role.CUSTOMER,
   name?: string
 ): Promise<User | null> {
-  if (!supabase) return null;
+  if (role !== Role.CUSTOMER) return null;
 
   const cleanPhone = normalizeIndianMobile(phone);
-  const phoneNormalized = normalizeIndianMobileE164(phone);
-  if (!INDIAN_MOBILE_REGEX.test(cleanPhone) || !phoneNormalized) return null;
+  if (!INDIAN_MOBILE_REGEX.test(cleanPhone)) return null;
 
-  try {
-    // 1. Check if user with this normalized phone and role exists in Supabase users table
-    const { user: existingUser } = await findCustomerByNormalizedPhone(cleanPhone, role);
+  const res = await loginCustomerServerSession(cleanPhone, { name });
+  if (!res.authenticated || !res.user) return null;
 
-    if (existingUser) {
-      const { fullAddress, landmark, pincode } = parseCustomerAddress(existingUser.address);
-      const formattedAddresses: Address[] = fullAddress
-        ? [
-            {
-              id: `addr-${existingUser.id}`,
-              userId: existingUser.id,
-              fullAddress,
-              landmark,
-              pincode,
-              isDefault: true,
-            },
-          ]
-        : [];
-
-      const dbOutstanding = Number(existingUser.outstanding_balance || 0);
-      const ledgerCredits = await getCustomerWalletBalanceFromLedger(existingUser.id, cleanPhone);
-      const dbCredits = Math.max(Number(existingUser.wallet_balance || 0), ledgerCredits);
-
-      return {
-        id: existingUser.id,
-        name: existingUser.full_name ?? existingUser.name ?? name ?? '',
-        phone: existingUser.phone,
-        role: (existingUser.role as Role) || role,
-        walletBalance: dbCredits,
-        outstandingBalance: dbOutstanding,
-        codOrderCount: Number(existingUser.cod_order_count || 0),
-        addresses: formattedAddresses,
-        createdAt: existingUser.updated_at || existingUser.created_at || new Date().toISOString(),
-      };
-    }
-
-    // 2. User does not exist, create UUID customer record in Supabase users table
-    const newId = generateUuid();
-    const nowIso = new Date().toISOString();
-    const resolvedFullName = name || (role === Role.SHOPKEEPER ? 'Om Prakash Sharma' : '');
-
-    let { data: insertedUser, error: insertError } = await supabase
-      .from('users')
-      .insert({
-        id: newId,
-        phone: cleanPhone,
-        phone_normalized: phoneNormalized,
-        full_name: resolvedFullName,
-        role,
-        status: 'ACTIVE',
-        created_at: nowIso,
-        updated_at: nowIso,
-      })
-      .select()
-      .single();
-
-    if (
-      insertError &&
-      !isUniqueViolationError(insertError) &&
-      isMissingColumnError(insertError, 'phone_normalized')
-    ) {
-      const withoutNormRes = await supabase
-        .from('users')
-        .insert({
-          id: newId,
-          phone: cleanPhone,
-          full_name: resolvedFullName,
-          role,
-          status: 'ACTIVE',
-          created_at: nowIso,
-          updated_at: nowIso,
-        })
-        .select()
-        .single();
-      insertedUser = withoutNormRes.data;
-      insertError = withoutNormRes.error;
-    }
-
-    if (
-      insertError &&
-      !isUniqueViolationError(insertError) &&
-      (insertError.code === 'PGRST204' ||
-        insertError.code === '42703' ||
-        /full_name|status/i.test(String(insertError.message || '')))
-    ) {
-      const legacyRes = await supabase
-        .from('users')
-        .insert({
-          id: newId,
-          phone: cleanPhone,
-          name: resolvedFullName,
-          role,
-          updated_at: nowIso,
-        })
-        .select()
-        .single();
-      insertedUser = legacyRes.data;
-      insertError = legacyRes.error;
-    }
-
-    if (insertError) {
-      const { user: fallbackUser } = await findCustomerByNormalizedPhone(cleanPhone, role);
-
-      if (fallbackUser) {
-        const u = fallbackUser;
-        const { fullAddress, landmark, pincode } = parseCustomerAddress(u.address);
-        return {
-          id: u.id,
-          name: u.full_name ?? u.name ?? '',
-          phone: u.phone,
-          role: u.role as Role,
-          walletBalance: Number(u.wallet_balance || 0),
-          codOrderCount: 0,
-          addresses: fullAddress ? [{ id: `addr-${u.id}`, userId: u.id, fullAddress, landmark, pincode, isDefault: true }] : [],
-          createdAt: u.updated_at || new Date().toISOString(),
-        };
-      }
-      console.warn('Error in getOrCreateCustomerByPhone insert:', insertError.message);
-      return null;
-    }
-
-    return {
-      id: insertedUser.id,
-      name: insertedUser.full_name ?? insertedUser.name ?? '',
-      phone: insertedUser.phone,
-      role: insertedUser.role as Role,
-      walletBalance: 0,
-      codOrderCount: 0,
-      addresses: [],
-      createdAt: insertedUser.updated_at || new Date().toISOString(),
-    };
-  } catch (err) {
-    console.error('Error in getOrCreateCustomerByPhone:', err);
-    return null;
-  }
+  return {
+    id: res.user.id || res.customerId || `user-${cleanPhone}`,
+    name: res.user.name || name || '',
+    phone: res.user.phone || cleanPhone,
+    role: (res.user.role as Role) || Role.CUSTOMER,
+    walletBalance: Number(res.user.walletBalance || 0),
+    outstandingBalance: Number(res.user.outstandingBalance || 0),
+    codOrderCount: Number(res.user.codOrderCount || 0),
+    addresses: Array.isArray(res.user.addresses) ? res.user.addresses : [],
+    createdAt: res.user.createdAt || new Date().toISOString(),
+    isDatabaseVerified: true,
+  };
 }
 
 /**
- * Saves or updates a customer profile name & role in Supabase public.users
- * (aligned with live public.users schema: id uuid, full_name text NOT NULL, phone, role, status).
+ * Saves or updates an authenticated customer profile via PUT /api/auth/customer-profile.
  */
 export async function saveCustomerProfileToSupabase(
-  userId: string,
+  _userId: string,
   phone: string,
   name: string,
   fullAddress: string,
@@ -753,226 +369,47 @@ export async function saveCustomerProfileToSupabase(
   pincode: string = '',
   newPhone?: string
 ): Promise<User | null> {
-  if (!supabase) return null;
+  if (typeof window === 'undefined' || typeof fetch !== 'function') return null;
   const cleanPhone = normalizeIndianMobile(phone);
-  const phoneNormalized = normalizeIndianMobileE164(phone);
-  if (!INDIAN_MOBILE_REGEX.test(cleanPhone) || !phoneNormalized) return null;
+  if (!INDIAN_MOBILE_REGEX.test(cleanPhone)) return null;
 
   try {
-    let completeAddress = fullAddress.trim();
-    if (landmark.trim() && !completeAddress.toLowerCase().includes(landmark.trim().toLowerCase())) {
-      completeAddress = `${completeAddress} (Landmark: ${landmark.trim()})`;
-    }
-    if (pincode.trim() && !completeAddress.includes(pincode.trim())) {
-      completeAddress = `${completeAddress} - ${pincode.trim()}`;
-    }
+    const res = await fetch('/api/auth/customer-profile', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        name: name.trim(),
+        fullAddress: fullAddress.trim(),
+        landmark: landmark.trim(),
+        pincode: pincode.trim(),
+        ...(typeof newPhone === 'string' && newPhone.trim() ? { newPhone: newPhone.trim() } : {}),
+      }),
+    });
 
-    // 1. Locate existing record in users table by UUID id or normalized phone
-    let targetUser: any = null;
-
-    if (isUuid(userId)) {
-      const { data: userById } = await supabase
-        .from('users')
-        .select('*')
-        .eq('id', userId.trim())
-        .limit(1);
-      if (userById && userById.length > 0) {
-        targetUser = userById[0];
-      }
+    const json = await res.json().catch(() => null);
+    if (res.status === 409 || json?.code === 'DUPLICATE_CUSTOMER') {
+      throw Object.assign(new Error(json?.error || DUPLICATE_CUSTOMER_MESSAGE), {
+        code: 'DUPLICATE_CUSTOMER',
+      });
     }
-
-    if (!targetUser && cleanPhone) {
-      const { user: existingByPhone } = await findCustomerByNormalizedPhone(cleanPhone, 'CUSTOMER');
-      if (existingByPhone) {
-        targetUser = existingByPhone;
-      }
+    if (!res.ok || !json?.success || !json.user) {
+      console.warn('Error saving customer profile via /api/auth/customer-profile:', json?.error || res.status);
+      return null;
     }
 
-    const nowIso = new Date().toISOString();
-    const cleanName = name.trim();
-    let effectiveCleanPhone = cleanPhone;
-
-    if (targetUser) {
-      const updatePayload: Record<string, any> = {
-        updated_at: nowIso,
-      };
-      if (cleanName) {
-        if ('full_name' in targetUser) {
-          updatePayload.full_name = cleanName;
-        } else {
-          updatePayload.name = cleanName;
-        }
-      }
-      if ('address' in targetUser) {
-        updatePayload.address = completeAddress;
-      }
-      if ('shop_name' in targetUser && !targetUser.shop_name && cleanName) {
-        updatePayload.shop_name = `${cleanName}'s Kirana Store`;
-      }
-      if (targetUser.role !== Role.SHOPKEEPER && targetUser.role !== Role.SECONDARY_ADMIN) {
-        updatePayload.role = 'CUSTOMER';
-      }
-
-      if (typeof newPhone === 'string' && newPhone.trim()) {
-        const nextCleanPhone = normalizeIndianMobile(newPhone);
-        const nextPhoneNormalized = normalizeIndianMobileE164(newPhone);
-        const existingNorm =
-          targetUser.phone_normalized || normalizeIndianMobileE164(targetUser.phone);
-        if (nextCleanPhone && nextPhoneNormalized && nextPhoneNormalized !== existingNorm) {
-          const { user: conflictUser } = await findCustomerByNormalizedPhone(
-            nextCleanPhone,
-            'CUSTOMER'
-          );
-          if (conflictUser && conflictUser.id !== targetUser.id) {
-            throw Object.assign(new Error(DUPLICATE_CUSTOMER_MESSAGE), {
-              code: 'DUPLICATE_CUSTOMER',
-            });
-          }
-          updatePayload.phone = nextCleanPhone;
-          updatePayload.phone_normalized = nextPhoneNormalized;
-          effectiveCleanPhone = nextCleanPhone;
-        }
-      }
-
-      let { data: updated, error: updateError } = await supabase
-        .from('users')
-        .update(updatePayload)
-        .eq('id', targetUser.id)
-        .select()
-        .single();
-
-      if (
-        updateError &&
-        !isUniqueViolationError(updateError) &&
-        isMissingColumnError(updateError, 'phone_normalized')
-      ) {
-        const { phone_normalized: _omit, ...fallbackUpdate } = updatePayload;
-        const retryUpdate = await supabase
-          .from('users')
-          .update(fallbackUpdate)
-          .eq('id', targetUser.id)
-          .select()
-          .single();
-        updated = retryUpdate.data;
-        updateError = retryUpdate.error;
-      }
-
-      if (updateError) {
-        if (isUniqueViolationError(updateError)) {
-          throw Object.assign(new Error(DUPLICATE_CUSTOMER_MESSAGE), {
-            code: 'DUPLICATE_CUSTOMER',
-          });
-        }
-        console.warn('Supabase update customer profile warning:', updateError.message);
-      } else if (updated) {
-        targetUser = updated;
-        effectiveCleanPhone = normalizeIndianMobile(updated.phone) || effectiveCleanPhone;
-      }
-    } else {
-      const newUserId = isUuid(userId) ? userId.trim() : generateUuid();
-      const primaryInsertPayload = {
-        id: newUserId,
-        full_name: cleanName || `Customer (${cleanPhone.slice(-4)})`,
-        phone: cleanPhone,
-        phone_normalized: phoneNormalized,
-        role: 'CUSTOMER',
-        status: 'ACTIVE',
-        created_at: nowIso,
-        updated_at: nowIso,
-      };
-
-      let { data: inserted, error: insertError } = await supabase
-        .from('users')
-        .insert(primaryInsertPayload)
-        .select()
-        .single();
-
-      if (
-        insertError &&
-        !isUniqueViolationError(insertError) &&
-        isMissingColumnError(insertError, 'phone_normalized')
-      ) {
-        const withoutNormInsert = await supabase
-          .from('users')
-          .insert({
-            id: newUserId,
-            full_name: cleanName || `Customer (${cleanPhone.slice(-4)})`,
-            phone: cleanPhone,
-            role: 'CUSTOMER',
-            status: 'ACTIVE',
-            created_at: nowIso,
-            updated_at: nowIso,
-          })
-          .select()
-          .single();
-        inserted = withoutNormInsert.data;
-        insertError = withoutNormInsert.error;
-      }
-
-      if (
-        insertError &&
-        !isUniqueViolationError(insertError) &&
-        (insertError.code === 'PGRST204' ||
-          insertError.code === '42703' ||
-          /full_name|status/i.test(String(insertError.message || '')))
-      ) {
-        const legacyInsert = await supabase
-          .from('users')
-          .insert({
-            id: newUserId,
-            name: cleanName || `Customer (${cleanPhone.slice(-4)})`,
-            phone: cleanPhone,
-            role: 'CUSTOMER',
-            address: completeAddress,
-            outstanding_balance: 0,
-            updated_at: nowIso,
-          })
-          .select()
-          .single();
-        inserted = legacyInsert.data;
-        insertError = legacyInsert.error;
-      }
-
-      if (insertError) {
-        const { user: retryUser } = await findCustomerByNormalizedPhone(cleanPhone, 'CUSTOMER');
-        if (retryUser) {
-          targetUser = retryUser;
-        } else {
-          console.warn('Supabase insert customer profile warning:', insertError.message);
-        }
-      } else if (inserted) {
-        targetUser = inserted;
-      }
-    }
-
-    const resolvedId = targetUser?.id || userId;
-    const dbOutstanding = Number(targetUser?.outstanding_balance || 0);
-    const ledgerCredits = await getCustomerWalletBalanceFromLedger(resolvedId, effectiveCleanPhone);
-    const dbCredits = Math.max(Number(targetUser?.wallet_balance || 0), ledgerCredits);
-
-    return {
-      id: resolvedId,
-      name: targetUser?.full_name ?? targetUser?.name ?? cleanName,
-      phone: effectiveCleanPhone,
-      role: Role.CUSTOMER,
-      walletBalance: dbCredits,
-      outstandingBalance: dbOutstanding,
-      codOrderCount: 0,
-      addresses: [],
-      createdAt: targetUser?.updated_at || nowIso,
-      isDatabaseVerified: true,
-    };
+    return json.user as User;
   } catch (err: any) {
     if (err?.code === 'DUPLICATE_CUSTOMER') {
       throw err;
     }
-    console.error('Error saving customer profile to Supabase:', err);
+    console.error('Error saving customer profile via /api/auth/customer-profile:', err);
     return null;
   }
 }
 
 export async function updateCustomerPhoneInSupabase(
-  userId: string,
+  _userId: string,
   newPhone: string
 ): Promise<{
   success: boolean;
@@ -981,10 +418,6 @@ export async function updateCustomerPhoneInSupabase(
   phone?: string;
   phoneNormalized?: string;
 }> {
-  if (!supabase) {
-    return { success: false, code: 'NO_DB', error: 'Supabase client is not configured.' };
-  }
-
   const cleanPhone = normalizeIndianMobile(newPhone);
   const phoneNormalized = normalizeIndianMobileE164(newPhone);
   if (!INDIAN_MOBILE_REGEX.test(cleanPhone) || !phoneNormalized) {
@@ -995,73 +428,34 @@ export async function updateCustomerPhoneInSupabase(
     };
   }
 
+  if (typeof window === 'undefined' || typeof fetch !== 'function') {
+    return { success: false, code: 'NO_NETWORK', error: 'Network unavailable.' };
+  }
+
   try {
-    const { user: existingOwner, error: lookupError } = await findCustomerByNormalizedPhone(
-      cleanPhone,
-      'CUSTOMER'
-    );
-    if (lookupError) {
+    const res = await fetch('/api/auth/customer-profile', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        action: 'update_phone',
+        newPhone: cleanPhone,
+      }),
+    });
+
+    const json = await res.json().catch(() => null);
+    if (!res.ok || !json?.success) {
       return {
         success: false,
-        code: 'LOOKUP_ERROR',
-        error: lookupError.message || 'Failed to verify mobile number uniqueness.',
-      };
-    }
-
-    if (existingOwner && String(existingOwner.id) !== String(userId)) {
-      return {
-        success: false,
-        code: 'DUPLICATE_CUSTOMER',
-        error: DUPLICATE_CUSTOMER_MESSAGE,
-      };
-    }
-
-    const nowIso = new Date().toISOString();
-    let { error: updateError } = await supabase
-      .from('users')
-      .update({
-        phone: cleanPhone,
-        phone_normalized: phoneNormalized,
-        updated_at: nowIso,
-      })
-      .eq('id', userId)
-      .eq('role', 'CUSTOMER');
-
-    if (
-      updateError &&
-      !isUniqueViolationError(updateError) &&
-      isMissingColumnError(updateError, 'phone_normalized')
-    ) {
-      const retryRes = await supabase
-        .from('users')
-        .update({
-          phone: cleanPhone,
-          updated_at: nowIso,
-        })
-        .eq('id', userId)
-        .eq('role', 'CUSTOMER');
-      updateError = retryRes.error;
-    }
-
-    if (updateError) {
-      if (isUniqueViolationError(updateError)) {
-        return {
-          success: false,
-          code: 'DUPLICATE_CUSTOMER',
-          error: DUPLICATE_CUSTOMER_MESSAGE,
-        };
-      }
-      return {
-        success: false,
-        code: 'UPDATE_FAILED',
-        error: updateError.message || 'Failed to update customer mobile number.',
+        code: json?.code || 'UPDATE_FAILED',
+        error: json?.error || 'Failed to update customer mobile number.',
       };
     }
 
     return {
       success: true,
-      phone: cleanPhone,
-      phoneNormalized,
+      phone: json.phone || cleanPhone,
+      phoneNormalized: json.phoneNormalized || phoneNormalized,
     };
   } catch (err: any) {
     return {
@@ -1399,70 +793,34 @@ export async function saveAddressToSupabase(address: Address): Promise<boolean> 
 }
 
 /**
- * Fetch customer profile (Name, Address, Landmark, Contact Number) from Supabase by phone.
- * Queries public.users filtering strictly by phone AND role = CUSTOMER.
+ * Fetch authenticated customer profile (Name, Address, Wallet, Balances) via /api/auth/customer-profile.
  */
 export async function fetchCustomerProfileFromSupabase(
   phone: string,
   options?: { includeLedger?: boolean }
 ): Promise<User | null> {
-  if (!supabase) return null;
+  if (typeof window === 'undefined' || typeof fetch !== 'function') return null;
   const cleanPhone = normalizeIndianMobile(phone);
   if (!INDIAN_MOBILE_REGEX.test(cleanPhone)) return null;
 
   try {
-    // 1. Safe query: Filter strictly by canonical normalized phone / variants AND role = 'CUSTOMER'
-    const { user: dbUser, error: userError } = await findCustomerByNormalizedPhone(
-      cleanPhone,
-      'CUSTOMER'
+    const includeLedger = options?.includeLedger !== false;
+    const res = await fetch(
+      `/api/auth/customer-profile?includeLedger=${includeLedger ? 'true' : 'false'}`,
+      {
+        method: 'GET',
+        credentials: 'include',
+        cache: 'no-store',
+      }
     );
 
-    if (userError) {
-      console.warn('Error fetching customer from Supabase users:', userError.message);
-      return null;
-    }
+    if (!res.ok) return null;
+    const json = await res.json().catch(() => null);
+    if (!json?.success || !json.user) return null;
 
-    if (!dbUser) {
-      return null;
-    }
-
-    // 2. Read fallback address metadata from users.address only if column exists
-    const { fullAddress, landmark, pincode } = parseCustomerAddress(dbUser.address);
-
-    const formattedAddresses: Address[] = fullAddress
-      ? [
-          {
-            id: `addr-${dbUser.id}`,
-            userId: dbUser.id,
-            fullAddress,
-            landmark,
-            pincode,
-            isDefault: true,
-          },
-        ]
-      : [];
-
-    const dbOutstanding = Number(dbUser.outstanding_balance || 0);
-    const includeLedger = options?.includeLedger !== false;
-    const ledgerCredits = includeLedger
-      ? await getCustomerWalletBalanceFromLedger(dbUser.id, cleanPhone, { skipLocalFallback: true })
-      : 0;
-    const dbCredits = Math.max(Number(dbUser.wallet_balance || 0), ledgerCredits);
-
-    return {
-      id: dbUser.id,
-      name: dbUser.full_name ?? dbUser.name ?? '',
-      phone: dbUser.phone || cleanPhone,
-      role: Role.CUSTOMER,
-      walletBalance: dbCredits,
-      outstandingBalance: dbOutstanding,
-      codOrderCount: Number(dbUser.cod_order_count || 0),
-      addresses: formattedAddresses,
-      createdAt: dbUser.updated_at || dbUser.created_at || new Date().toISOString(),
-      isDatabaseVerified: true,
-    };
+    return json.user as User;
   } catch (err) {
-    console.warn('Error fetching customer profile from Supabase:', err);
+    console.warn('Error fetching customer profile from /api/auth/customer-profile:', err);
     return null;
   }
 }
@@ -1792,6 +1150,7 @@ export function mapDatabaseRowToOrder(o: any, fallbackCustomerId?: string, fallb
     stockDeducted,
     stockRestored,
     createdAt: o.created_at || new Date().toISOString(),
+    ...(o.updated_at ? { updatedAt: String(o.updated_at) } : {}),
     items,
   };
 }
@@ -2021,8 +1380,16 @@ export async function fetchAllOrdersForAdmin(): Promise<Order[] | null> {
   return null;
 }
 
+export interface UpdateOrderStatusResult {
+  success: boolean;
+  statusCode?: number;
+  stockDeducted?: boolean;
+  order?: Order;
+  error?: string;
+}
+
 /**
- * Updates order status (and optional cancellation wallet refund) via verified /api/orders PUT endpoint.
+ * Updates order status atomically via verified /api/orders PUT endpoint (`transition_order_status_atomic`).
  */
 export async function updateOrderStatusInSupabase(
   orderId: string,
@@ -2041,6 +1408,8 @@ export async function updateOrderStatusInSupabase(
     walletAmountUsed?: number;
     stockDeducted?: boolean;
     stockRestored?: boolean;
+    deductStockOnAccept?: boolean;
+    expectedUpdatedAt?: string;
     items?: OrderItem[];
     paymentStatus?: PaymentStatus | string;
     refundAmount?: number;
@@ -2049,8 +1418,10 @@ export async function updateOrderStatusInSupabase(
     customerPhone?: string;
     customerName?: string;
   }
-): Promise<boolean> {
-  if (typeof window === 'undefined' || typeof fetch !== 'function') return false;
+): Promise<UpdateOrderStatusResult> {
+  if (typeof window === 'undefined' || typeof fetch !== 'function') {
+    return { success: false, error: 'Browser network environment is unavailable.' };
+  }
 
   try {
     const payload: Record<string, any> = {
@@ -2067,6 +1438,12 @@ export async function updateOrderStatusInSupabase(
     }
     if (meta?.deliveredAt) {
       payload.deliveredAt = meta.deliveredAt;
+    }
+    if (meta?.deductStockOnAccept) {
+      payload.deductStockOnAccept = true;
+    }
+    if (meta?.expectedUpdatedAt) {
+      payload.expectedUpdatedAt = meta.expectedUpdatedAt;
     }
 
     if (meta) {
@@ -2105,16 +1482,98 @@ export async function updateOrderStatusInSupabase(
       body: JSON.stringify(payload),
     });
 
-    if (!res.ok) {
-      console.warn('updateOrderStatusInSupabase rejected by /api/orders:', res.status);
-      return false;
+    const json = await res.json().catch(() => null);
+    if (!res.ok || !json?.success) {
+      console.warn('updateOrderStatusInSupabase rejected by /api/orders:', res.status, json?.error);
+      return {
+        success: false,
+        statusCode: res.status,
+        error: json?.error || `Failed to update order status (${res.status}).`,
+      };
     }
 
-    const json = await res.json().catch(() => null);
-    return Boolean(json?.success);
-  } catch (err) {
+    return {
+      success: true,
+      statusCode: res.status,
+      stockDeducted: Boolean(json.stockDeducted),
+      order: json.order ? mapDatabaseRowToOrder(json.order) : undefined,
+    };
+  } catch (err: any) {
     console.error('Exception in updateOrderStatusInSupabase:', err);
-    return false;
+    return {
+      success: false,
+      error: err?.message || 'Network error while updating order status.',
+    };
+  }
+}
+
+export interface CancelOrderApiResult {
+  success: boolean;
+  statusCode?: number;
+  alreadyCancelled?: boolean;
+  deduplicated?: boolean;
+  stockRestored?: boolean;
+  order?: Order;
+  refund?: {
+    amount: number;
+    creditedNow: number;
+    walletUsed: number;
+    onlinePaid: number;
+    codPaid: number;
+    refunded: boolean;
+    newWalletBalance: number;
+    ledgerTransactionId: string | null;
+    description: string | null;
+  };
+  error?: string;
+}
+
+/**
+ * Cancels an order through the authoritative integrated server workflow (/api/orders PUT).
+ * Never sends client-computed stockRestored or refundAmount flags; relies exclusively on DB truth.
+ */
+export async function cancelOrderInSupabase(orderId: string): Promise<CancelOrderApiResult> {
+  if (typeof window === 'undefined' || typeof fetch !== 'function') {
+    return { success: false, error: 'Browser network environment is unavailable.' };
+  }
+
+  try {
+    const res = await fetch('/api/orders', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        id: orderId,
+        orderId,
+        status: OrderStatus.CANCELLED,
+      }),
+    });
+
+    const json = await res.json().catch(() => null);
+    if (!res.ok || !json?.success) {
+      return {
+        success: false,
+        statusCode: res.status,
+        error: json?.error || `Cancellation request failed (${res.status}).`,
+      };
+    }
+
+    const mappedOrder = json.order ? mapDatabaseRowToOrder(json.order) : undefined;
+    return {
+      success: true,
+      statusCode: res.status,
+      alreadyCancelled: Boolean(json.alreadyCancelled),
+      deduplicated: Boolean(json.deduplicated),
+      stockRestored: Boolean(json.stockRestored),
+      order: mappedOrder,
+      refund: json.refund,
+    };
+  } catch (err: any) {
+    console.error('Exception in cancelOrderInSupabase:', err);
+    return {
+      success: false,
+      error: err?.message || 'Network error while cancelling order.',
+    };
   }
 }
 
@@ -2151,9 +1610,9 @@ export async function updateProductStockInSupabase(
 }
 
 /**
- * Permanently logs a COD Collection transaction in Supabase's ledger and updates the customer's balance.
+ * COD collection ledger/balance updates are handled server-side via /api/cod-collections.
  */
-export async function recordCodCollectionInSupabase(tx: {
+export async function recordCodCollectionInSupabase(_tx: {
   id: string;
   orderId: string;
   orderNumber: string;
@@ -2164,50 +1623,13 @@ export async function recordCodCollectionInSupabase(tx: {
   remainingOutstanding: number;
   createdAt: string;
 }): Promise<boolean> {
-  if (!supabase) return false;
-
-  try {
-    // 1. Insert into Supabase 'ledger' table
-    const { error: ledgerError } = await supabase.from('ledger').insert({
-      id: tx.id,
-      customer_id: tx.customerId || tx.customerPhone,
-      customer_name: tx.customerName || 'Customer',
-      order_id: tx.orderId,
-      date: tx.createdAt,
-      type: 'CREDIT',
-      amount: tx.amount,
-      description: `COD Collection for Order #${tx.orderNumber}`,
-      balance_after: tx.remainingOutstanding,
-    });
-
-    if (ledgerError) {
-      console.warn('Error inserting to Supabase ledger:', ledgerError.message);
-      return false;
-    }
-
-    // 2. Update Supabase 'users.outstanding_balance'
-    if (tx.customerPhone) {
-      const cleanPhone = tx.customerPhone.replace(/\D/g, '').slice(-10);
-      await supabase
-        .from('users')
-        .update({
-          outstanding_balance: tx.remainingOutstanding,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('phone', cleanPhone);
-    }
-
-    return true;
-  } catch (err) {
-    console.warn('Exception in recordCodCollectionInSupabase:', err);
-    return false;
-  }
+  return false;
 }
 
 /**
- * Permanently logs a Wallet Credit / Refund transaction in Supabase's ledger and updates the customer's wallet_balance.
+ * Wallet credit/refund ledger entries are handled server-side via /api/orders.
  */
-export async function creditCustomerWalletInSupabase(tx: {
+export async function creditCustomerWalletInSupabase(_tx: {
   userId?: string;
   customerPhone: string;
   customerName?: string;
@@ -2217,100 +1639,13 @@ export async function creditCustomerWalletInSupabase(tx: {
   newWalletBalance: number;
   description: string;
 }): Promise<boolean> {
-  if (!supabase) return false;
-
-  try {
-    const { canonicalId, cleanPhone } = await resolveCustomerIdentityAliases(
-      tx.userId,
-      tx.customerPhone
-    );
-
-    // 0. Prevent duplicate ledger entry for the same order refund
-    if (tx.orderId || tx.orderNumber) {
-      try {
-        let dupQuery = supabase.from('ledger').select('id, amount').eq('type', 'CREDIT');
-        if (tx.orderId && tx.orderNumber) {
-          dupQuery = dupQuery.or(`order_id.eq.${tx.orderId},description.ilike.%${tx.orderNumber}%`);
-        } else if (tx.orderId) {
-          dupQuery = dupQuery.eq('order_id', tx.orderId);
-        } else if (tx.orderNumber) {
-          dupQuery = dupQuery.ilike('description', `%${tx.orderNumber}%`);
-        }
-        const { data: existingLedger } = await dupQuery;
-        if (existingLedger && existingLedger.length > 0) {
-          const totalAlreadyCredited = existingLedger.reduce(
-            (sum, r: any) => sum + (Number(r.amount) || 0),
-            0
-          );
-          if (totalAlreadyCredited >= tx.amount) {
-            return true; // Already credited full amount, do not duplicate
-          }
-        }
-      } catch (dupErr) {
-        console.warn('Error checking duplicate ledger entry:', dupErr);
-      }
-    }
-
-    // 1. Authoritatively calculate current balance from persisted ledger records before credit
-    const currentAuthoritativeBalance = await getCustomerWalletBalanceFromLedger(
-      canonicalId,
-      cleanPhone
-    );
-    const authoritativeBalanceAfter =
-      Math.round((currentAuthoritativeBalance + tx.amount) * 100) / 100;
-
-    // 2. Insert into Supabase 'ledger' table using canonical customer ID
-    const ledgerPayload = {
-      id: `led_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-      customer_id: canonicalId,
-      customer_name: tx.customerName || 'Customer',
-      order_id: tx.orderId || null,
-      date: new Date().toISOString(),
-      type: 'CREDIT',
-      amount: tx.amount,
-      description: tx.description,
-      balance_after: authoritativeBalanceAfter,
-    };
-
-    const { error: ledgerError } = await supabase.from('ledger').insert(ledgerPayload);
-    if (ledgerError) {
-      console.warn('Error inserting wallet credit to Supabase ledger:', ledgerError.message);
-      return false;
-    }
-
-    // 3. Safely attempt updating Supabase 'users.wallet_balance' if column exists
-    try {
-      const updatePayload = {
-        wallet_balance: authoritativeBalanceAfter,
-        updated_at: new Date().toISOString(),
-      };
-
-      if (cleanPhone) {
-        await supabase
-          .from('users')
-          .update(updatePayload)
-          .eq('phone', cleanPhone);
-      } else if (canonicalId) {
-        await supabase
-          .from('users')
-          .update(updatePayload)
-          .eq('id', canonicalId);
-      }
-    } catch {
-      // Ignored if column does not exist on users table
-    }
-
-    return true;
-  } catch (err) {
-    console.warn('Exception in creditCustomerWalletInSupabase:', err);
-    return false;
-  }
+  return false;
 }
 
 /**
- * Permanently logs a Wallet Debit transaction in Supabase's ledger and updates the customer's wallet_balance.
+ * Wallet debit ledger entries are handled server-side via /api/orders.
  */
-export async function debitCustomerWalletInSupabase(tx: {
+export async function debitCustomerWalletInSupabase(_tx: {
   userId?: string;
   customerPhone: string;
   customerName?: string;
@@ -2320,88 +1655,7 @@ export async function debitCustomerWalletInSupabase(tx: {
   newWalletBalance: number;
   description: string;
 }): Promise<boolean> {
-  if (!supabase) return false;
-
-  try {
-    const { canonicalId, cleanPhone } = await resolveCustomerIdentityAliases(
-      tx.userId,
-      tx.customerPhone
-    );
-
-    // 0. Prevent duplicate ledger entry for the same order debit
-    if (tx.orderId || tx.orderNumber) {
-      try {
-        let dupQuery = supabase.from('ledger').select('id').eq('type', 'DEBIT');
-        if (tx.orderId && tx.orderNumber) {
-          dupQuery = dupQuery.or(`order_id.eq.${tx.orderId},description.ilike.%${tx.orderNumber}%`);
-        } else if (tx.orderId) {
-          dupQuery = dupQuery.eq('order_id', tx.orderId);
-        } else if (tx.orderNumber) {
-          dupQuery = dupQuery.ilike('description', `%${tx.orderNumber}%`);
-        }
-        const { data: existingLedger } = await dupQuery;
-        if (existingLedger && existingLedger.length > 0) {
-          return true; // Already debited, do not duplicate
-        }
-      } catch (dupErr) {
-        console.warn('Error checking duplicate ledger debit entry:', dupErr);
-      }
-    }
-
-    // 1. Authoritatively calculate current balance from persisted ledger records before debit
-    const currentAuthoritativeBalance = await getCustomerWalletBalanceFromLedger(
-      canonicalId,
-      cleanPhone
-    );
-    const authoritativeBalanceAfter =
-      Math.max(0, Math.round((currentAuthoritativeBalance - tx.amount) * 100) / 100);
-
-    // 2. Insert into Supabase 'ledger' table using canonical customer ID
-    const ledgerPayload = {
-      id: `led_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-      customer_id: canonicalId,
-      customer_name: tx.customerName || 'Customer',
-      order_id: tx.orderId || null,
-      date: new Date().toISOString(),
-      type: 'DEBIT',
-      amount: tx.amount,
-      description: tx.description,
-      balance_after: authoritativeBalanceAfter,
-    };
-
-    const { error: ledgerError } = await supabase.from('ledger').insert(ledgerPayload);
-    if (ledgerError) {
-      console.warn('Error inserting wallet debit to Supabase ledger:', ledgerError.message);
-      return false;
-    }
-
-    // 3. Safely attempt updating Supabase 'users.wallet_balance' if column exists
-    try {
-      const updatePayload = {
-        wallet_balance: authoritativeBalanceAfter,
-        updated_at: new Date().toISOString(),
-      };
-
-      if (cleanPhone) {
-        await supabase
-          .from('users')
-          .update(updatePayload)
-          .eq('phone', cleanPhone);
-      } else if (canonicalId) {
-        await supabase
-          .from('users')
-          .update(updatePayload)
-          .eq('id', canonicalId);
-      }
-    } catch {
-      // Ignored if column does not exist on users table
-    }
-
-    return true;
-  } catch (err) {
-    console.warn('Exception in debitCustomerWalletInSupabase:', err);
-    return false;
-  }
+  return false;
 }
 
 export interface SaveProductResult {
@@ -2422,285 +1676,32 @@ export async function saveProductToSupabase(product: Product): Promise<SaveProdu
 }
 
 /**
- * Loads all products with variants and wholesale slabs from Supabase.
+ * Loads all products with variants and wholesale slabs via the server /api/products endpoint.
  */
 export async function fetchProductsFromSupabase(): Promise<Product[] | null> {
-  if (!supabase) return null;
-
   try {
-    // Attempt ordering by display_order first, then updated_at (fallback to unsorted if columns unavailable)
-    let prodResult = await supabase
-      .from('products')
-      .select('*')
-      .order('display_order', { ascending: true });
+    const res = await fetch(`/api/products?_t=${Date.now()}`, {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        Pragma: 'no-cache',
+      },
+      credentials: 'include',
+      cache: 'no-store',
+    });
 
-    if (prodResult.error) {
-      prodResult = await supabase
-        .from('products')
-        .select('*')
-        .order('updated_at', { ascending: false });
-    }
-
-    if (prodResult.error) {
-      console.warn('Ordering products failed, falling back to unordered select:', prodResult.error.message);
-      prodResult = await supabase.from('products').select('*');
-    }
-
-    const { data: dbProducts, error: prodError } = prodResult;
-
-    if (prodError) {
-      console.error('Failed to fetch products from Supabase:', prodError);
+    if (!res.ok) {
       return null;
     }
 
-    if (!dbProducts || dbProducts.length === 0) {
-      return [];
+    const data = await res.json();
+    if (data && data.success && Array.isArray(data.products)) {
+      return data.products as Product[];
     }
 
-    const productIds = dbProducts.map((p) => p.id);
-    const variantsByProduct: Record<string, ProductVariant[]> = {};
-    const tieredPricesByVariant: Record<string, TieredPrice[]> = {};
-
-    // 1. Check if separate relational product_variants table exists
-    try {
-      const { data: dbVariants, error: varError } = await supabase
-        .from('product_variants')
-        .select('id, product_id, unit, pack_size, pack_label, mrp, base_selling_price, stock_quantity, max_order_limit, barcode, image_url, display_order')
-        .in('product_id', productIds);
-
-      const variantIds = (!varError && dbVariants) ? dbVariants.map((v) => v.id) : [];
-      const allTargetIds = [...variantIds, ...productIds];
-
-      if (allTargetIds.length > 0) {
-        try {
-          const { data: tpData, error: tpError } = await supabase
-            .from('tiered_prices')
-            .select('*')
-            .in('variant_id', allTargetIds);
-
-          if (!tpError && tpData) {
-            for (const tp of tpData) {
-              if (!tieredPricesByVariant[tp.variant_id]) {
-                tieredPricesByVariant[tp.variant_id] = [];
-              }
-              tieredPricesByVariant[tp.variant_id].push({
-                id: tp.id,
-                variantId: tp.variant_id,
-                minQty: Number(tp.min_qty),
-                maxQty: Number(tp.max_qty),
-                unitPrice: Number(tp.unit_price),
-              });
-            }
-          }
-        } catch {
-          // Relational tiered prices table not present
-        }
-      }
-
-      if (!varError && dbVariants && dbVariants.length > 0) {
-        for (const v of dbVariants) {
-          if (!variantsByProduct[v.product_id]) {
-            variantsByProduct[v.product_id] = [];
-          }
-          variantsByProduct[v.product_id].push({
-            id: v.id,
-            productId: v.product_id,
-            unit: (v.unit as UnitType) || UnitType.KG,
-            packSize: Number(v.pack_size || 1),
-            packLabel: v.pack_label || `${v.pack_size || 1} ${v.unit || 'KG'}`,
-            mrp: Number(v.mrp || 0),
-            baseSellingPrice: Number(v.base_selling_price || 0),
-            purchasePrice: (v as any).purchase_price !== undefined && (v as any).purchase_price !== null ? Number((v as any).purchase_price) : undefined,
-            discount: (v as any).discount !== undefined && (v as any).discount !== null ? Number((v as any).discount) : undefined,
-            stockQuantity: Number(v.stock_quantity || 0),
-            maxOrderLimit: Number(v.max_order_limit || 20),
-            tieredPrices: tieredPricesByVariant[v.id] || [],
-            barcode: v.barcode ? String(v.barcode).trim() : null,
-            imageUrl: v.image_url ? String(v.image_url).trim() : undefined,
-            displayOrder: typeof v.display_order === 'number' ? v.display_order : undefined,
-          });
-        }
-      }
-    } catch {
-      // product_variants table not available, fallback to embedded JSONB
-    }
-
-    // Assemble final Product list
-    const assembledProducts: Product[] = dbProducts.map((p) => {
-      // Prioritize explicit category_id or category from database
-      const categoryId = p.category_id || p.category || '';
-
-      // Build lookup map of embedded JSONB variants so purchasePrice, discount, lowStockThreshold & tieredPrices
-      // are preserved even when relational product_variants select omits restricted/optional columns
-      const embeddedVariantById = new Map<string, any>();
-      if (Array.isArray(p.wholesale_tier_discount)) {
-        for (const ev of p.wholesale_tier_discount) {
-          if (ev && ev.id) {
-            embeddedVariantById.set(String(ev.id), ev);
-          }
-        }
-      }
-
-      // 1. Use relational variants if resolved
-      let variants: ProductVariant[] = (variantsByProduct[p.id] || []).map((relV) => {
-        const embedded = embeddedVariantById.get(relV.id);
-        if (!embedded) return relV;
-
-        const embeddedTieredPrices: TieredPrice[] = Array.isArray(embedded.tieredPrices)
-          ? embedded.tieredPrices.map((tp: any, tpIdx: number) => ({
-              id: tp.id || `tp_${relV.id}_${tpIdx}`,
-              variantId: tp.variantId || tp.variant_id || relV.id,
-              minQty: Number(tp.minQty ?? tp.min_qty ?? 1),
-              maxQty: Number(tp.maxQty ?? tp.max_qty ?? 9999),
-              unitPrice: Number(tp.unitPrice ?? tp.unit_price ?? relV.baseSellingPrice ?? 0),
-            }))
-          : [];
-
-        const resolvedPurchasePrice =
-          relV.purchasePrice !== undefined
-            ? relV.purchasePrice
-            : embedded.purchasePrice !== undefined && embedded.purchasePrice !== null
-            ? Number(embedded.purchasePrice)
-            : embedded.purchase_price !== undefined && embedded.purchase_price !== null
-            ? Number(embedded.purchase_price)
-            : undefined;
-
-        const resolvedDiscount =
-          relV.discount !== undefined
-            ? relV.discount
-            : embedded.discount !== undefined && embedded.discount !== null
-            ? Number(embedded.discount)
-            : undefined;
-
-        const resolvedLowStock =
-          relV.lowStockThreshold !== undefined
-            ? relV.lowStockThreshold
-            : embedded.lowStockThreshold !== undefined && embedded.lowStockThreshold !== null
-            ? Number(embedded.lowStockThreshold)
-            : undefined;
-
-        return {
-          ...relV,
-          purchasePrice: resolvedPurchasePrice,
-          discount: resolvedDiscount,
-          lowStockThreshold: resolvedLowStock,
-          tieredPrices:
-            relV.tieredPrices && relV.tieredPrices.length > 0
-              ? relV.tieredPrices
-              : embeddedTieredPrices,
-        };
-      });
-
-      // 2. Otherwise extract from embedded wholesale_tier_discount (JSONB) if it contains variant objects
-      if (variants.length === 0 && Array.isArray(p.wholesale_tier_discount) && p.wholesale_tier_discount.length > 0) {
-        // Only treat as variants if elements have packSize, packLabel, or variant IDs
-        const hasVariantShape = p.wholesale_tier_discount.some((item: any) => item && (item.packSize || item.pack_size || item.packLabel || item.pack_label || item.unit));
-        if (hasVariantShape) {
-          variants = p.wholesale_tier_discount.map((v: any, idx: number) => {
-            const vUnit = (v.unit as UnitType) || UnitType.KG;
-            const vPackSize = Number(v.packSize ?? v.pack_size ?? 1);
-            const vPackLabel = v.packLabel || v.pack_label || `${vPackSize} ${vUnit}`;
-            const vTieredPrices: TieredPrice[] = Array.isArray(v.tieredPrices)
-              ? v.tieredPrices.map((tp: any, tpIdx: number) => ({
-                  id: tp.id || `tp_${v.id || idx}_${tpIdx}`,
-                  variantId: tp.variantId || tp.variant_id || v.id || `var_${p.id}_${idx}`,
-                  minQty: Number(tp.minQty ?? tp.min_qty ?? 1),
-                  maxQty: Number(tp.maxQty ?? tp.max_qty ?? 999),
-                  unitPrice: Number(tp.unitPrice ?? tp.unit_price ?? v.baseSellingPrice ?? v.base_selling_price ?? p.price ?? 0),
-                }))
-              : [];
-
-            return {
-              id: v.id || `var_${p.id}_${idx + 1}`,
-              productId: p.id,
-              unit: vUnit,
-              packSize: vPackSize,
-              packLabel: vPackLabel,
-              mrp: Number(v.mrp || p.mrp || 0),
-              baseSellingPrice: Number(v.baseSellingPrice ?? v.base_selling_price ?? p.price ?? 0),
-              purchasePrice: v.purchasePrice !== undefined && v.purchasePrice !== null ? Number(v.purchasePrice) : (v.purchase_price !== undefined ? Number(v.purchase_price) : undefined),
-              discount: v.discount !== undefined && v.discount !== null ? Number(v.discount) : undefined,
-              stockQuantity: Number(v.stockQuantity ?? v.stock_quantity ?? p.stock ?? 0),
-              maxOrderLimit: Number(v.maxOrderLimit ?? v.max_order_limit ?? 20),
-              tieredPrices: vTieredPrices,
-              lowStockThreshold: v.lowStockThreshold !== undefined && v.lowStockThreshold !== null ? Number(v.lowStockThreshold) : undefined,
-              barcode: v.barcode ? String(v.barcode).trim() : null,
-              imageUrl: v.imageUrl || v.image_url ? String(v.imageUrl || v.image_url).trim() : undefined,
-              displayOrder: typeof v.displayOrder === 'number' ? v.displayOrder : (typeof v.display_order === 'number' ? v.display_order : idx + 1),
-            };
-          });
-        }
-      }
-
-      // Sort variants strictly by displayOrder
-      if (variants.length > 0) {
-        variants.sort((a, b) => {
-          if (typeof a.displayOrder === 'number' && typeof b.displayOrder === 'number') {
-            return a.displayOrder - b.displayOrder;
-          }
-          if (typeof a.displayOrder === 'number') return -1;
-          if (typeof b.displayOrder === 'number') return 1;
-          return 0;
-        });
-      }
-
-      // Product-level tiered prices (for variant-less products or product-level wholesale slabs)
-      const prodTieredPrices: TieredPrice[] = tieredPricesByVariant[p.id] || (
-        Array.isArray(p.tiered_prices)
-          ? p.tiered_prices.map((tp: any, tpIdx: number) => ({
-              id: tp.id || `tp_${p.id}_${tpIdx}`,
-              variantId: tp.variantId || tp.variant_id || p.id,
-              minQty: Number(tp.minQty ?? tp.min_qty ?? 1),
-              maxQty: Number(tp.maxQty ?? tp.max_qty ?? 999),
-              unitPrice: Number(tp.unitPrice ?? tp.unit_price ?? p.price ?? 0),
-            }))
-          : []
-      );
-
-      return {
-        id: p.id,
-        name: p.name,
-        brand: p.brand || p.sub_category || '',
-        description: p.description || '',
-        categoryId,
-        imageUrl: p.image_url && String(p.image_url).trim() ? String(p.image_url).trim() : undefined,
-        barcode: p.barcode ? String(p.barcode).trim() : null,
-        isDiscountExcluded: p.is_discount_excluded ?? false,
-        searchKeywords: (p.search_keywords || p.badge || '').trim() || undefined,
-        purchasePrice: p.purchase_price !== undefined && p.purchase_price !== null ? Number(p.purchase_price) : variants[0]?.purchasePrice,
-        discount: p.discount !== undefined && p.discount !== null ? Number(p.discount) : variants[0]?.discount,
-        displayOrder: typeof p.display_order === 'number' ? p.display_order : undefined,
-        price: p.price !== undefined ? Number(p.price) : (variants[0]?.baseSellingPrice || 0),
-        mrp: p.mrp !== undefined ? Number(p.mrp) : (variants[0]?.mrp || 0),
-        baseSellingPrice: p.price !== undefined ? Number(p.price) : (variants[0]?.baseSellingPrice || 0),
-        stock: variants.length > 0
-          ? variants.reduce((sum, v) => sum + (Number(v.stockQuantity) || 0), 0)
-          : Number(p.stock || p.stock_quantity || 0),
-        stockQuantity: variants.length > 0
-          ? variants.reduce((sum, v) => sum + (Number(v.stockQuantity) || 0), 0)
-          : Number(p.stock || p.stock_quantity || 0),
-        unit: p.unit || (variants[0]?.unit ?? UnitType.NOS),
-        packSize: p.pack_size !== undefined ? Number(p.pack_size) : (p.weight_per_unit_kg !== undefined ? Number(p.weight_per_unit_kg) : 1),
-        packLabel: p.pack_label || (p.unit ? String(p.unit) : undefined),
-        maxOrderLimit: Number(p.max_order_limit ?? (p.min_order_qty ? p.min_order_qty * 10 : 20)),
-        tieredPrices: prodTieredPrices,
-        variants,
-        createdAt: p.created_at || p.updated_at || new Date().toISOString(),
-      };
-    });
-
-    assembledProducts.sort((a, b) => {
-      if (typeof a.displayOrder === 'number' && typeof b.displayOrder === 'number') {
-        return a.displayOrder - b.displayOrder;
-      }
-      if (typeof a.displayOrder === 'number') return -1;
-      if (typeof b.displayOrder === 'number') return 1;
-      return 0;
-    });
-
-    return assembledProducts;
-  } catch (err) {
-    console.error('Exception in fetchProductsFromSupabase:', err);
+    return null;
+  } catch {
     return null;
   }
 }
@@ -3018,44 +2019,42 @@ export function subscribeToProductRequests(
 }
 
 /**
- * Fetches all categories from Supabase ordered by display_order.
+ * Fetches all categories via the server /api/categories endpoint.
  */
 export async function fetchCategoriesFromSupabase(): Promise<Category[] | null> {
-  if (!supabase) return null;
   try {
-    const { data, error } = await supabase
-      .from('categories')
-      .select('*')
-      .order('display_order', { ascending: true });
+    const res = await fetch(`/api/categories?_t=${Date.now()}`, {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        Pragma: 'no-cache',
+      },
+      credentials: 'include',
+      cache: 'no-store',
+    });
 
-    if (error) {
-      console.warn('Failed to fetch categories from Supabase:', error.message);
+    if (!res.ok) {
       return null;
     }
 
-    if (!data) return [];
+    const data = await res.json();
+    if (data && data.success && Array.isArray(data.categories)) {
+      return data.categories as Category[];
+    }
 
-    return data.map((row: any) => ({
-      id: String(row.id),
-      name: String(row.name || ''),
-      imageUrl: row.image_url ? String(row.image_url) : '',
-      displayOrder: typeof row.display_order === 'number' ? row.display_order : 1,
-    }));
-  } catch (err) {
-    console.warn('Error fetching categories from Supabase:', err);
+    return null;
+  } catch {
     return null;
   }
 }
 
 /**
- * Saves or updates a Category in Supabase.
+ * Saves or updates a Category via the server /api/categories endpoint.
  */
 export async function saveCategoryToSupabase(
   category: Category
 ): Promise<{ success: boolean; error?: string; category?: Category }> {
-  if (!supabase) {
-    return { success: false, error: 'Supabase is not configured.' };
-  }
   try {
     const cleanId = (category.id || `cat_${Date.now()}`).trim();
     const cleanName = (category.name || '').trim();
@@ -3063,105 +2062,112 @@ export async function saveCategoryToSupabase(
       return { success: false, error: 'Category name is required.' };
     }
 
-    const payload = {
-      id: cleanId,
-      name: cleanName,
-      image_url: category.imageUrl ? category.imageUrl.trim() : null,
-      display_order: typeof category.displayOrder === 'number' ? category.displayOrder : 1,
-      updated_at: new Date().toISOString(),
-    };
+    const res = await fetch('/api/categories', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      credentials: 'include',
+      body: JSON.stringify({
+        id: cleanId,
+        name: cleanName,
+        imageUrl: category.imageUrl ? category.imageUrl.trim() : '',
+        displayOrder: typeof category.displayOrder === 'number' ? category.displayOrder : 1,
+      }),
+    });
 
-    const { data, error } = await supabase
-      .from('categories')
-      .upsert(payload, { onConflict: 'id' })
-      .select('*')
-      .maybeSingle();
-
-    if (error) {
-      console.error('Failed to save category to Supabase:', error.message);
-      return { success: false, error: error.message };
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data?.success) {
+      return {
+        success: false,
+        error: data?.error || `Failed to save category (HTTP ${res.status}).`,
+      };
     }
 
-    const savedCat: Category = {
-      id: data?.id || cleanId,
-      name: data?.name || cleanName,
-      imageUrl: data?.image_url || category.imageUrl || '',
-      displayOrder: data?.display_order ?? category.displayOrder ?? 1,
+    return {
+      success: true,
+      category: data.category || {
+        id: cleanId,
+        name: cleanName,
+        imageUrl: category.imageUrl || '',
+        displayOrder: category.displayOrder ?? 1,
+      },
     };
-
-    return { success: true, category: savedCat };
   } catch (err: any) {
-    console.error('Exception saving category to Supabase:', err);
-    return { success: false, error: err?.message || 'Database error occurred while saving category.' };
+    return {
+      success: false,
+      error: err?.message || 'Network error occurred while saving category.',
+    };
   }
 }
 
 /**
- * Deletes a Category from Supabase.
+ * Deletes a Category via the server /api/categories endpoint.
  */
 export async function deleteCategoryFromSupabase(
   categoryId: string
 ): Promise<{ success: boolean; error?: string }> {
-  if (!supabase) {
-    return { success: false, error: 'Supabase is not configured.' };
-  }
   try {
-    // Nullify category references on products
-    try {
-      await supabase
-        .from('products')
-        .update({ category_id: null })
-        .eq('category_id', categoryId);
-    } catch {}
+    const res = await fetch(`/api/categories?id=${encodeURIComponent(categoryId)}`, {
+      method: 'DELETE',
+      headers: {
+        Accept: 'application/json',
+      },
+      credentials: 'include',
+    });
 
-    const { error } = await supabase
-      .from('categories')
-      .delete()
-      .eq('id', categoryId);
-
-    if (error) {
-      console.error('Failed to delete category from Supabase:', error.message);
-      return { success: false, error: error.message };
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data?.success) {
+      return {
+        success: false,
+        error: data?.error || `Failed to delete category (HTTP ${res.status}).`,
+      };
     }
 
     return { success: true };
   } catch (err: any) {
-    console.error('Exception deleting category from Supabase:', err);
-    return { success: false, error: err?.message || 'Database error occurred while deleting category.' };
+    return {
+      success: false,
+      error: err?.message || 'Network error occurred while deleting category.',
+    };
   }
 }
 
 /**
- * Reorders categories in Supabase.
+ * Reorders categories via the server /api/categories endpoint.
  */
 export async function reorderCategoriesInSupabase(
   categoryList: Category[]
 ): Promise<{ success: boolean; error?: string }> {
-  if (!supabase) {
-    return { success: false, error: 'Supabase is not configured.' };
-  }
   try {
-    const updates = categoryList.map((cat, idx) => ({
-      id: cat.id,
-      name: cat.name,
-      image_url: cat.imageUrl || null,
-      display_order: idx + 1,
-      updated_at: new Date().toISOString(),
-    }));
+    const res = await fetch('/api/categories', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      credentials: 'include',
+      body: JSON.stringify({
+        action: 'reorder',
+        categories: categoryList,
+      }),
+    });
 
-    const { error } = await supabase
-      .from('categories')
-      .upsert(updates, { onConflict: 'id' });
-
-    if (error) {
-      console.warn('Reorder categories sync failed:', error.message);
-      return { success: false, error: error.message };
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data?.success) {
+      return {
+        success: false,
+        error: data?.error || `Failed to reorder categories (HTTP ${res.status}).`,
+      };
     }
 
     return { success: true };
   } catch (err: any) {
-    console.warn('Exception reordering categories in Supabase:', err);
-    return { success: false, error: err?.message };
+    return {
+      success: false,
+      error: err?.message || 'Network error occurred while reordering categories.',
+    };
   }
 }
 

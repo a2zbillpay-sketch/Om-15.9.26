@@ -267,6 +267,7 @@ export async function recordCodCollectionViaApi(payload: {
     const res = await fetch('/api/cod-collections', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
       body: JSON.stringify(payload),
     });
 
@@ -310,7 +311,9 @@ export async function fetchCodCollectionsFromApi(phone?: string): Promise<{
     const url = phone
       ? `/api/cod-collections?phone=${encodeURIComponent(normalizePhone(phone))}`
       : '/api/cod-collections';
-    const res = await fetch(url);
+    const res = await fetch(url, {
+      credentials: 'include',
+    });
     if (!res.ok) {
       throw new Error(`HTTP ${res.status}`);
     }

@@ -41,13 +41,17 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
 }) => {
   const { orders, cancelOrder, startEditingOrder, repeatOrder, currentUser, refreshOrders } = useApp();
   const [secondsRemaining, setSecondsRemaining] = useState<number>(0);
+  const [isCancelling, setIsCancelling] = useState<boolean>(false);
   const [cancelMessage, setCancelMessage] = useState<string | null>(null);
+  const [cancelError, setCancelError] = useState<string | null>(null);
 
   useEffect(() => {
     if (isOpen) {
+      setCancelMessage(null);
+      setCancelError(null);
       refreshOrders().catch(() => {});
     }
-  }, [isOpen]);
+  }, [isOpen, order?.id]);
 
   // Automatically sync with latest order state from AppContext
   const currentOrder = (order && orders.find((o) => o.id === order.id)) || order;
@@ -125,31 +129,58 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
     amountCollected = currentOrder.totalPayable !== undefined ? currentOrder.totalPayable : currentOrder.finalAmount;
   }
 
-  const handleCancel = () => {
-    const refundAmount = walletUsed + actualOnlinePayment;
-    const success = cancelOrder(currentOrder.id);
-    if (success) {
-      let isRefunded = false;
-      try {
-        const savedOrders = localStorage.getItem('om_orders');
-        if (savedOrders) {
-          const parsed = JSON.parse(savedOrders);
-          const found = parsed.find((o: any) => o.id === currentOrder.id || o.orderNumber === currentOrder.orderNumber);
-          if (found && found.paymentStatus === PaymentStatus.REFUNDED) {
-            isRefunded = true;
-          }
-        }
-      } catch {}
+  const handleCancel = async () => {
+    if (isCancelling) return;
+    setIsCancelling(true);
+    setCancelError(null);
+    setCancelMessage(null);
 
-      setCancelMessage(
-        refundAmount > 0 && isRefunded
-          ? walletUsed > 0 && actualOnlinePayment > 0
-            ? `Order cancelled! Full refund of ₹${refundAmount} (₹${walletUsed} wallet used + ₹${actualOnlinePayment} online advance) has been refunded directly to your Store Wallet.`
-            : walletUsed > 0
-            ? `Order cancelled! Full refund of ₹${refundAmount} (₹${walletUsed} wallet used) has been refunded directly to your Store Wallet.`
-            : `Order cancelled! Full refund of ₹${refundAmount} online payment has been refunded directly to your Store Wallet.`
-          : 'Order successfully cancelled.'
+    try {
+      const result = await cancelOrder(currentOrder.id);
+      if (!result.success) {
+        setCancelError(
+          result.error || 'Unable to cancel order right now. Please try again.'
+        );
+        return;
+      }
+
+      const refundAmt = result.refundAmount || 0;
+      const wUsed = result.walletUsed || 0;
+      const oPaid = result.onlinePaid || 0;
+      const cPaid = result.codPaid || 0;
+
+      if (result.refunded && refundAmt > 0) {
+        const walletLabel = result.offlineOnly ? 'local Store Wallet' : 'Store Wallet';
+        if (wUsed > 0 && oPaid > 0) {
+          setCancelMessage(
+            `Order cancelled! Full refund of ₹${refundAmt} (₹${wUsed} wallet used + ₹${oPaid} online advance) has been refunded directly to your ${walletLabel}.`
+          );
+        } else if (wUsed > 0 && cPaid > 0) {
+          setCancelMessage(
+            `Order cancelled! Full refund of ₹${refundAmt} (₹${wUsed} wallet used + ₹${cPaid} COD payment) has been refunded directly to your ${walletLabel}.`
+          );
+        } else if (wUsed > 0) {
+          setCancelMessage(
+            `Order cancelled! Full refund of ₹${refundAmt} (₹${wUsed} wallet used) has been refunded directly to your ${walletLabel}.`
+          );
+        } else if (cPaid > 0) {
+          setCancelMessage(
+            `Order cancelled! Full refund of ₹${refundAmt} COD payment has been refunded directly to your ${walletLabel}.`
+          );
+        } else {
+          setCancelMessage(
+            `Order cancelled! Full refund of ₹${refundAmt} online payment has been refunded directly to your ${walletLabel}.`
+          );
+        }
+      } else {
+        setCancelMessage('Order successfully cancelled.');
+      }
+    } catch (err: any) {
+      setCancelError(
+        err?.message || 'Unable to cancel order due to a network error. Please try again.'
       );
+    } finally {
+      setIsCancelling(false);
     }
   };
 
@@ -250,21 +281,49 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
               </div>
 
               {isCancellable && (
-                <button
-                  id="cancel-order-btn"
-                  onClick={handleEditOrder}
-                  className="bg-[#0F2C59] hover:bg-[#153e7d] text-white font-bold text-xs px-3 py-1.5 rounded-lg shrink-0 shadow-sm transition flex items-center gap-1.5 cursor-pointer"
-                >
-                  <Edit3 size={13} className="text-[#D4AF37]" />
-                  <span>Edit Order</span>
-                </button>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    id="edit-order-btn"
+                    type="button"
+                    onClick={handleEditOrder}
+                    disabled={isCancelling}
+                    className="bg-[#0F2C59] hover:bg-[#153e7d] disabled:opacity-60 text-white font-bold text-xs px-3 py-1.5 rounded-lg shrink-0 shadow-sm transition flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Edit3 size={13} className="text-[#D4AF37]" />
+                    <span>Edit Order</span>
+                  </button>
+                  <button
+                    id="cancel-order-btn"
+                    type="button"
+                    onClick={handleCancel}
+                    disabled={isCancelling}
+                    className="bg-red-600 hover:bg-red-700 disabled:opacity-60 text-white font-bold text-xs px-3 py-1.5 rounded-lg shrink-0 shadow-sm transition flex items-center gap-1 cursor-pointer"
+                  >
+                    <X size={13} />
+                    <span>{isCancelling ? 'Cancelling...' : 'Cancel Order'}</span>
+                  </button>
+                </div>
               )}
             </div>
           )}
 
+          {cancelError && (
+            <div
+              id="cancel-order-error"
+              className="p-3 bg-red-50 border border-red-300 text-red-900 text-xs rounded-xl font-semibold flex items-start gap-2"
+            >
+              <AlertTriangle size={15} className="text-red-600 shrink-0 mt-0.5" />
+              <span>{cancelError}</span>
+            </div>
+          )}
+
           {cancelMessage && (
-            <div className="p-3 bg-red-50 border border-red-200 text-red-800 text-xs rounded-xl font-semibold">
-              {cancelMessage}
+            <div
+              id="cancel-order-success"
+              className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs rounded-xl font-semibold flex items-start gap-2"
+            >
+              <CheckCircle size={15} className="text-emerald-600 shrink-0 mt-0.5" />
+              <span>{cancelMessage}</span>
             </div>
           )}
 
@@ -272,14 +331,17 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
             <div className="p-3 bg-red-50 border border-red-200 text-red-800 text-xs rounded-xl font-semibold">
               {(() => {
                 const wUsed = Math.max(0, currentOrder.walletAmountUsed || 0);
+                const isRefunded = currentOrder.paymentStatus === PaymentStatus.REFUNDED;
+                const isCodOrder = currentOrder.paymentMethod === PaymentMethod.COD;
                 const isAdv =
                   currentOrder.paymentMethod === PaymentMethod.ADVANCE_ONLINE ||
                   currentOrder.paymentStatus === PaymentStatus.RECEIVED ||
-                  currentOrder.paymentStatus === PaymentStatus.REFUNDED;
+                  (isRefunded && !isCodOrder);
                 const isFinalNet =
                   wUsed > 0 &&
                   currentOrder.subtotal !== undefined &&
                   Math.abs(currentOrder.finalAmount - (currentOrder.subtotal - (currentOrder.discountAmount || 0) + (currentOrder.deliveryFee || 0) - wUsed)) < 2;
+                const cPaid = isCodOrder ? Math.max(0, currentOrder.codCollectedAmount || 0) : 0;
                 const oPaid = isAdv
                   ? currentOrder.previousOnlinePaid !== undefined && currentOrder.previousOnlinePaid > 0
                     ? currentOrder.previousOnlinePaid
@@ -287,14 +349,21 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
                     ? currentOrder.finalAmount
                     : Math.max(0, currentOrder.finalAmount - wUsed)
                   : 0;
-                const rTot = wUsed + oPaid;
-                const isRefunded = currentOrder.paymentStatus === PaymentStatus.REFUNDED;
+                const rTot = wUsed + oPaid + cPaid;
                 if (rTot > 0 && isRefunded) {
-                  return wUsed > 0 && oPaid > 0
-                    ? `Order Cancelled. Full refund of ₹${rTot} (₹${wUsed} wallet used + ₹${oPaid} online advance) has been refunded to your Store Wallet.`
-                    : wUsed > 0
-                    ? `Order Cancelled. Full refund of ₹${rTot} (₹${wUsed} wallet used) has been refunded to your Store Wallet.`
-                    : `Order Cancelled. Full refund of ₹${rTot} online payment has been refunded to your Store Wallet.`;
+                  if (wUsed > 0 && oPaid > 0) {
+                    return `Order Cancelled. Full refund of ₹${rTot} (₹${wUsed} wallet used + ₹${oPaid} online advance) has been refunded to your Store Wallet.`;
+                  }
+                  if (wUsed > 0 && cPaid > 0) {
+                    return `Order Cancelled. Full refund of ₹${rTot} (₹${wUsed} wallet used + ₹${cPaid} COD payment) has been refunded to your Store Wallet.`;
+                  }
+                  if (wUsed > 0) {
+                    return `Order Cancelled. Full refund of ₹${rTot} (₹${wUsed} wallet used) has been refunded to your Store Wallet.`;
+                  }
+                  if (cPaid > 0) {
+                    return `Order Cancelled. Full refund of ₹${rTot} COD payment has been refunded to your Store Wallet.`;
+                  }
+                  return `Order Cancelled. Full refund of ₹${rTot} online payment has been refunded to your Store Wallet.`;
                 }
                 return 'Order has been cancelled.';
               })()}

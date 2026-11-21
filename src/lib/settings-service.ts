@@ -1,10 +1,5 @@
 import { SystemSetting } from '../types';
 import { INITIAL_SETTINGS } from '../data/seedData';
-import {
-  fetchSettingsFromSupabase,
-  saveSettingsToSupabase,
-  subscribeToSupabaseSettings,
-} from './supabase';
 
 const SETTINGS_BROADCAST_CHANNEL = 'om_distributors_settings_sync';
 const LOCAL_STORAGE_KEY = 'om_settings';
@@ -82,6 +77,7 @@ export async function fetchRemoteSettings(): Promise<SystemSetting | null> {
         'Cache-Control': 'no-cache, no-store, must-revalidate',
         Pragma: 'no-cache',
       },
+      credentials: 'include',
       cache: 'no-store',
     });
 
@@ -115,56 +111,20 @@ export async function fetchRemoteSettings(): Promise<SystemSetting | null> {
 }
 
 /**
- * Unified fetch that queries Supabase store_settings table first,
- * migrates existing local customizations to Supabase if the database is unseeded,
- * and falls back to /api/settings or local cached state safely without losing data.
+ * Unified fetch that queries the server /api/settings endpoint (backed by Service Role)
+ * and falls back safely to local cached state without triggering direct anon Supabase queries.
  */
 export async function fetchUnifiedSettings(
   currentLocal?: SystemSetting
 ): Promise<SystemSetting> {
   const local = currentLocal || loadCachedLocalSettings();
 
-  // 1. Try Supabase store_settings directly
-  try {
-    const dbSettings = await fetchSettingsFromSupabase(local);
-    if (dbSettings) {
-      // If dbSettings has valid timestamp or content, check if other non-discount local customizations need migration
-      if (
-        hasCustomSettings(local) &&
-        !hasCustomSettings(dbSettings) &&
-        local.updatedAt &&
-        (!dbSettings.updatedAt || local.updatedAt > dbSettings.updatedAt)
-      ) {
-        // Never allow stale local settings to overwrite Supabase store_settings.advance_discount_percentage
-        const safeMerged: SystemSetting = {
-          ...local,
-          advancePaymentDiscountPct: dbSettings.advancePaymentDiscountPct,
-        };
-        saveSettingsToSupabase(safeMerged).catch((e) =>
-          console.warn('Auto-migration to Supabase notice:', e)
-        );
-        saveCachedLocalSettings(safeMerged);
-        return safeMerged;
-      }
-
-      saveCachedLocalSettings(dbSettings);
-      return dbSettings;
-    } else if (hasCustomSettings(local)) {
-      // Supabase table returned null/empty but we have other custom settings -> never seed stale local discount
-      saveSettingsToSupabase({ ...local, advancePaymentDiscountPct: 0.0 }).catch(() => {});
-    }
-  } catch (err) {
-    console.warn('Supabase settings query notice (falling back to server endpoint):', err);
-  }
-
-  // 2. Fallback to /api/settings (server persistence)
   const serverSettings = await fetchRemoteSettings();
   if (serverSettings) {
     saveCachedLocalSettings(serverSettings);
     return serverSettings;
   }
 
-  // 3. Fallback safely when Supabase & server are unavailable (advance discount strictly 0.00)
   return {
     ...local,
     advancePaymentDiscountPct: 0.0,
@@ -172,7 +132,7 @@ export async function fetchUnifiedSettings(
 }
 
 /**
- * Saves settings to the server endpoint and broadcasts locally.
+ * Saves settings to the server /api/settings endpoint with Shopkeeper session credentials.
  */
 export async function saveRemoteSettings(
   updates: Partial<SystemSetting>
@@ -185,6 +145,7 @@ export async function saveRemoteSettings(
         Accept: 'application/json',
         'Cache-Control': 'no-cache, no-store, must-revalidate',
       },
+      credentials: 'include',
       cache: 'no-store',
       body: JSON.stringify({ settings: updates }),
     });
@@ -205,8 +166,8 @@ export async function saveRemoteSettings(
 }
 
 /**
- * Unified save that persists to Supabase store_settings table,
- * /api/settings (server disk), localStorage, and cross-tab BroadcastChannel.
+ * Unified save that persists via /api/settings (which syncs Supabase store_settings & /data/settings.json),
+ * localStorage, and cross-tab BroadcastChannel.
  */
 export async function saveUnifiedSettings(
   updatedSettings: SystemSetting
@@ -217,36 +178,19 @@ export async function saveUnifiedSettings(
   // Broadcast to other open tabs and PWA instances
   broadcastSettingsChange(updatedSettings);
 
-  let supabaseSuccess = false;
-  let serverSuccess = false;
-  let lastError = '';
-
-  // 1. Direct Supabase write
-  try {
-    const sbResult = await saveSettingsToSupabase(updatedSettings);
-    if (sbResult.success) {
-      supabaseSuccess = true;
-    } else {
-      lastError = sbResult.error || 'Failed to save to Supabase';
-    }
-  } catch (e: any) {
-    lastError = e?.message || 'Error communicating with Supabase';
-  }
-
-  // 2. Server API write (which also syncs /data/settings.json and acts as resilient proxy)
   try {
     const srvResult = await saveRemoteSettings(updatedSettings);
     if (srvResult) {
-      serverSuccess = true;
+      saveCachedLocalSettings(srvResult);
+      return { success: true };
     }
+    return { success: false, error: 'Failed to save settings via server API.' };
   } catch (e: any) {
-    if (!lastError) lastError = e?.message || 'Error communicating with server';
+    return {
+      success: false,
+      error: e?.message || 'Error communicating with settings server API.',
+    };
   }
-
-  return {
-    success: supabaseSuccess || serverSuccess,
-    error: supabaseSuccess || serverSuccess ? undefined : lastError,
-  };
 }
 
 /**
@@ -298,10 +242,8 @@ export function subscribeToSettingsSync(
     onUpdate(incoming);
   };
 
-  // 1. Supabase Postgres Changes real-time subscription
-  const unsubscribeSupabase = subscribeToSupabaseSettings((sbSettings) => {
-    applyUpdateIfChanged(sbSettings);
-  }, currentLocal);
+  // 1. Cross-context synchronization via BroadcastChannel, storage events, focus/visibility, and polling
+  // (Direct browser anon Realtime subscriptions on store_settings are omitted to prevent 401/RLS failures)
 
   // 2. BroadcastChannel listener (instant same-origin cross-context messages)
   const handleBroadcastMessage = (event: MessageEvent) => {
@@ -355,9 +297,6 @@ export function subscribeToSettingsSync(
   // Cleanup handler
   return () => {
     isSubscribed = false;
-    if (unsubscribeSupabase) {
-      unsubscribeSupabase();
-    }
     if (broadcastChannel) {
       broadcastChannel.removeEventListener('message', handleBroadcastMessage);
     }

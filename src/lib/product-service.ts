@@ -504,7 +504,6 @@ export async function saveProductWithCascadeSync(
       is_discount_excluded: product.isDiscountExcluded ?? false,
       search_keywords: keywordsVal,
       badge: keywordsVal,
-      display_order: typeof product.displayOrder === 'number' ? product.displayOrder : undefined,
       updated_at: new Date().toISOString(),
     };
 
@@ -607,7 +606,7 @@ export async function saveProductWithCascadeSync(
         }
 
         if (incomingVariants.length > 0) {
-          const variantsPayload = incomingVariants.map((v, vIdx) => ({
+          const variantsPayload = incomingVariants.map((v) => ({
             id: v.id,
             product_id: product.id,
             unit: v.unit,
@@ -618,7 +617,6 @@ export async function saveProductWithCascadeSync(
             purchase_price: v.purchasePrice !== undefined && v.purchasePrice !== null ? Number(v.purchasePrice) : null,
             barcode: v.barcode && String(v.barcode).trim() ? String(v.barcode).trim() : null,
             image_url: v.imageUrl && String(v.imageUrl).trim() ? String(v.imageUrl).trim() : null,
-            display_order: typeof v.displayOrder === 'number' ? v.displayOrder : vIdx + 1,
             stock_quantity: v.stockQuantity !== undefined && v.stockQuantity !== null ? Number(v.stockQuantity) : 0,
             max_order_limit: v.maxOrderLimit !== undefined && v.maxOrderLimit !== null ? Number(v.maxOrderLimit) : 12,
             updated_at: new Date().toISOString(),
@@ -641,7 +639,7 @@ export async function saveProductWithCascadeSync(
               if (varInsert.error?.message?.includes('barcode')) delete r.barcode;
               if (varInsert.error?.message?.includes('image_url')) delete r.image_url;
               if (varInsert.error?.message?.includes('purchase_price')) delete r.purchase_price;
-              if (varInsert.error?.message?.includes('display_order')) delete r.display_order;
+              if (varInsert.error?.message?.includes('pack_size')) delete r.pack_size;
               return r;
             });
             const retryInsert = await supabaseClient.from('product_variants').upsert(stripped, { onConflict: 'id' });

@@ -377,10 +377,10 @@ export async function matchesRecoveryIdentity(input: string): Promise<boolean> {
       }
     }
 
-    // Dynamic Supabase validation for any registered SHOPKEEPER phone
-    if (process.env.VITE_SUPABASE_URL && process.env.VITE_SUPABASE_ANON_KEY) {
-      try {
-        const supabase = createClient(process.env.VITE_SUPABASE_URL, process.env.VITE_SUPABASE_ANON_KEY);
+    // Dynamic Supabase validation for any registered SHOPKEEPER phone using server service-role client
+    try {
+      const supabase = await getServerSupabaseClient();
+      if (supabase) {
         const { data } = await supabase
           .from('users')
           .select('id, role')
@@ -391,9 +391,9 @@ export async function matchesRecoveryIdentity(input: string): Promise<boolean> {
         if (data && data.role === 'SHOPKEEPER') {
           return true;
         }
-      } catch {
-        // Fall back gracefully if Supabase network is unavailable
       }
+    } catch {
+      // Fall back gracefully if Supabase network is unavailable
     }
   }
 
