@@ -572,7 +572,7 @@ BEGIN
         'quantity', v_item_qty,
         'unitPrice', v_item_unit_price,
         'price', v_item_line_total,
-        'isDiscountExcluded', coalesce((v_item->>'isDiscountExcluded')::boolean, false)
+        'isDiscountExcluded', (lower(btrim(coalesce(v_item->>'isDiscountExcluded', ''))) IN ('true', 't', '1', 'yes'))
       )
     );
   END LOOP;
@@ -644,13 +644,13 @@ BEGIN
     WHERE id = v_req_cid
     LIMIT 1;
 
-    -- Fail closed if caller's UUID resolves to another customer's phone or non-CUSTOMER account
-    IF FOUND AND v_actor_role = 'CUSTOMER' THEN
+    -- Fail closed if UUID resolves to a non-CUSTOMER row or another customer's phone
+    IF FOUND THEN
       IF v_pre_db_role <> 'CUSTOMER' OR (coalesce(v_pre_db_phone, '') <> '' AND v_pre_db_phone <> v_clean_phone) THEN
         RETURN jsonb_build_object(
           'ok', false,
           'statusCode', 403,
-          'error', 'Forbidden: Customer session identity does not match registered account.'
+          'error', 'Forbidden: Customer identity does not match registered account.'
         );
       END IF;
     END IF;
@@ -726,11 +726,11 @@ BEGIN
     v_user_found := FOUND;
 
     -- Re-verify under lock that UUID row cannot cross customer phone boundaries
-    IF v_user_found AND v_actor_role = 'CUSTOMER' AND coalesce(v_user_phone, '') <> '' AND v_user_phone <> v_clean_phone THEN
+    IF v_user_found AND coalesce(v_user_phone, '') <> '' AND v_user_phone <> v_clean_phone THEN
       RETURN jsonb_build_object(
         'ok', false,
         'statusCode', 403,
-        'error', 'Forbidden: Customer session identity does not match registered account.'
+        'error', 'Forbidden: Customer identity does not match registered account.'
       );
     END IF;
   END IF;
@@ -1141,6 +1141,14 @@ BEGIN
       'items', v_canonical_items
     )
   );
+EXCEPTION
+  WHEN unique_violation THEN
+    RETURN jsonb_build_object(
+      'ok', false,
+      'statusCode', 409,
+      'code', 'DUPLICATE_ORDER_OR_DEBIT',
+      'error', 'Duplicate order ID or concurrent wallet debit conflict. Please refresh and retry.'
+    );
 END;
 $$;
 
@@ -1238,16 +1246,18 @@ BEGIN
     INTO v_pre_uid, v_pre_phone
     FROM public.users
     WHERE id = v_req_uid
-      AND role = 'CUSTOMER'
     LIMIT 1;
 
-    IF FOUND AND coalesce(v_pre_phone, '') <> '' AND v_pre_phone <> v_sess_phone THEN
-      RETURN jsonb_build_object(
-        'ok', false,
-        'statusCode', 403,
-        'code', 'FORBIDDEN',
-        'error', 'Forbidden: Session mobile number does not match customer record.'
-      );
+    IF FOUND THEN
+      IF NOT EXISTS (SELECT 1 FROM public.users WHERE id = v_req_uid AND role = 'CUSTOMER')
+         OR (coalesce(v_pre_phone, '') <> '' AND v_pre_phone <> v_sess_phone) THEN
+        RETURN jsonb_build_object(
+          'ok', false,
+          'statusCode', 403,
+          'code', 'FORBIDDEN',
+          'error', 'Forbidden: Session mobile number does not match customer record.'
+        );
+      END IF;
     END IF;
   END IF;
 
@@ -1698,6 +1708,14 @@ BEGIN
     'newWalletBalance', v_new_balance,
     'ledgerTransactionId', v_ledger_id
   );
+EXCEPTION
+  WHEN unique_violation THEN
+    RETURN jsonb_build_object(
+      'ok', false,
+      'statusCode', 409,
+      'code', 'DUPLICATE_WALLET_DEBIT',
+      'error', 'Concurrent wallet debit conflict detected for this order. Please retry.'
+    );
 END;
 $$;
 

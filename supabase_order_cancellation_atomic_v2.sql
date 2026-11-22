@@ -1027,7 +1027,12 @@ BEGIN
     -- If ANY item fails to match or has invalid quantity, abort and roll back the entire transaction.
     FOR v_item IN SELECT value FROM jsonb_array_elements(v_authoritative_items)
     LOOP
-      v_item_qty := coalesce((v_item->>'quantity')::numeric, 0);
+      BEGIN
+        v_item_qty := coalesce((v_item->>'quantity')::numeric, 0);
+      EXCEPTION WHEN others THEN
+        RAISE EXCEPTION 'Stock restoration aborted: invalid quantity (%) in order %', coalesce(v_item->>'quantity', '<null>'), v_order.id
+          USING ERRCODE = 'P0003';
+      END;
       IF v_item_qty < 0 THEN
         RAISE EXCEPTION 'Stock restoration aborted: negative quantity (%) in order %', v_item_qty, v_order.id
           USING ERRCODE = 'P0003';
@@ -1041,8 +1046,16 @@ BEGIN
       v_item_prod_name := coalesce(v_item->>'productName', '');
       v_item_var_name := NULLIF(btrim(coalesce(v_item->>'variantName', '')), '');
       v_item_unit := NULLIF(btrim(coalesce(v_item->>'unit', '')), '');
-      v_item_pack_size := CASE WHEN NULLIF(v_item->>'packSize', '') IS NOT NULL THEN (v_item->>'packSize')::numeric ELSE NULL END;
-      v_item_unit_price := CASE WHEN NULLIF(v_item->>'unitPrice', '') IS NOT NULL THEN (v_item->>'unitPrice')::numeric ELSE NULL END;
+      BEGIN
+        v_item_pack_size := CASE WHEN NULLIF(v_item->>'packSize', '') IS NOT NULL THEN (v_item->>'packSize')::numeric ELSE NULL END;
+      EXCEPTION WHEN others THEN
+        v_item_pack_size := NULL;
+      END;
+      BEGIN
+        v_item_unit_price := CASE WHEN NULLIF(v_item->>'unitPrice', '') IS NOT NULL THEN (v_item->>'unitPrice')::numeric ELSE NULL END;
+      EXCEPTION WHEN others THEN
+        v_item_unit_price := NULL;
+      END;
 
       v_matched_prod := NULL;
       v_matched_var := NULL;
@@ -1064,32 +1077,55 @@ BEGIN
         v_raw_search := lower(btrim(v_item_prod_name));
         v_stripped_search := btrim(regexp_replace(v_raw_search, '\s*\([^)]+\)', '', 'g'));
 
-        SELECT c INTO v_matched_prod
-        FROM jsonb_array_elements(v_catalog) AS c
-        WHERE lower(btrim(coalesce(c->'row'->>'name', ''))) = v_raw_search
-           OR (v_stripped_search <> '' AND lower(btrim(coalesce(c->'row'->>'name', ''))) = v_stripped_search)
-        LIMIT 1;
-
-        IF v_matched_prod IS NULL THEN
+        IF (
+          SELECT count(*)
+          FROM jsonb_array_elements(v_catalog) AS c
+          WHERE lower(btrim(coalesce(c->'row'->>'name', ''))) = v_raw_search
+             OR (v_stripped_search <> '' AND lower(btrim(coalesce(c->'row'->>'name', ''))) = v_stripped_search)
+        ) = 1 THEN
           SELECT c INTO v_matched_prod
           FROM jsonb_array_elements(v_catalog) AS c
-          WHERE btrim(coalesce(c->'row'->>'name', '')) <> ''
-            AND (
-              position(lower(btrim(c->'row'->>'name')) IN v_raw_search) > 0
-              OR position(v_raw_search IN lower(btrim(c->'row'->>'name'))) > 0
-              OR (
-                v_stripped_search <> '' AND (
-                  position(lower(btrim(c->'row'->>'name')) IN v_stripped_search) > 0
-                  OR position(v_stripped_search IN lower(btrim(c->'row'->>'name'))) > 0
+          WHERE lower(btrim(coalesce(c->'row'->>'name', ''))) = v_raw_search
+             OR (v_stripped_search <> '' AND lower(btrim(coalesce(c->'row'->>'name', ''))) = v_stripped_search)
+          LIMIT 1;
+        END IF;
+
+        IF v_matched_prod IS NULL THEN
+          IF (
+            SELECT count(*)
+            FROM jsonb_array_elements(v_catalog) AS c
+            WHERE btrim(coalesce(c->'row'->>'name', '')) <> ''
+              AND (
+                position(lower(btrim(c->'row'->>'name')) IN v_raw_search) > 0
+                OR position(v_raw_search IN lower(btrim(c->'row'->>'name'))) > 0
+                OR (
+                  v_stripped_search <> '' AND (
+                    position(lower(btrim(c->'row'->>'name')) IN v_stripped_search) > 0
+                    OR position(v_stripped_search IN lower(btrim(c->'row'->>'name'))) > 0
+                  )
                 )
               )
-            )
-          LIMIT 1;
+          ) = 1 THEN
+            SELECT c INTO v_matched_prod
+            FROM jsonb_array_elements(v_catalog) AS c
+            WHERE btrim(coalesce(c->'row'->>'name', '')) <> ''
+              AND (
+                position(lower(btrim(c->'row'->>'name')) IN v_raw_search) > 0
+                OR position(v_raw_search IN lower(btrim(c->'row'->>'name'))) > 0
+                OR (
+                  v_stripped_search <> '' AND (
+                    position(lower(btrim(c->'row'->>'name')) IN v_stripped_search) > 0
+                    OR position(v_stripped_search IN lower(btrim(c->'row'->>'name'))) > 0
+                  )
+                )
+              )
+            LIMIT 1;
+          END IF;
         END IF;
       END IF;
 
       IF v_matched_prod IS NULL THEN
-        RAISE EXCEPTION 'Stock restoration aborted for order %: product "%" (id=%) not found in catalog.',
+        RAISE EXCEPTION 'Stock restoration aborted for order %: product "%" (id=%) not found or ambiguous in catalog.',
           v_order.id, coalesce(NULLIF(v_item_prod_name, ''), 'Unknown'), coalesce(v_item_prod_id, '<none>')
           USING ERRCODE = 'P0003';
       END IF;
@@ -2031,6 +2067,14 @@ BEGIN
     'newWalletBalance', v_new_balance,
     'ledgerTransactionId', v_ledger_id
   );
+EXCEPTION
+  WHEN unique_violation THEN
+    RETURN jsonb_build_object(
+      'ok', false,
+      'statusCode', 409,
+      'code', 'DUPLICATE_WALLET_DEBIT',
+      'error', 'Concurrent wallet debit conflict detected for this order. Please retry.'
+    );
 END;
 $$;
 
@@ -2076,6 +2120,11 @@ DECLARE
   v_next_final_total NUMERIC(12, 2);
   v_next_notes TEXT;
   v_has_late_fee BOOLEAN := FALSE;
+  v_ord_has_delivered_at BOOLEAN := FALSE;
+  v_existing_delivered_at TIMESTAMPTZ := NULL;
+  v_next_delivered_at TIMESTAMPTZ := NULL;
+  v_order_pm_upper TEXT;
+  v_wallet_used_meta NUMERIC(12, 2) := 0;
 
   v_already_deducted BOOLEAN := FALSE;
   v_rel_items JSONB := '[]'::jsonb;
@@ -2362,7 +2411,12 @@ BEGIN
     -- Pass 1: Strictly resolve EVERY item to its Product & Variant (fail closed if ANY fails)
     FOR v_item IN SELECT value FROM jsonb_array_elements(v_authoritative_items)
     LOOP
-      v_item_qty := coalesce((v_item->>'quantity')::numeric, 0);
+      BEGIN
+        v_item_qty := coalesce((v_item->>'quantity')::numeric, 0);
+      EXCEPTION WHEN others THEN
+        RAISE EXCEPTION 'Stock deduction aborted: invalid quantity (%) in order %', coalesce(v_item->>'quantity', '<null>'), v_order.id
+          USING ERRCODE = 'P0003';
+      END;
       IF v_item_qty < 0 THEN
         RAISE EXCEPTION 'Stock deduction aborted: negative quantity (%) in order %', v_item_qty, v_order.id
           USING ERRCODE = 'P0003';
@@ -2374,8 +2428,16 @@ BEGIN
       v_item_prod_name := coalesce(v_item->>'productName', v_item->>'product_name', '');
       v_item_var_name := NULLIF(btrim(coalesce(v_item->>'variantName', v_item->>'variant_name', '')), '');
       v_item_unit := NULLIF(btrim(coalesce(v_item->>'unit', '')), '');
-      v_item_pack_size := CASE WHEN NULLIF(coalesce(v_item->>'packSize', v_item->>'pack_size'), '') IS NOT NULL THEN coalesce(v_item->>'packSize', v_item->>'pack_size')::numeric ELSE NULL END;
-      v_item_unit_price := CASE WHEN NULLIF(coalesce(v_item->>'unitPrice', v_item->>'unit_price'), '') IS NOT NULL THEN coalesce(v_item->>'unitPrice', v_item->>'unit_price')::numeric ELSE NULL END;
+      BEGIN
+        v_item_pack_size := CASE WHEN NULLIF(coalesce(v_item->>'packSize', v_item->>'pack_size'), '') IS NOT NULL THEN coalesce(v_item->>'packSize', v_item->>'pack_size')::numeric ELSE NULL END;
+      EXCEPTION WHEN others THEN
+        v_item_pack_size := NULL;
+      END;
+      BEGIN
+        v_item_unit_price := CASE WHEN NULLIF(coalesce(v_item->>'unitPrice', v_item->>'unit_price'), '') IS NOT NULL THEN coalesce(v_item->>'unitPrice', v_item->>'unit_price')::numeric ELSE NULL END;
+      EXCEPTION WHEN others THEN
+        v_item_unit_price := NULL;
+      END;
 
       v_matched_prod := NULL;
       v_matched_var := NULL;
@@ -2388,14 +2450,53 @@ BEGIN
       ELSIF btrim(v_item_prod_name) <> '' THEN
         v_raw_search := lower(btrim(v_item_prod_name));
         v_stripped_search := btrim(regexp_replace(v_raw_search, '\s*\([^)]+\)', '', 'g'));
-        SELECT c INTO v_matched_prod FROM jsonb_array_elements(v_catalog) AS c
-        WHERE lower(btrim(coalesce(c->'row'->>'name', ''))) = v_raw_search
-           OR (v_stripped_search <> '' AND lower(btrim(coalesce(c->'row'->>'name', ''))) = v_stripped_search)
-        LIMIT 1;
+        IF (
+          SELECT count(*) FROM jsonb_array_elements(v_catalog) AS c
+          WHERE lower(btrim(coalesce(c->'row'->>'name', ''))) = v_raw_search
+             OR (v_stripped_search <> '' AND lower(btrim(coalesce(c->'row'->>'name', ''))) = v_stripped_search)
+        ) = 1 THEN
+          SELECT c INTO v_matched_prod FROM jsonb_array_elements(v_catalog) AS c
+          WHERE lower(btrim(coalesce(c->'row'->>'name', ''))) = v_raw_search
+             OR (v_stripped_search <> '' AND lower(btrim(coalesce(c->'row'->>'name', ''))) = v_stripped_search)
+          LIMIT 1;
+        END IF;
+
+        IF v_matched_prod IS NULL THEN
+          IF (
+            SELECT count(*)
+            FROM jsonb_array_elements(v_catalog) AS c
+            WHERE btrim(coalesce(c->'row'->>'name', '')) <> ''
+              AND (
+                position(lower(btrim(c->'row'->>'name')) IN v_raw_search) > 0
+                OR position(v_raw_search IN lower(btrim(c->'row'->>'name'))) > 0
+                OR (
+                  v_stripped_search <> '' AND (
+                    position(lower(btrim(c->'row'->>'name')) IN v_stripped_search) > 0
+                    OR position(v_stripped_search IN lower(btrim(c->'row'->>'name'))) > 0
+                  )
+                )
+              )
+          ) = 1 THEN
+            SELECT c INTO v_matched_prod
+            FROM jsonb_array_elements(v_catalog) AS c
+            WHERE btrim(coalesce(c->'row'->>'name', '')) <> ''
+              AND (
+                position(lower(btrim(c->'row'->>'name')) IN v_raw_search) > 0
+                OR position(v_raw_search IN lower(btrim(c->'row'->>'name'))) > 0
+                OR (
+                  v_stripped_search <> '' AND (
+                    position(lower(btrim(c->'row'->>'name')) IN v_stripped_search) > 0
+                    OR position(v_stripped_search IN lower(btrim(c->'row'->>'name'))) > 0
+                  )
+                )
+              )
+            LIMIT 1;
+          END IF;
+        END IF;
       END IF;
 
       IF v_matched_prod IS NULL THEN
-        RAISE EXCEPTION 'Stock deduction aborted for order %: product "%" (id=%) not found in catalog.',
+        RAISE EXCEPTION 'Stock deduction aborted for order %: product "%" (id=%) not found or ambiguous in catalog.',
           v_order.id, coalesce(NULLIF(v_item_prod_name, ''), 'Unknown'), coalesce(v_item_prod_id, '<none>')
           USING ERRCODE = 'P0003';
       END IF;
@@ -2658,8 +2759,34 @@ BEGIN
     v_merged_meta := v_merged_meta || jsonb_build_object('stockDeducted', true, 'stockRestored', false);
   END IF;
 
-  IF v_target_status = 'DELIVERED' AND NULLIF(coalesce(v_merged_meta->>'deliveredAt', ''), '') IS NULL THEN
-    v_merged_meta := v_merged_meta || jsonb_build_object('deliveredAt', coalesce(p_delivered_at, v_now));
+  SELECT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'orders' AND column_name = 'delivered_at'
+  ) INTO v_ord_has_delivered_at;
+
+  IF NULLIF(btrim(coalesce(to_jsonb(v_order)->>'delivered_at', '')), '') IS NOT NULL THEN
+    BEGIN
+      v_existing_delivered_at := (to_jsonb(v_order)->>'delivered_at')::timestamptz;
+    EXCEPTION WHEN others THEN
+      v_existing_delivered_at := NULL;
+    END;
+  END IF;
+
+  IF v_existing_delivered_at IS NULL AND NULLIF(btrim(coalesce(v_merged_meta->>'deliveredAt', '')), '') IS NOT NULL THEN
+    BEGIN
+      v_existing_delivered_at := (v_merged_meta->>'deliveredAt')::timestamptz;
+    EXCEPTION WHEN others THEN
+      v_existing_delivered_at := NULL;
+    END;
+  END IF;
+
+  IF v_target_status = 'DELIVERED' THEN
+    v_next_delivered_at := coalesce(v_existing_delivered_at, p_delivered_at, v_now);
+    IF NULLIF(coalesce(v_merged_meta->>'deliveredAt', ''), '') IS NULL THEN
+      v_merged_meta := v_merged_meta || jsonb_build_object('deliveredAt', v_next_delivered_at);
+    END IF;
+  ELSE
+    v_next_delivered_at := coalesce(v_existing_delivered_at, p_delivered_at);
   END IF;
 
   v_has_late_fee := (
@@ -2671,9 +2798,18 @@ BEGIN
   IF v_has_late_fee AND v_order.final_total IS NOT NULL THEN
     v_next_final_total := v_order.final_total;
     v_merged_meta := v_merged_meta || jsonb_build_object('totalPayable', v_order.final_total);
+  ELSIF p_final_total IS NOT NULL AND p_final_total IS DISTINCT FROM v_order.final_total THEN
+    v_order_pm_upper := upper(coalesce(v_order.payment_method, 'COD'));
+    v_wallet_used_meta := greatest(0, coalesce((v_existing_meta->>'walletAmountUsed')::numeric, 0));
+    IF v_order_pm_upper IN ('ADVANCE_ONLINE', 'ONLINE', 'UPI') THEN
+      v_merged_meta := v_merged_meta || jsonb_build_object('totalPayable', round(greatest(0, v_next_final_total - v_wallet_used_meta), 2));
+    ELSE
+      v_merged_meta := v_merged_meta || jsonb_build_object('totalPayable', round(greatest(0, v_next_final_total), 2));
+    END IF;
   END IF;
 
-  IF p_notes IS NOT NULL OR v_target_status = 'DELIVERED' OR p_deduct_stock IS TRUE THEN
+  IF p_notes IS NOT NULL OR v_target_status = 'DELIVERED' OR p_deduct_stock IS TRUE
+     OR (p_final_total IS NOT NULL AND p_final_total IS DISTINCT FROM v_order.final_total AND NOT v_has_late_fee) THEN
     v_next_notes := format('Order #%s | COD_META:%s', v_resolved_num, v_merged_meta::text);
   ELSE
     v_next_notes := v_order.notes;
@@ -2683,9 +2819,9 @@ BEGIN
   v_next_is_paid := v_order.is_paid;
 
   IF NULLIF(btrim(p_payment_status), '') IS NOT NULL THEN
-    IF upper(p_payment_status) = 'RECEIVED' THEN
+    IF upper(btrim(p_payment_status)) IN ('RECEIVED', 'PAID') THEN
       v_next_is_paid := TRUE;
-    ELSIF upper(p_payment_status) IN ('PENDING', 'REFUNDED', 'FAILED') THEN
+    ELSIF upper(btrim(p_payment_status)) IN ('PENDING', 'REFUNDED', 'FAILED') THEN
       v_next_is_paid := FALSE;
     END IF;
   END IF;
@@ -2718,6 +2854,13 @@ BEGIN
   IF v_row_count <> 1 THEN
     RAISE EXCEPTION 'Order % was modified or cancelled concurrently', v_order.id
       USING ERRCODE = 'P0001';
+  END IF;
+
+  IF v_ord_has_delivered_at AND v_next_delivered_at IS NOT NULL
+     AND NULLIF(btrim(coalesce(to_jsonb(v_updated_order)->>'delivered_at', '')), '') IS NULL THEN
+    EXECUTE 'UPDATE public.orders SET delivered_at = $1 WHERE id = $2 RETURNING *'
+    INTO v_updated_order
+    USING v_next_delivered_at, v_order.id;
   END IF;
 
   RETURN jsonb_build_object(
