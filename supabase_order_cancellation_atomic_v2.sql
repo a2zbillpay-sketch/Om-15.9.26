@@ -570,6 +570,9 @@ DECLARE
 
   v_matched_prod JSONB;
   v_matched_var JSONB;
+  v_prod_match_count INTEGER := 0;
+  v_var_match_count INTEGER := 0;
+  v_var_candidate JSONB := NULL;
   v_raw_search TEXT;
   v_stripped_search TEXT;
   v_search_v_name TEXT;
@@ -1066,13 +1069,17 @@ BEGIN
         WHERE c->'row'->>'id' = v_item_prod_id
         LIMIT 1;
       ELSIF v_item_var_id IS NOT NULL THEN
-        SELECT c INTO v_matched_prod
+        SELECT count(*), (array_agg(c ORDER BY (c->'row'->>'id') ASC))[1]
+        INTO v_prod_match_count, v_matched_prod
         FROM jsonb_array_elements(v_catalog) AS c
         WHERE EXISTS (
           SELECT 1 FROM jsonb_array_elements(c->'variants') AS v
           WHERE v->>'id' = v_item_var_id
-        )
-        LIMIT 1;
+        );
+
+        IF v_prod_match_count <> 1 THEN
+          v_matched_prod := NULL;
+        END IF;
       ELSIF btrim(v_item_prod_name) <> '' THEN
         v_raw_search := lower(btrim(v_item_prod_name));
         v_stripped_search := btrim(regexp_replace(v_raw_search, '\s*\([^)]+\)', '', 'g'));
@@ -1154,56 +1161,90 @@ BEGIN
         CONTINUE;
       END IF;
 
-      -- Product has variants: resolve matching variant strictly
+      -- Product has variants: resolve matching variant strictly (never silently pick via LIMIT 1)
       IF v_item_var_id IS NOT NULL THEN
-        SELECT v INTO v_matched_var
+        SELECT count(*), (array_agg(v ORDER BY (v->>'id') ASC))[1]
+        INTO v_var_match_count, v_var_candidate
         FROM jsonb_array_elements(v_matched_prod->'variants') AS v
-        WHERE v->>'id' = v_item_var_id
-        LIMIT 1;
+        WHERE v->>'id' = v_item_var_id;
 
-        IF v_matched_var IS NULL THEN
+        IF v_var_match_count = 1 THEN
+          v_matched_var := v_var_candidate;
+        ELSIF v_var_match_count > 1 THEN
+          RAISE EXCEPTION 'Stock restoration aborted for order %: ambiguous variant id "%" for product "%" (% candidates matched).',
+            v_order.id, v_item_var_id, coalesce(v_matched_prod->'row'->>'name', 'Product'), v_var_match_count
+            USING ERRCODE = 'P0003';
+        ELSE
           RAISE EXCEPTION 'Stock restoration aborted for order %: variant "%" not found for product "%".',
             v_order.id, v_item_var_id, coalesce(v_matched_prod->'row'->>'name', 'Product')
             USING ERRCODE = 'P0003';
         END IF;
       ELSE
         IF v_item_var_name IS NOT NULL THEN
-          v_search_v_name := lower(v_item_var_name);
-          SELECT v INTO v_matched_var
+          v_search_v_name := lower(btrim(v_item_var_name));
+          SELECT count(*), (array_agg(v ORDER BY (v->>'id') ASC))[1]
+          INTO v_var_match_count, v_var_candidate
           FROM jsonb_array_elements(v_matched_prod->'variants') AS v
-          WHERE lower(btrim(coalesce(v->>'packLabel', ''))) = v_search_v_name
-          LIMIT 1;
+          WHERE lower(btrim(coalesce(v->>'packLabel', ''))) = v_search_v_name;
+
+          IF v_var_match_count = 1 THEN
+            v_matched_var := v_var_candidate;
+          ELSIF v_var_match_count > 1 THEN
+            RAISE EXCEPTION 'Stock restoration aborted for order %: ambiguous variant match by packLabel "%" for product "%" (% candidates matched).',
+              v_order.id, v_item_var_name, coalesce(v_matched_prod->'row'->>'name', 'Product'), v_var_match_count
+              USING ERRCODE = 'P0003';
+          END IF;
         END IF;
 
         IF v_matched_var IS NULL AND v_item_unit IS NOT NULL AND v_item_pack_size IS NOT NULL THEN
-          SELECT v INTO v_matched_var
+          SELECT count(*), (array_agg(v ORDER BY (v->>'id') ASC))[1]
+          INTO v_var_match_count, v_var_candidate
           FROM jsonb_array_elements(v_matched_prod->'variants') AS v
-          WHERE upper(coalesce(v->>'unit', '')) = upper(v_item_unit)
-            AND coalesce((v->>'packSize')::numeric, 0) = v_item_pack_size
-          LIMIT 1;
+          WHERE upper(btrim(coalesce(v->>'unit', ''))) = upper(btrim(v_item_unit))
+            AND coalesce((v->>'packSize')::numeric, 0) = v_item_pack_size;
+
+          IF v_var_match_count = 1 THEN
+            v_matched_var := v_var_candidate;
+          ELSIF v_var_match_count > 1 THEN
+            RAISE EXCEPTION 'Stock restoration aborted for order %: ambiguous variant match by packSize/unit (% %) for product "%" (% candidates matched).',
+              v_order.id, v_item_pack_size, v_item_unit, coalesce(v_matched_prod->'row'->>'name', 'Product'), v_var_match_count
+              USING ERRCODE = 'P0003';
+          END IF;
         END IF;
 
         IF v_matched_var IS NULL THEN
-          v_combined_search := lower(coalesce(v_item_prod_name, '') || ' ' || coalesce(v_item_var_name, ''));
-          SELECT v INTO v_matched_var
-          FROM jsonb_array_elements(v_matched_prod->'variants') AS v
-          WHERE (btrim(coalesce(v->>'packLabel', '')) <> '' AND position(lower(btrim(v->>'packLabel')) IN v_combined_search) > 0)
-             OR (position(lower((v->>'packSize') || ' ' || (v->>'unit')) IN v_combined_search) > 0)
-             OR (position(lower((v->>'packSize') || (v->>'unit')) IN v_combined_search) > 0)
-          LIMIT 1;
+          v_combined_search := btrim(lower(coalesce(v_item_prod_name, '') || ' ' || coalesce(v_item_var_name, '')));
+          IF v_combined_search <> '' THEN
+            SELECT count(*), (array_agg(v ORDER BY (v->>'id') ASC))[1]
+            INTO v_var_match_count, v_var_candidate
+            FROM jsonb_array_elements(v_matched_prod->'variants') AS v
+            WHERE (btrim(coalesce(v->>'packLabel', '')) <> '' AND position(lower(btrim(v->>'packLabel')) IN v_combined_search) > 0)
+               OR (position(lower((v->>'packSize') || ' ' || btrim(coalesce(v->>'unit', ''))) IN v_combined_search) > 0)
+               OR (position(lower((v->>'packSize') || btrim(coalesce(v->>'unit', ''))) IN v_combined_search) > 0);
+
+            IF v_var_match_count = 1 THEN
+              v_matched_var := v_var_candidate;
+            ELSIF v_var_match_count > 1 THEN
+              RAISE EXCEPTION 'Stock restoration aborted for order %: ambiguous variant match in item label "%" for product "%" (% candidates matched).',
+                v_order.id, v_combined_search, coalesce(v_matched_prod->'row'->>'name', 'Product'), v_var_match_count
+                USING ERRCODE = 'P0003';
+            END IF;
+          END IF;
         END IF;
 
         IF v_matched_var IS NULL AND v_item_unit_price IS NOT NULL THEN
-          IF (
-            SELECT count(*) FROM jsonb_array_elements(v_matched_prod->'variants') AS v
-            WHERE coalesce((v->>'baseSellingPrice')::numeric, 0) = v_item_unit_price
-               OR coalesce((v->>'mrp')::numeric, 0) = v_item_unit_price
-          ) = 1 THEN
-            SELECT v INTO v_matched_var
-            FROM jsonb_array_elements(v_matched_prod->'variants') AS v
-            WHERE coalesce((v->>'baseSellingPrice')::numeric, 0) = v_item_unit_price
-               OR coalesce((v->>'mrp')::numeric, 0) = v_item_unit_price
-            LIMIT 1;
+          SELECT count(*), (array_agg(v ORDER BY (v->>'id') ASC))[1]
+          INTO v_var_match_count, v_var_candidate
+          FROM jsonb_array_elements(v_matched_prod->'variants') AS v
+          WHERE coalesce((v->>'baseSellingPrice')::numeric, 0) = v_item_unit_price
+             OR coalesce((v->>'mrp')::numeric, 0) = v_item_unit_price;
+
+          IF v_var_match_count = 1 THEN
+            v_matched_var := v_var_candidate;
+          ELSIF v_var_match_count > 1 THEN
+            RAISE EXCEPTION 'Stock restoration aborted for order %: ambiguous variant match by unit price (%) for product "%" (% candidates matched).',
+              v_order.id, v_item_unit_price, coalesce(v_matched_prod->'row'->>'name', 'Product'), v_var_match_count
+              USING ERRCODE = 'P0003';
           END IF;
         END IF;
 
@@ -2164,6 +2205,9 @@ DECLARE
 
   v_matched_prod JSONB;
   v_matched_var JSONB;
+  v_prod_match_count INTEGER := 0;
+  v_var_match_count INTEGER := 0;
+  v_var_candidate JSONB := NULL;
   v_raw_search TEXT;
   v_stripped_search TEXT;
   v_search_v_name TEXT;
@@ -2445,8 +2489,14 @@ BEGIN
       IF v_item_prod_id IS NOT NULL THEN
         SELECT c INTO v_matched_prod FROM jsonb_array_elements(v_catalog) AS c WHERE c->'row'->>'id' = v_item_prod_id LIMIT 1;
       ELSIF v_item_var_id IS NOT NULL THEN
-        SELECT c INTO v_matched_prod FROM jsonb_array_elements(v_catalog) AS c
-        WHERE EXISTS (SELECT 1 FROM jsonb_array_elements(c->'variants') AS v WHERE v->>'id' = v_item_var_id) LIMIT 1;
+        SELECT count(*), (array_agg(c ORDER BY (c->'row'->>'id') ASC))[1]
+        INTO v_prod_match_count, v_matched_prod
+        FROM jsonb_array_elements(v_catalog) AS c
+        WHERE EXISTS (SELECT 1 FROM jsonb_array_elements(c->'variants') AS v WHERE v->>'id' = v_item_var_id);
+
+        IF v_prod_match_count <> 1 THEN
+          v_matched_prod := NULL;
+        END IF;
       ELSIF btrim(v_item_prod_name) <> '' THEN
         v_raw_search := lower(btrim(v_item_prod_name));
         v_stripped_search := btrim(regexp_replace(v_raw_search, '\s*\([^)]+\)', '', 'g'));
@@ -2520,41 +2570,90 @@ BEGIN
         CONTINUE;
       END IF;
 
-      -- Product has variants: resolve matching variant strictly
+      -- Product has variants: resolve matching variant strictly (never silently pick via LIMIT 1)
       IF v_item_var_id IS NOT NULL THEN
-        SELECT v INTO v_matched_var FROM jsonb_array_elements(v_matched_prod->'variants') AS v WHERE v->>'id' = v_item_var_id LIMIT 1;
-        IF v_matched_var IS NULL THEN
+        SELECT count(*), (array_agg(v ORDER BY (v->>'id') ASC))[1]
+        INTO v_var_match_count, v_var_candidate
+        FROM jsonb_array_elements(v_matched_prod->'variants') AS v
+        WHERE v->>'id' = v_item_var_id;
+
+        IF v_var_match_count = 1 THEN
+          v_matched_var := v_var_candidate;
+        ELSIF v_var_match_count > 1 THEN
+          RAISE EXCEPTION 'Stock deduction aborted for order %: ambiguous variant id "%" for product "%" (% candidates matched).',
+            v_order.id, v_item_var_id, coalesce(v_matched_prod->'row'->>'name', 'Product'), v_var_match_count
+            USING ERRCODE = 'P0003';
+        ELSE
           RAISE EXCEPTION 'Stock deduction aborted for order %: variant "%" not found for product "%".',
             v_order.id, v_item_var_id, coalesce(v_matched_prod->'row'->>'name', 'Product')
             USING ERRCODE = 'P0003';
         END IF;
       ELSE
         IF v_item_var_name IS NOT NULL THEN
-          v_search_v_name := lower(v_item_var_name);
-          SELECT v INTO v_matched_var FROM jsonb_array_elements(v_matched_prod->'variants') AS v WHERE lower(btrim(coalesce(v->>'packLabel', ''))) = v_search_v_name LIMIT 1;
+          v_search_v_name := lower(btrim(v_item_var_name));
+          SELECT count(*), (array_agg(v ORDER BY (v->>'id') ASC))[1]
+          INTO v_var_match_count, v_var_candidate
+          FROM jsonb_array_elements(v_matched_prod->'variants') AS v
+          WHERE lower(btrim(coalesce(v->>'packLabel', ''))) = v_search_v_name;
+
+          IF v_var_match_count = 1 THEN
+            v_matched_var := v_var_candidate;
+          ELSIF v_var_match_count > 1 THEN
+            RAISE EXCEPTION 'Stock deduction aborted for order %: ambiguous variant match by packLabel "%" for product "%" (% candidates matched).',
+              v_order.id, v_item_var_name, coalesce(v_matched_prod->'row'->>'name', 'Product'), v_var_match_count
+              USING ERRCODE = 'P0003';
+          END IF;
         END IF;
+
         IF v_matched_var IS NULL AND v_item_unit IS NOT NULL AND v_item_pack_size IS NOT NULL THEN
-          SELECT v INTO v_matched_var FROM jsonb_array_elements(v_matched_prod->'variants') AS v
-          WHERE upper(coalesce(v->>'unit', '')) = upper(v_item_unit) AND coalesce((v->>'packSize')::numeric, 0) = v_item_pack_size LIMIT 1;
+          SELECT count(*), (array_agg(v ORDER BY (v->>'id') ASC))[1]
+          INTO v_var_match_count, v_var_candidate
+          FROM jsonb_array_elements(v_matched_prod->'variants') AS v
+          WHERE upper(btrim(coalesce(v->>'unit', ''))) = upper(btrim(v_item_unit))
+            AND coalesce((v->>'packSize')::numeric, 0) = v_item_pack_size;
+
+          IF v_var_match_count = 1 THEN
+            v_matched_var := v_var_candidate;
+          ELSIF v_var_match_count > 1 THEN
+            RAISE EXCEPTION 'Stock deduction aborted for order %: ambiguous variant match by packSize/unit (% %) for product "%" (% candidates matched).',
+              v_order.id, v_item_pack_size, v_item_unit, coalesce(v_matched_prod->'row'->>'name', 'Product'), v_var_match_count
+              USING ERRCODE = 'P0003';
+          END IF;
         END IF;
+
         IF v_matched_var IS NULL THEN
-          v_combined_search := lower(coalesce(v_item_prod_name, '') || ' ' || coalesce(v_item_var_name, ''));
-          SELECT v INTO v_matched_var FROM jsonb_array_elements(v_matched_prod->'variants') AS v
-          WHERE (btrim(coalesce(v->>'packLabel', '')) <> '' AND position(lower(btrim(v->>'packLabel')) IN v_combined_search) > 0)
-             OR position(lower((v->>'packSize') || ' ' || (v->>'unit')) IN v_combined_search) > 0
-             OR position(lower((v->>'packSize') || (v->>'unit')) IN v_combined_search) > 0
-          LIMIT 1;
+          v_combined_search := btrim(lower(coalesce(v_item_prod_name, '') || ' ' || coalesce(v_item_var_name, '')));
+          IF v_combined_search <> '' THEN
+            SELECT count(*), (array_agg(v ORDER BY (v->>'id') ASC))[1]
+            INTO v_var_match_count, v_var_candidate
+            FROM jsonb_array_elements(v_matched_prod->'variants') AS v
+            WHERE (btrim(coalesce(v->>'packLabel', '')) <> '' AND position(lower(btrim(v->>'packLabel')) IN v_combined_search) > 0)
+               OR (position(lower((v->>'packSize') || ' ' || btrim(coalesce(v->>'unit', ''))) IN v_combined_search) > 0)
+               OR (position(lower((v->>'packSize') || btrim(coalesce(v->>'unit', ''))) IN v_combined_search) > 0);
+
+            IF v_var_match_count = 1 THEN
+              v_matched_var := v_var_candidate;
+            ELSIF v_var_match_count > 1 THEN
+              RAISE EXCEPTION 'Stock deduction aborted for order %: ambiguous variant match in item label "%" for product "%" (% candidates matched).',
+                v_order.id, v_combined_search, coalesce(v_matched_prod->'row'->>'name', 'Product'), v_var_match_count
+                USING ERRCODE = 'P0003';
+            END IF;
+          END IF;
         END IF;
+
         IF v_matched_var IS NULL AND v_item_unit_price IS NOT NULL THEN
-          IF (
-            SELECT count(*) FROM jsonb_array_elements(v_matched_prod->'variants') AS v
-            WHERE coalesce((v->>'baseSellingPrice')::numeric, 0) = v_item_unit_price
-               OR coalesce((v->>'mrp')::numeric, 0) = v_item_unit_price
-          ) = 1 THEN
-            SELECT v INTO v_matched_var FROM jsonb_array_elements(v_matched_prod->'variants') AS v
-            WHERE coalesce((v->>'baseSellingPrice')::numeric, 0) = v_item_unit_price
-               OR coalesce((v->>'mrp')::numeric, 0) = v_item_unit_price
-            LIMIT 1;
+          SELECT count(*), (array_agg(v ORDER BY (v->>'id') ASC))[1]
+          INTO v_var_match_count, v_var_candidate
+          FROM jsonb_array_elements(v_matched_prod->'variants') AS v
+          WHERE coalesce((v->>'baseSellingPrice')::numeric, 0) = v_item_unit_price
+             OR coalesce((v->>'mrp')::numeric, 0) = v_item_unit_price;
+
+          IF v_var_match_count = 1 THEN
+            v_matched_var := v_var_candidate;
+          ELSIF v_var_match_count > 1 THEN
+            RAISE EXCEPTION 'Stock deduction aborted for order %: ambiguous variant match by unit price (%) for product "%" (% candidates matched).',
+              v_order.id, v_item_unit_price, coalesce(v_matched_prod->'row'->>'name', 'Product'), v_var_match_count
+              USING ERRCODE = 'P0003';
           END IF;
         END IF;
 
