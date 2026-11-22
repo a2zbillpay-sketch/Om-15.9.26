@@ -755,6 +755,13 @@ export async function processCreateOrderRequest(
     .in('id', productIds.length > 0 ? productIds : ['none']);
 
   if (dbProductsError) {
+    console.error('[POST /api/orders] dbProductsError:', {
+      operation: 'POST /api/orders -> processCreateOrderRequest (select products)',
+      code: dbProductsError.code ?? null,
+      message: dbProductsError.message ?? null,
+      details: dbProductsError.details ?? null,
+      hint: dbProductsError.hint ?? null,
+    });
     return {
       statusCode: 500,
       payload: { success: false, error: 'Failed to verify products against database' },
@@ -768,6 +775,13 @@ export async function processCreateOrderRequest(
     .in('product_id', productIds.length > 0 ? productIds : ['none']);
 
   if (dbVariantsError) {
+    console.error('[POST /api/orders] dbVariantsError:', {
+      operation: 'POST /api/orders -> processCreateOrderRequest (select product_variants)',
+      code: dbVariantsError.code ?? null,
+      message: dbVariantsError.message ?? null,
+      details: dbVariantsError.details ?? null,
+      hint: dbVariantsError.hint ?? null,
+    });
     return {
       statusCode: 500,
       payload: { success: false, error: 'Failed to verify product variants against database' },
@@ -786,6 +800,13 @@ export async function processCreateOrderRequest(
       .in('id', missingVariantIds);
 
     if (extraVarErr) {
+      console.error('[POST /api/orders] extraVarErr:', {
+        operation: 'POST /api/orders -> processCreateOrderRequest (select missing product_variants)',
+        code: extraVarErr.code ?? null,
+        message: extraVarErr.message ?? null,
+        details: extraVarErr.details ?? null,
+        hint: extraVarErr.hint ?? null,
+      });
       return {
         statusCode: 500,
         payload: { success: false, error: 'Failed to verify selected variants against database' },
