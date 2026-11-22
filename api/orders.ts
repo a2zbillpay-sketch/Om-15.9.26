@@ -437,7 +437,7 @@ export async function processUpdateOrderRequest(
       payload: {
         success: false,
         error: isMissingRpc
-          ? 'Atomic order transition database function is not installed. Please apply supabase_order_cancellation_atomic_v1.sql.'
+          ? 'Atomic order transition database function is not installed. Please apply supabase_order_cancellation_atomic_v2.sql.'
           : msg,
       },
     };
@@ -1472,7 +1472,7 @@ export async function processCreateOrderRequest(
         success: false,
         code: isMissingRpc ? 'MISSING_ATOMIC_RPC' : 'ORDER_CREATION_FAILED',
         error: isMissingRpc
-          ? 'Atomic order creation database function is not installed. Please apply supabase_order_creation_atomic_v1.sql.'
+          ? 'Atomic order creation database function is not installed. Please apply supabase_order_creation_atomic_v2.sql.'
           : msg,
       },
     };

@@ -1952,7 +1952,7 @@ async function runTests() {
   // ---------------------------------------------------------------------------
   {
     const rootDir = path.resolve(process.cwd());
-    const sql = fs.readFileSync(path.join(rootDir, 'supabase_order_cancellation_atomic_v1.sql'), 'utf8');
+    const sql = fs.readFileSync(path.join(rootDir, 'supabase_order_cancellation_atomic_v2.sql'), 'utf8');
     assert.ok(sql.includes('CREATE OR REPLACE FUNCTION public.cancel_order_atomic'), 'Missing cancel_order_atomic');
     assert.ok(sql.includes('CREATE OR REPLACE FUNCTION public.debit_wallet_for_order_atomic'), 'Missing debit_wallet_for_order_atomic');
     assert.ok(sql.includes('CREATE OR REPLACE FUNCTION public.transition_order_status_atomic'), 'Missing transition_order_status_atomic');
@@ -1967,7 +1967,7 @@ async function runTests() {
     assert.equal(cancelTs.includes('executeCompensatingRollback'), false, 'Legacy JS snapshot rollback must be removed');
     assert.ok(cancelTs.includes("supabase.rpc('cancel_order_atomic'"), 'api/_orderCancellation.ts must call cancel_order_atomic RPC');
 
-    const creationSql = fs.readFileSync(path.join(rootDir, 'supabase_order_creation_atomic_v1.sql'), 'utf8');
+    const creationSql = fs.readFileSync(path.join(rootDir, 'supabase_order_creation_atomic_v2.sql'), 'utf8');
     assert.ok(creationSql.includes('CREATE OR REPLACE FUNCTION public.create_order_with_wallet_atomic'), 'Missing create_order_with_wallet_atomic');
     assert.ok(creationSql.includes('CREATE OR REPLACE FUNCTION public.update_customer_phone_atomic'), 'Missing update_customer_phone_atomic');
     assert.ok(creationSql.includes('CREATE OR REPLACE FUNCTION public._acquire_customer_wallet_locks'), 'Missing _acquire_customer_wallet_locks');

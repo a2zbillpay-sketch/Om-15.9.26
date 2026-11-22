@@ -914,7 +914,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
               success: false,
               code: isMissingRpc ? 'MISSING_ATOMIC_RPC' : 'UPDATE_FAILED',
               error: isMissingRpc
-                ? 'Atomic customer phone update database function is not installed. Please apply supabase_order_creation_atomic_v1.sql.'
+                ? 'Atomic customer phone update database function is not installed. Please apply supabase_order_creation_atomic_v2.sql.'
                 : rpcMsg || 'Failed to update customer mobile number.',
             });
           }
@@ -1047,7 +1047,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
                   success: false,
                   code: isMissingRpc ? 'MISSING_ATOMIC_RPC' : 'UPDATE_FAILED',
                   error: isMissingRpc
-                    ? 'Atomic customer phone update database function is not installed. Please apply supabase_order_creation_atomic_v1.sql.'
+                    ? 'Atomic customer phone update database function is not installed. Please apply supabase_order_creation_atomic_v2.sql.'
                     : rpcMsg || 'Failed to update customer profile.',
                 });
               }

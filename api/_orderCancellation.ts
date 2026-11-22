@@ -100,7 +100,7 @@ export async function processCancelOrderRequest(
       payload: {
         success: false,
         error: isMissingRpc
-          ? 'Atomic order cancellation database function is not installed. Please apply supabase_order_cancellation_atomic_v1.sql.'
+          ? 'Atomic order cancellation database function is not installed. Please apply supabase_order_cancellation_atomic_v2.sql.'
           : `Failed to cancel order atomically: ${msg}`,
       },
     };
