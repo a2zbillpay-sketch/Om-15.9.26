@@ -31,7 +31,6 @@ import {
 import { formatVariantPack } from '../utils/variantFormatter';
 import {
   calculateCheckoutTotals,
-  canCancelOrder,
   CheckoutBreakdown,
   getActiveUnitPrice,
 } from '../lib/engine/checkout-calculator';
@@ -2878,6 +2877,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     orderId: string,
     isShopkeeperOverride: boolean = false
   ): Promise<CancelOrderResult> => {
+    if (
+      !isShopkeeperOverride ||
+      activeRole !== Role.SHOPKEEPER ||
+      (isSupabaseConfigured && !isAdminSessionValid && !isAdminSessionValidRef.current)
+    ) {
+      return {
+        success: false,
+        error: 'Customers cannot cancel orders. Only the shopkeeper can cancel an order.',
+      };
+    }
+
     const liveOrders = ordersRef.current.length > 0 ? ordersRef.current : orders;
     const target = liveOrders.find((o) => o.id === orderId || o.orderNumber === orderId);
 
@@ -3090,13 +3100,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (target.status === OrderStatus.CANCELLED || target.status === OrderStatus.DELIVERED) {
       return { success: false, error: 'Order cannot be cancelled in its current state.' };
-    }
-
-    if (!isShopkeeperOverride && !canCancelOrder(target.createdAt)) {
-      return {
-        success: false,
-        error: 'The 15-minute cancellation window for this order has expired.',
-      };
     }
 
     const wasDeducted = isStockDeductedForOrder(target.id, target.orderNumber, target);

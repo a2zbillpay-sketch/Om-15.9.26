@@ -31,8 +31,9 @@
 --        merging into v_existing_meta, preventing client overwrites of
 --        walletAmountUsed, previousOnlinePaid, codCollected, totalPayable, etc.
 --      - Blocks transitioning directly to 'CANCELLED' (must use cancel_order_atomic).
---   4. Security, Ownership, Shared Helpers & Locks:
---      - Strengthens CUSTOMER ownership checks in cancel_order_atomic().
+--   4. Security, Role Enforcement, Shared Helpers & Locks:
+--      - Blocks CUSTOMER cancellations completely (HTTP 403) and enforces
+--        SHOPKEEPER-only cancellation with no 15-minute time restriction.
 --      - Hardens prevent_cancelled_order_revival() trigger against financial edits.
 --      - Keeps shared helpers, advisory locks (_acquire_customer_wallet_locks),
 --        debit_wallet_for_order_atomic(), function signatures, and service_role-only
@@ -646,11 +647,19 @@ DECLARE
   v_updated_order public.orders%ROWTYPE;
   v_order_json JSONB;
 BEGIN
-  IF v_actor_role NOT IN ('CUSTOMER', 'SHOPKEEPER') THEN
+  IF v_actor_role = 'CUSTOMER' THEN
+    RETURN jsonb_build_object(
+      'ok', false,
+      'statusCode', 403,
+      'error', 'Forbidden: Customers cannot cancel orders. Only the shopkeeper can cancel orders.'
+    );
+  END IF;
+
+  IF v_actor_role <> 'SHOPKEEPER' THEN
     RETURN jsonb_build_object(
       'ok', false,
       'statusCode', 401,
-      'error', 'Unauthorized: Verified session required to cancel orders.'
+      'error', 'Unauthorized: Verified shopkeeper session required to cancel orders.'
     );
   END IF;
 
@@ -660,17 +669,6 @@ BEGIN
       'statusCode', 400,
       'error', 'Order ID is required'
     );
-  END IF;
-
-  IF v_actor_role = 'CUSTOMER' THEN
-    v_session_phone := public._normalize_indian_phone10(p_customer_phone);
-    IF v_session_phone !~ '^[6-9][0-9]{9}$' THEN
-      RETURN jsonb_build_object(
-        'ok', false,
-        'statusCode', 401,
-        'error', 'Unauthorized: Valid verified customer mobile session is required.'
-      );
-    END IF;
   END IF;
 
   -- 1. Lock target order row FOR UPDATE to serialize concurrent cancellation/status updates
@@ -692,38 +690,6 @@ BEGIN
       'statusCode', 404,
       'error', 'Order not found.'
     );
-  END IF;
-
-  -- 2. Strict customer ownership check (before status checks to prevent order state probing)
-  IF v_actor_role = 'CUSTOMER' THEN
-    v_order_phone := public._normalize_indian_phone10(v_order.customer_phone);
-    v_owns_by_phone := (v_order_phone <> '' AND v_order_phone = v_session_phone);
-
-    -- Check UUID ownership ONLY if order phone didn't match (e.g. customer updated mobile number after placing order)
-    -- and verify against public.users that the UUID belongs to a CUSTOMER with v_session_phone.
-    IF NOT v_owns_by_phone
-       AND v_order.customer_id IS NOT NULL
-       AND v_req_cid <> ''
-       AND v_order.customer_id = v_req_cid
-       AND v_req_cid ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
-      SELECT public._normalize_indian_phone10(phone), upper(coalesce(role, 'CUSTOMER'))
-      INTO v_uid_owner_phone, v_uid_owner_role
-      FROM public.users
-      WHERE id = v_req_cid
-      LIMIT 1;
-
-      IF FOUND AND v_uid_owner_role = 'CUSTOMER' AND v_uid_owner_phone = v_session_phone THEN
-        v_owns_by_verified_uid := TRUE;
-      END IF;
-    END IF;
-
-    IF NOT v_owns_by_phone AND NOT v_owns_by_verified_uid THEN
-      RETURN jsonb_build_object(
-        'ok', false,
-        'statusCode', 403,
-        'error', 'Forbidden: You can only cancel your own orders.'
-      );
-    END IF;
   END IF;
 
   v_order_status := upper(coalesce(v_order.status, ''));
@@ -821,17 +787,7 @@ BEGIN
     );
   END IF;
 
-  -- 5. Enforce 15-minute cancellation window strictly for CUSTOMER using server timestamp
-  IF v_actor_role = 'CUSTOMER' THEN
-    IF v_order.created_at IS NULL
-       OR (EXTRACT(EPOCH FROM (v_now - v_order.created_at)) * 1000.0) > 900000.0 THEN
-      RETURN jsonb_build_object(
-        'ok', false,
-        'statusCode', 403,
-        'error', 'The 15-minute cancellation window for this order has expired.'
-      );
-    END IF;
-  END IF;
+  -- 5. No 15-minute cancellation window for SHOPKEEPER (Shopkeeper can cancel any non-DELIVERED order at any time)
 
   -- 6. Authoritative Stock Restoration Plan (strictly from DB COD_META, zero partial restoration allowed)
   v_should_restore_stock :=

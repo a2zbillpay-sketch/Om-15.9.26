@@ -119,7 +119,7 @@ export const CustomerOrdersDrawer: React.FC<CustomerOrdersDrawerProps> = ({
             </div>
           ) : (
             customerOrders.map((order) => {
-              const isCancellable =
+              const isEditable =
                 order.status !== OrderStatus.CANCELLED &&
                 order.status !== OrderStatus.DELIVERED &&
                 canCancelOrder(order.createdAt);
@@ -199,7 +199,7 @@ export const CustomerOrdersDrawer: React.FC<CustomerOrdersDrawerProps> = ({
                     </div>
                   )}
 
-                  {isCancellable && (
+                  {isEditable && (
                     <div className="bg-amber-100/70 border border-amber-300 text-amber-900 text-[10px] font-bold px-2 py-1 rounded flex items-center gap-1">
                       <Clock size={12} className="text-amber-700 animate-spin" />
                       <span>{remainingMins} min left in 15-minute edit window!</span>
@@ -263,7 +263,7 @@ export const CustomerOrdersDrawer: React.FC<CustomerOrdersDrawerProps> = ({
                         <span>Repeat</span>
                       </button>
 
-                      {isCancellable && (
+                      {isEditable && (
                         <button
                           type="button"
                           onClick={(e) => {

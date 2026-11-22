@@ -45,7 +45,8 @@ export interface ProcessCancelOrderResult {
 
 /**
  * Integrated database-atomic server-side cancellation workflow:
- * 1. Authenticates & authorizes CUSTOMER (own order within 15 mins) or SHOPKEEPER.
+ * 1. Authenticates & authorizes strictly a verified SHOPKEEPER session (any eligible non-DELIVERED order, no 15-minute restriction).
+ *    Customers cannot cancel orders under any circumstances (HTTP 403).
  * 2. Executes a SINGLE PostgreSQL ACID transaction via `public.cancel_order_atomic`
  *    (row locking via FOR UPDATE on orders, products, product_variants, and users + advisory wallet lock).
  * 3. Returns committed idempotent result on repeated/concurrent calls without restoring stock or crediting twice.
@@ -67,7 +68,17 @@ export async function processCancelOrderRequest(
       statusCode: 401,
       payload: {
         success: false,
-        error: 'Unauthorized: Verified session required to cancel orders.',
+        error: 'Unauthorized: Verified shopkeeper session required to cancel orders.',
+      },
+    };
+  }
+
+  if (!isShopkeeper) {
+    return {
+      statusCode: 403,
+      payload: {
+        success: false,
+        error: 'Forbidden: Customers cannot cancel orders. Only the shopkeeper can cancel orders.',
       },
     };
   }
@@ -82,9 +93,9 @@ export async function processCancelOrderRequest(
 
   const { data: rpcData, error: rpcError } = await supabase.rpc('cancel_order_atomic', {
     p_order_id: rawOrderId,
-    p_actor_role: isShopkeeper ? 'SHOPKEEPER' : 'CUSTOMER',
-    p_customer_id: customerSession?.customerId || null,
-    p_customer_phone: customerSession?.phone || null,
+    p_actor_role: 'SHOPKEEPER',
+    p_customer_id: null,
+    p_customer_phone: null,
   });
 
   if (rpcError) {

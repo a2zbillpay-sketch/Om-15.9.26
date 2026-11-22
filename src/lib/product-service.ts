@@ -1,5 +1,5 @@
-import { Product, ProductVariant, TieredPrice, UnitType } from '../types.ts';
-import { formatVariantPack } from '../utils/variantFormatter.ts';
+import { UnitType, type Product, type ProductVariant, type TieredPrice } from '../types.js';
+import { formatVariantPack } from '../utils/variantFormatter.js';
 
 export interface ProductValidationResult {
   valid: boolean;

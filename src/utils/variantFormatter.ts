@@ -1,4 +1,4 @@
-import { ProductVariant, UnitType } from '../types';
+import type { ProductVariant, UnitType } from '../types.js';
 
 /**
  * Formats a variant's display label to guarantee that the pack size and unit (e.g., "500 G", "1 KG")

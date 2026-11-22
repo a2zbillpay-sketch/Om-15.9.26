@@ -264,7 +264,7 @@ const MainLayout: React.FC = () => {
             <ul className="space-y-1.5 text-gray-300 text-[11px]">
               <li>• Wholesale Volume Slab Discounts</li>
               <li>• Extra {settings.advancePaymentDiscountPct}% Savings on Advance UPI</li>
-              <li>• 15-Minute Cancellation Assurance</li>
+              <li>• 15-Minute Order Edit Window</li>
               <li>• Laser-Cleaned Desi Pulses & Grains</li>
             </ul>
           </div>

@@ -313,8 +313,8 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
 
   // ============================================================================
   // 3. PUT: Order Status, Edits, Refunds & Payment Updates
-  //    - Cancellation (status === 'CANCELLED'): Integrated server-side workflow
-  //      for verified CUSTOMER (own order <= 15m) and SHOPKEEPER
+  //    - Cancellation (status === 'CANCELLED'): Verified SHOPKEEPER session only
+  //      (Customers cannot cancel orders under any circumstances; HTTP 403)
   //    - All other status transitions/edits: Verified SHOPKEEPER session only
   // ============================================================================
   if (method === 'PUT') {
@@ -365,11 +365,20 @@ export async function processUpdateOrderRequest(
 
   const normalizedStatus = String(body?.status || '').trim().toUpperCase();
 
-  // Route ALL cancellation requests (Customer & Shopkeeper) through the integrated server workflow
+  // Route cancellation requests strictly for verified SHOPKEEPER only; reject Customers with 403 before RPC
   if (normalizedStatus === 'CANCELLED') {
+    if (!isShopkeeper) {
+      return {
+        statusCode: 403,
+        payload: {
+          success: false,
+          error: 'Forbidden: Customers cannot cancel orders. Only the shopkeeper can cancel orders.',
+        },
+      };
+    }
     return processCancelOrderRequest(supabase, body, {
       adminSession: auth?.adminSession || null,
-      customerSession,
+      customerSession: null,
     });
   }
 
@@ -378,7 +387,7 @@ export async function processUpdateOrderRequest(
       statusCode: 403,
       payload: {
         success: false,
-        error: 'Forbidden: Customers can only cancel eligible orders.',
+        error: 'Forbidden: Only the shopkeeper can update or cancel orders.',
       },
     };
   }

@@ -23,7 +23,7 @@ export const StorePolicyModal: React.FC<StorePolicyModalProps> = ({ policyType, 
             <h2 className="font-extrabold text-sm sm:text-base text-white">
               {policyType === 'TERMS' && 'Wholesale & Retail Commercial Terms'}
               {policyType === 'PRIVACY' && 'Customer Data & Privacy Policy'}
-              {policyType === 'REFUND' && '15-Minute Cancellation & Refund Policy'}
+              {policyType === 'REFUND' && 'Order Edit, Cancellation & Refund Policy'}
             </h2>
           </div>
           <button
@@ -76,11 +76,11 @@ export const StorePolicyModal: React.FC<StorePolicyModalProps> = ({ policyType, 
           {policyType === 'REFUND' && (
             <>
               <div className="bg-blue-50 border border-blue-200 p-3 rounded-xl text-[#0F2C59] font-bold">
-                Hassle-free 15-minute instant cancellation window on all new orders.
+                15-minute instant order item editing on new orders & transparent wallet refunds.
               </div>
               <div>
-                <h4 className="font-extrabold text-gray-900 mb-1">1. 15-Minute Cancellation</h4>
-                <p>Any order can be cancelled directly from your Order History screen within 15 minutes of placement before packing commences.</p>
+                <h4 className="font-extrabold text-gray-900 mb-1">1. 15-Minute Order Edit & Shopkeeper Cancellation</h4>
+                <p>You can edit items in your order within 15 minutes of placement before packing commences. Order cancellations are processed exclusively by the shopkeeper.</p>
               </div>
               <div>
                 <h4 className="font-extrabold text-gray-900 mb-1">2. Instant Wallet Credit</h4>

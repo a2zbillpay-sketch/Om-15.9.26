@@ -305,8 +305,15 @@ class SimulatedPostgresEngine {
     const customerPhone = params.p_customer_phone ? String(params.p_customer_phone) : null;
     const nowIso = params.p_now ? String(params.p_now) : new Date().toISOString();
 
-    if (!['CUSTOMER', 'SHOPKEEPER'].includes(actorRole)) {
-      return { ok: false, statusCode: 401, error: 'Unauthorized: Verified session required to cancel orders.' };
+    if (actorRole === 'CUSTOMER') {
+      return {
+        ok: false,
+        statusCode: 403,
+        error: 'Forbidden: Customers cannot cancel orders. Only the shopkeeper can cancel orders.',
+      };
+    }
+    if (actorRole !== 'SHOPKEEPER') {
+      return { ok: false, statusCode: 401, error: 'Unauthorized: Verified shopkeeper session required to cancel orders.' };
     }
     if (!rawOrderId) {
       return { ok: false, statusCode: 400, error: 'Order ID is required' };
@@ -345,16 +352,6 @@ class SimulatedPostgresEngine {
 
       const order = txDb.orders[ordIdx];
       await this.maybeYield();
-
-      if (actorRole === 'CUSTOMER') {
-        const op = normalizePhone10(order.customer_phone);
-        const sp = normalizePhone10(customerPhone);
-        const ownsByPhone = Boolean(op && sp && op === sp);
-        const ownsById = Boolean(order.customer_id && customerId && order.customer_id === customerId);
-        if (!ownsByPhone && !ownsById) {
-          return { ok: false, statusCode: 403, error: 'Forbidden: You can only cancel your own orders.' };
-        }
-      }
 
       const statusUpper = String(order.status || '').toUpperCase();
       if (statusUpper === 'DELIVERED') {
@@ -412,17 +409,7 @@ class SimulatedPostgresEngine {
         };
       }
 
-      if (actorRole === 'CUSTOMER') {
-        const createdMs = order.created_at ? new Date(order.created_at).getTime() : NaN;
-        const nowMs = new Date(nowIso).getTime();
-        if (!Number.isFinite(createdMs) || nowMs - createdMs > 15 * 60 * 1000) {
-          return {
-            ok: false,
-            statusCode: 403,
-            error: 'The 15-minute cancellation window for this order has expired.',
-          };
-        }
-      }
+      // No 15-minute cancellation window restriction for SHOPKEEPER
 
       const shouldRestoreStock = existingMeta.stockDeducted === true && existingMeta.stockRestored !== true;
       const items = relItems.length > 0 ? relItems : Array.isArray(existingMeta.items) ? existingMeta.items : [];
@@ -1505,14 +1492,14 @@ async function runTests() {
     const clientA = engine.createSupabaseClient();
     const clientB = engine.createSupabaseClient();
 
-    const authCust = {
-      adminSession: null,
-      customerSession: { role: 'CUSTOMER' as const, customerId: 'cust-1', phone: '9876543210', name: 'Asha', exp: Date.now() + 60000 },
+    const authShop = {
+      adminSession: { role: 'SHOPKEEPER' as const, phone: '9999999999', exp: Date.now() + 60000 },
+      customerSession: null,
     };
 
     const [resA, resB] = await Promise.all([
-      processCancelOrderRequest(clientA, { id: 'ord-t1' }, authCust),
-      processCancelOrderRequest(clientB, { id: 'ord-t1' }, authCust),
+      processCancelOrderRequest(clientA, { id: 'ord-t1' }, authShop),
+      processCancelOrderRequest(clientB, { id: 'ord-t1' }, authShop),
     ]);
 
     assert.equal(resA.statusCode, 200);
@@ -1603,13 +1590,12 @@ async function runTests() {
     });
 
     engine.yieldOnRpcStepMs = 10;
-    const custAuth = { adminSession: null, customerSession: { role: 'CUSTOMER' as const, customerId: 'cust-2', phone: '9111111111', name: 'Ravi', exp: Date.now() + 60000 } };
     const shopAuth = { adminSession: { role: 'SHOPKEEPER' as const, phone: '9999999999', exp: Date.now() + 60000 }, customerSession: null };
 
     const [r1, r2, r3] = await Promise.all([
-      processCancelOrderRequest(engine.createSupabaseClient(), { id: 'ord-c1' }, custAuth),
+      processCancelOrderRequest(engine.createSupabaseClient(), { id: 'ord-c1' }, shopAuth),
       processUpdateOrderRequest(engine.createSupabaseClient(), { id: 'ord-acc', status: 'ORDER_ACCEPTED', deductStockOnAccept: true }, shopAuth),
-      processCancelOrderRequest(engine.createSupabaseClient(), { id: 'ord-c2' }, custAuth),
+      processCancelOrderRequest(engine.createSupabaseClient(), { id: 'ord-c2' }, shopAuth),
     ]);
 
     assert.equal(r1.statusCode, 200);
@@ -1656,10 +1642,11 @@ async function runTests() {
 
     engine.yieldOnRpcStepMs = 15;
     const custAuth = { adminSession: null, customerSession: { role: 'CUSTOMER' as const, customerId: 'cust-w', phone: '9222222222', name: 'Meera', exp: Date.now() + 60000 } };
+    const shopAuth = { adminSession: { role: 'SHOPKEEPER' as const, phone: '9999999999', exp: Date.now() + 60000 }, customerSession: null };
 
-    // Case 3a: Concurrent refund +200 (cancel_order_atomic) and spend -200 (processCreateOrderRequest)
+    // Case 3a: Concurrent refund +200 (cancel_order_atomic by Shopkeeper) and spend -200 (processCreateOrderRequest)
     const [cancelRes, createRes] = await Promise.all([
-      processCancelOrderRequest(engine.createSupabaseClient(), { id: 'ord-refund' }, custAuth),
+      processCancelOrderRequest(engine.createSupabaseClient(), { id: 'ord-refund' }, shopAuth),
       processCreateOrderRequest(
         engine.createSupabaseClient(),
         {
@@ -1773,7 +1760,7 @@ async function runTests() {
       ],
     });
 
-    const auth = { adminSession: null, customerSession: { role: 'CUSTOMER' as const, customerId: 'cust-f', phone: '9333333333', name: 'Kiran', exp: Date.now() + 60000 } };
+    const auth = { adminSession: { role: 'SHOPKEEPER' as const, phone: '9999999999', exp: Date.now() + 60000 }, customerSession: null };
 
     for (const stage of faultStages) {
       engine.nextFaultStage = stage;
@@ -1824,7 +1811,7 @@ async function runTests() {
         },
       ],
     });
-    const auth = { adminSession: null, customerSession: { role: 'CUSTOMER' as const, customerId: 'cust-i', phone: '9444444444', name: 'Sita', exp: Date.now() + 60000 } };
+    const auth = { adminSession: { role: 'SHOPKEEPER' as const, phone: '9999999999', exp: Date.now() + 60000 }, customerSession: null };
 
     const first = await processCancelOrderRequest(engine.createSupabaseClient(), { id: 'ord-idem' }, auth);
     const retry = await processCancelOrderRequest(engine.createSupabaseClient(), { id: 'ord-idem' }, auth);
@@ -1873,10 +1860,9 @@ async function runTests() {
     });
 
     const shopAuth = { adminSession: { role: 'SHOPKEEPER' as const, phone: '9999999999', exp: Date.now() + 60000 }, customerSession: null };
-    const custAuth = { adminSession: null, customerSession: { role: 'CUSTOMER' as const, customerId: 'cust-r', phone: '9555555555', name: 'Mohan', exp: Date.now() + 60000 } };
 
-    // Cancel first
-    const cancelRes = await processCancelOrderRequest(engine.createSupabaseClient(), { id: 'ord-rev' }, custAuth);
+    // Cancel first (by Shopkeeper)
+    const cancelRes = await processCancelOrderRequest(engine.createSupabaseClient(), { id: 'ord-rev' }, shopAuth);
     assert.equal(cancelRes.statusCode, 200);
 
     // Shopkeeper attempts to accept cancelled order -> 409 Conflict
@@ -1912,16 +1898,18 @@ async function runTests() {
   }
 
   // ---------------------------------------------------------------------------
-  // TEST 7: Authorization, Ownership, 15-Min Window & Delivered Order Guard
+  // TEST 7: Shopkeeper-Only Cancellation, Customer 403 Block (Even Within 15m), & No Shopkeeper Time Limit
   // ---------------------------------------------------------------------------
   {
     const now = new Date().toISOString();
     const sixteenMinsAgo = new Date(Date.now() - 16 * 60 * 1000).toISOString();
+    const twoDaysAgo = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
     const engine = new SimulatedPostgresEngine({
       orders: [
         { id: 'ord-a1', order_number: 'OM-7001', customer_id: 'cust-A', customer_phone: '9666666661', status: 'ORDER_PENDING', payment_method: 'COD', payment_status: 'PENDING', created_at: now, updated_at: now },
         { id: 'ord-a2', order_number: 'OM-7002', customer_id: 'cust-A', customer_phone: '9666666661', status: 'ORDER_PENDING', payment_method: 'COD', payment_status: 'PENDING', created_at: sixteenMinsAgo, updated_at: sixteenMinsAgo },
         { id: 'ord-a3', order_number: 'OM-7003', customer_id: 'cust-A', customer_phone: '9666666661', status: 'DELIVERED', payment_method: 'COD', payment_status: 'RECEIVED', created_at: now, updated_at: now },
+        { id: 'ord-a4', order_number: 'OM-7004', customer_id: 'cust-A', customer_phone: '9666666661', status: 'PACKING_IN_PROGRESS', payment_method: 'COD', payment_status: 'PENDING', created_at: twoDaysAgo, updated_at: twoDaysAgo },
       ],
     });
 
@@ -1933,18 +1921,55 @@ async function runTests() {
     const rUnauth = await processCancelOrderRequest(engine.createSupabaseClient(), { id: 'ord-a1' }, unauth);
     assert.equal(rUnauth.statusCode, 401);
 
+    // Owner Customer CANNOT cancel even within 15 minutes (via processCancelOrderRequest or processUpdateOrderRequest)
+    const rOwnerFreshCancel = await processCancelOrderRequest(engine.createSupabaseClient(), { id: 'ord-a1' }, custA);
+    assert.equal(rOwnerFreshCancel.statusCode, 403);
+    assert.equal(engine.db.orders[0].status, 'ORDER_PENDING');
+
+    const rOwnerPutCancel = await processUpdateOrderRequest(
+      engine.createSupabaseClient(),
+      { id: 'ord-a1', status: 'CANCELLED' },
+      custA
+    );
+    assert.equal(rOwnerPutCancel.statusCode, 403);
+    assert.equal(engine.db.orders[0].status, 'ORDER_PENDING');
+
+    // Other Customer CANNOT cancel -> 403
     const rOther = await processCancelOrderRequest(engine.createSupabaseClient(), { id: 'ord-a1' }, custB);
     assert.equal(rOther.statusCode, 403);
 
+    // Owner Customer CANNOT cancel after 15 minutes -> 403
     const rExpiredCust = await processCancelOrderRequest(engine.createSupabaseClient(), { id: 'ord-a2' }, custA);
     assert.equal(rExpiredCust.statusCode, 403);
+
+    // Direct RPC call with CUSTOMER actor -> 403
+    const rDirectRpcCust = await engine.executeRpc('cancel_order_atomic', {
+      p_order_id: 'ord-a1',
+      p_actor_role: 'CUSTOMER',
+      p_customer_id: 'cust-A',
+      p_customer_phone: '9666666661',
+    });
+    assert.equal(rDirectRpcCust.data?.statusCode, 403);
+    assert.equal(rDirectRpcCust.data?.ok, false);
+
+    // Shopkeeper CAN cancel eligible orders at any time (within 15m, after 16m, after 48h)
+    const rFreshShop = await processCancelOrderRequest(engine.createSupabaseClient(), { id: 'ord-a1' }, shop);
+    assert.equal(rFreshShop.statusCode, 200);
 
     const rExpiredShop = await processCancelOrderRequest(engine.createSupabaseClient(), { id: 'ord-a2' }, shop);
     assert.equal(rExpiredShop.statusCode, 200);
 
+    const rOldShop = await processUpdateOrderRequest(
+      engine.createSupabaseClient(),
+      { id: 'ord-a4', status: 'CANCELLED' },
+      shop
+    );
+    assert.equal(rOldShop.statusCode, 200);
+
+    // Delivered orders still cannot be cancelled even by Shopkeeper
     const rDelivered = await processCancelOrderRequest(engine.createSupabaseClient(), { id: 'ord-a3' }, shop);
     assert.equal(rDelivered.statusCode, 400);
-    results.push('PASS Test 7: 401 unauth, 403 ownership, 403 15-min window, shopkeeper override, 400 delivered checks');
+    results.push('PASS Test 7: 401 unauth, Customer 403 (even <15m), Shopkeeper unlimited window, 400 delivered checks');
   }
 
   // ---------------------------------------------------------------------------
@@ -1954,6 +1979,9 @@ async function runTests() {
     const rootDir = path.resolve(process.cwd());
     const sql = fs.readFileSync(path.join(rootDir, 'supabase_order_cancellation_atomic_v2.sql'), 'utf8');
     assert.ok(sql.includes('CREATE OR REPLACE FUNCTION public.cancel_order_atomic'), 'Missing cancel_order_atomic');
+    assert.ok(sql.includes("IF v_actor_role = 'CUSTOMER' THEN"), 'Missing explicit CUSTOMER 403 rejection in cancel_order_atomic');
+    assert.ok(sql.includes("IF v_actor_role <> 'SHOPKEEPER' THEN"), 'Missing SHOPKEEPER-only guard in cancel_order_atomic');
+    assert.equal(sql.includes('The 15-minute cancellation window for this order has expired.'), false, 'Legacy 15-min cancellation error must be removed from SQL');
     assert.ok(sql.includes('CREATE OR REPLACE FUNCTION public.debit_wallet_for_order_atomic'), 'Missing debit_wallet_for_order_atomic');
     assert.ok(sql.includes('CREATE OR REPLACE FUNCTION public.transition_order_status_atomic'), 'Missing transition_order_status_atomic');
     assert.ok(sql.includes('uq_ledger_order_refund_credit'), 'Missing partial unique index uq_ledger_order_refund_credit');
@@ -1966,6 +1994,7 @@ async function runTests() {
     assert.equal(cancelTs.includes('orderCancellationQueues'), false, 'Legacy JS lock map must be removed');
     assert.equal(cancelTs.includes('executeCompensatingRollback'), false, 'Legacy JS snapshot rollback must be removed');
     assert.ok(cancelTs.includes("supabase.rpc('cancel_order_atomic'"), 'api/_orderCancellation.ts must call cancel_order_atomic RPC');
+    assert.ok(cancelTs.includes("p_actor_role: 'SHOPKEEPER'"), 'api/_orderCancellation.ts must pass SHOPKEEPER actor role only');
 
     const creationSql = fs.readFileSync(path.join(rootDir, 'supabase_order_creation_atomic_v2.sql'), 'utf8');
     assert.ok(creationSql.includes('CREATE OR REPLACE FUNCTION public.create_order_with_wallet_atomic'), 'Missing create_order_with_wallet_atomic');
@@ -2146,7 +2175,12 @@ async function runTests() {
       customerSession: { role: 'CUSTOMER' as const, customerId: '33333333-3333-3333-3333-333333333333', phone: '9888888883', name: 'Vikas', exp: Date.now() + 60000 },
     };
 
-    // 11a: Two concurrent identical duplicate requests (same orderId) + concurrent cancel on that uncommitted orderId
+    const shopAuth11 = {
+      adminSession: { role: 'SHOPKEEPER' as const, phone: '9999999999', exp: Date.now() + 60000 },
+      customerSession: null,
+    };
+
+    // 11a: Two concurrent identical duplicate requests (same orderId) + concurrent Shopkeeper cancel on that uncommitted orderId
     const [dupA, dupB, earlyCancel] = await Promise.all([
       processCreateOrderRequest(
         engine.createSupabaseClient(),
@@ -2172,7 +2206,7 @@ async function runTests() {
         },
         custAuthOldPhone
       ),
-      processCancelOrderRequest(engine.createSupabaseClient(), { id: 'ord-dup-11' }, custAuthOldPhone),
+      processCancelOrderRequest(engine.createSupabaseClient(), { id: 'ord-dup-11' }, shopAuth11),
     ]);
 
     const createdStatuses = [dupA.statusCode, dupB.statusCode].sort();
@@ -2184,7 +2218,7 @@ async function runTests() {
     const expectedAfter11a = earlyCancel.statusCode === 200 ? 500 : 300;
     assert.equal(engine.db.users[0].wallet_balance, expectedAfter11a);
 
-    // 11b: Concurrent phone update (9888888883 -> 9777777773) alongside order creation & cancellation
+    // 11b: Concurrent phone update (9888888883 -> 9777777773) alongside order creation & Shopkeeper cancellation
     // First ensure ord-dup-11 exists & is active for cancel, reset balance cleanly to 300 if cancelled
     if (earlyCancel.statusCode === 200) {
       await processCreateOrderRequest(
@@ -2201,7 +2235,15 @@ async function runTests() {
       );
     }
     const targetCancelId = earlyCancel.statusCode === 200 ? 'ord-active-11b' : 'ord-dup-11';
-    // Balance is now 300, active ₹200 order exists. Concurrently: update phone to 9777777773 AND cancel active ₹200 order!
+    // Customer trying to cancel must fail with 403
+    const custAttemptRes = await processCancelOrderRequest(
+      engine.createSupabaseClient(),
+      { id: targetCancelId },
+      custAuthOldPhone
+    );
+    assert.equal(custAttemptRes.statusCode, 403);
+
+    // Balance is now 300, active ₹200 order exists. Concurrently: update phone to 9777777773 AND Shopkeeper cancels active ₹200 order!
     const [phoneRes, cancelDuringPhoneRes] = await Promise.all([
       engine.executeRpc('update_customer_phone_atomic', {
         p_user_id: '33333333-3333-3333-3333-333333333333',
@@ -2209,7 +2251,7 @@ async function runTests() {
         p_new_phone: '9777777773',
         p_update_profile: false,
       }),
-      processCancelOrderRequest(engine.createSupabaseClient(), { id: targetCancelId }, custAuthOldPhone),
+      processCancelOrderRequest(engine.createSupabaseClient(), { id: targetCancelId }, shopAuth11),
     ]);
     assert.equal(phoneRes.data?.ok, true);
     assert.equal(cancelDuringPhoneRes.statusCode, 200);

@@ -15,9 +15,8 @@ import {
   ExternalLink,
   CreditCard,
 } from 'lucide-react';
-import { Order, OrderStatus, PaymentMethod, PaymentStatus } from '../types';
+import { Order, OrderStatus, PaymentMethod, PaymentStatus, Role } from '../types';
 import { useApp } from '../context/AppContext';
-import { canCancelOrder } from '../lib/engine/checkout-calculator';
 import {
   OrderFulfillmentProgress,
   SIX_FULFILLMENT_STEPS,
@@ -39,7 +38,16 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
   onOpenCart,
   onPayPendingBalance,
 }) => {
-  const { orders, cancelOrder, startEditingOrder, repeatOrder, currentUser, refreshOrders } = useApp();
+  const {
+    orders,
+    cancelOrder,
+    startEditingOrder,
+    repeatOrder,
+    refreshOrders,
+    activeRole,
+    isAdminSessionValid,
+  } = useApp();
+  const isShopkeeperView = activeRole === Role.SHOPKEEPER && isAdminSessionValid;
   const [secondsRemaining, setSecondsRemaining] = useState<number>(0);
   const [isCancelling, setIsCancelling] = useState<boolean>(false);
   const [cancelMessage, setCancelMessage] = useState<string | null>(null);
@@ -76,7 +84,7 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
 
   if (!isOpen || !currentOrder) return null;
 
-  const isCancellable =
+  const isEditWindowActive =
     currentOrder.status !== OrderStatus.CANCELLED &&
     currentOrder.status !== OrderStatus.DELIVERED &&
     secondsRemaining > 0;
@@ -130,13 +138,17 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
   }
 
   const handleCancel = async () => {
+    if (!isShopkeeperView) {
+      setCancelError('Customers cannot cancel orders. Please contact the shopkeeper.');
+      return;
+    }
     if (isCancelling) return;
     setIsCancelling(true);
     setCancelError(null);
     setCancelMessage(null);
 
     try {
-      const result = await cancelOrder(currentOrder.id);
+      const result = await cancelOrder(currentOrder.id, true);
       if (!result.success) {
         setCancelError(
           result.error || 'Unable to cancel order right now. Please try again.'
@@ -242,11 +254,11 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
             orderNumber={currentOrder.orderNumber}
           />
 
-          {/* 15-Minute Cancellation Window Banner */}
+          {/* 15-Minute Order Edit Window Banner (Strictly for Order Editing, NOT Cancellation) */}
           {currentOrder.status !== OrderStatus.CANCELLED && (
             <div
               className={`p-3.5 rounded-xl border flex items-start justify-between gap-3 text-xs ${
-                isCancellable
+                isEditWindowActive
                   ? 'bg-amber-50 border-amber-300 text-amber-900'
                   : 'bg-gray-50 border-gray-200 text-gray-600'
               }`}
@@ -255,17 +267,17 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
                 <Clock
                   size={18}
                   className={`mt-0.5 shrink-0 ${
-                    isCancellable ? 'text-amber-600 animate-pulse' : 'text-gray-400'
+                    isEditWindowActive ? 'text-amber-600 animate-pulse' : 'text-gray-400'
                   }`}
                 />
                 <div>
                   <div className="font-extrabold">
-                    {isCancellable
+                    {isEditWindowActive
                       ? '15-Minute Instant Edit Window Active'
                       : 'Edit Window Closed'}
                   </div>
                   <div className="text-[11px] mt-0.5">
-                    {isCancellable ? (
+                    {isEditWindowActive ? (
                       <span>
                         You can edit your order items within{' '}
                         <strong className="font-mono text-xs font-black text-amber-950">
@@ -280,8 +292,8 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
                 </div>
               </div>
 
-              {isCancellable && (
-                <div className="flex items-center gap-1.5 shrink-0">
+              <div className="flex items-center gap-1.5 shrink-0">
+                {isEditWindowActive && (
                   <button
                     id="edit-order-btn"
                     type="button"
@@ -292,18 +304,22 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
                     <Edit3 size={13} className="text-[#D4AF37]" />
                     <span>Edit Order</span>
                   </button>
-                  <button
-                    id="cancel-order-btn"
-                    type="button"
-                    onClick={handleCancel}
-                    disabled={isCancelling}
-                    className="bg-red-600 hover:bg-red-700 disabled:opacity-60 text-white font-bold text-xs px-3 py-1.5 rounded-lg shrink-0 shadow-sm transition flex items-center gap-1 cursor-pointer"
-                  >
-                    <X size={13} />
-                    <span>{isCancelling ? 'Cancelling...' : 'Cancel Order'}</span>
-                  </button>
-                </div>
-              )}
+                )}
+
+                {isShopkeeperView &&
+                  currentOrder.status !== OrderStatus.DELIVERED && (
+                    <button
+                      id="cancel-order-btn"
+                      type="button"
+                      onClick={handleCancel}
+                      disabled={isCancelling}
+                      className="bg-red-600 hover:bg-red-700 disabled:opacity-60 text-white font-bold text-xs px-3 py-1.5 rounded-lg shrink-0 shadow-sm transition flex items-center gap-1 cursor-pointer"
+                    >
+                      <X size={13} />
+                      <span>{isCancelling ? 'Cancelling...' : 'Cancel Order'}</span>
+                    </button>
+                  )}
+              </div>
             </div>
           )}
 
