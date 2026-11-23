@@ -20,7 +20,7 @@ export const CodCollectionModal: React.FC<CodCollectionModalProps> = ({
   onClose,
   onSave,
 }) => {
-  const { getCustomerOutstanding, users } = useApp();
+  const { getCustomerOutstanding, users, customers, isSupabaseConfigured } = useApp();
   const [amountStr, setAmountStr] = useState<string>('');
   const [markDelivered, setMarkDelivered] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
@@ -34,7 +34,8 @@ export const CodCollectionModal: React.FC<CodCollectionModalProps> = ({
   const orderPayable = remainingOrderBalance;
 
   const targetCustomer = order?.userPhone || order?.userId || '';
-  const customerUser = users.find(
+  const directorySource = isSupabaseConfigured ? customers : users;
+  const customerUser = directorySource.find(
     (u) =>
       u.role === Role.CUSTOMER &&
       ((order?.userPhone &&

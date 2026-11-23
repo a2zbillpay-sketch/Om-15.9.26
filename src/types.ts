@@ -114,6 +114,7 @@ export interface User {
   name: string;
   phone: string;
   role: Role;
+  status?: string;
   walletBalance: number;
   outstandingBalance?: number;
   codOrderCount: number;

@@ -2171,5 +2171,77 @@ export async function reorderCategoriesInSupabase(
   }
 }
 
+export interface FetchCustomersResult {
+  success: boolean;
+  customers?: User[];
+  error?: string;
+  status?: number;
+}
+
+/**
+ * Loads all authorized customer directory records via GET /api/customers.
+ * Requires a verified Shopkeeper HttpOnly session cookie.
+ * Never silently falls back to localStorage or om_users on failure.
+ */
+export async function fetchCustomersFromApi(): Promise<FetchCustomersResult> {
+  if (typeof window === 'undefined' || typeof fetch !== 'function') {
+    return {
+      success: false,
+      error: 'Browser network environment is unavailable.',
+    };
+  }
+
+  try {
+    const res = await fetch(`/api/customers?_t=${Date.now()}`, {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        Pragma: 'no-cache',
+      },
+      credentials: 'include',
+      cache: 'no-store',
+    });
+
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data?.success || !Array.isArray(data.customers)) {
+      return {
+        success: false,
+        status: res.status,
+        error:
+          data?.error ||
+          (res.status === 401
+            ? 'Unauthorized: Please sign in as Shopkeeper to view customers.'
+            : `Failed to fetch customers from server (HTTP ${res.status}).`),
+      };
+    }
+
+    const mapped: User[] = data.customers.map((c: any) => ({
+      id: String(c.id),
+      name: String(c.name || '').trim() || 'Customer',
+      phone: String(c.phone || '').trim(),
+      role: Role.CUSTOMER,
+      status: c.status ? String(c.status).trim().toUpperCase() : 'ACTIVE',
+      walletBalance: Math.max(0, Number(c.walletBalance || 0)),
+      outstandingBalance: Math.max(0, Number(c.outstandingBalance || 0)),
+      codOrderCount: Math.max(0, Number(c.codOrderCount || 0)),
+      addresses: Array.isArray(c.addresses) ? c.addresses : [],
+      createdAt: String(c.createdAt || new Date().toISOString()),
+      isDatabaseVerified: true,
+    }));
+
+    return {
+      success: true,
+      status: res.status,
+      customers: mapped,
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err?.message || 'Network error while fetching customers from server.',
+    };
+  }
+}
+
 
 

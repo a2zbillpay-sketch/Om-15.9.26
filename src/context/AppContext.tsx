@@ -52,6 +52,7 @@ import {
   deleteAddressInSupabase,
   setDefaultAddressInSupabase,
   fetchCustomerProfileFromSupabase,
+  fetchCustomersFromApi,
   saveProductToSupabase,
   fetchProductsFromSupabase,
   deleteProductFromSupabase,
@@ -166,6 +167,9 @@ interface AppContextType {
   currentUser: User;
   setCurrentUser: (user: User) => void;
   users: User[];
+  customers: User[];
+  customersLoading: boolean;
+  customersError: string | null;
   activeRole: Role;
   setActiveRole: (role: Role) => void;
   customerFlowStep: CustomerFlowStep;
@@ -281,6 +285,7 @@ interface AppContextType {
   logout: () => void;
   isSupabaseConfigured: boolean;
   refreshOrders: () => Promise<Order[] | null>;
+  refreshCustomers: () => Promise<User[] | null>;
   refreshCustomerWallet: () => Promise<number | null>;
   refreshProducts: () => Promise<void>;
   isAdminSessionValid: boolean;
@@ -465,6 +470,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       (u) => u.phone !== '9820123456' && u.id !== 'user-customer-1'
     );
   });
+
+  const usersRef = useRef<User[]>(users);
+  useEffect(() => {
+    usersRef.current = users;
+  }, [users]);
+
+  // Authoritative Admin Customer Directory state (strictly sourced from /api/customers when Supabase is configured; never merged with om_users)
+  const [customers, setCustomers] = useState<User[]>(() =>
+    isSupabaseConfigured ? [] : users.filter((u) => u.role === Role.CUSTOMER)
+  );
+  const [customersLoading, setCustomersLoading] = useState<boolean>(false);
+  const [customersError, setCustomersError] = useState<string | null>(null);
+  const customersFetchPromiseRef = useRef<Promise<User[] | null> | null>(null);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured) {
+      setCustomers(users.filter((u) => u.role === Role.CUSTOMER));
+      setCustomersError(null);
+    }
+  }, [users]);
 
   const isAdminRoleValue = (role: unknown): boolean =>
     role === Role.SHOPKEEPER || role === Role.SECONDARY_ADMIN || role === Role.ACCOUNTS;
@@ -1103,6 +1128,52 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  // Fetch authoritative Admin Customer Directory from Supabase public.users via GET /api/customers
+  const refreshCustomers = useCallback(async (): Promise<User[] | null> => {
+    if (!isSupabaseConfigured) {
+      const localCustomers = usersRef.current.filter((u) => u.role === Role.CUSTOMER);
+      setCustomers(localCustomers);
+      setCustomersError(null);
+      return localCustomers;
+    }
+
+    if (!isAdminSessionValidRef.current || activeRole === Role.CUSTOMER) {
+      return null;
+    }
+
+    if (customersFetchPromiseRef.current) {
+      return customersFetchPromiseRef.current;
+    }
+
+    const fetchPromise = (async () => {
+      setCustomersLoading(true);
+      setCustomersError(null);
+      try {
+        const result = await fetchCustomersFromApi();
+        if (!result.success) {
+          // Never fall back to stale localStorage / om_users on failure
+          setCustomers([]);
+          setCustomersError(result.error || 'Failed to load customer directory from server.');
+          return null;
+        }
+        const freshCustomers = Array.isArray(result.customers) ? result.customers : [];
+        setCustomers(freshCustomers);
+        setCustomersError(null);
+        return freshCustomers;
+      } catch (err: any) {
+        setCustomers([]);
+        setCustomersError(err?.message || 'Network error while loading customer directory.');
+        return null;
+      } finally {
+        setCustomersLoading(false);
+        customersFetchPromiseRef.current = null;
+      }
+    })();
+
+    customersFetchPromiseRef.current = fetchPromise;
+    return fetchPromise;
+  }, [activeRole]);
+
   // Synchronize customer wallet and persistent ledger from Supabase on demand
   const refreshCustomerWallet = useCallback(async (): Promise<number | null> => {
     if (!isSupabaseConfigured) {
@@ -1174,6 +1245,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (!document.hidden && isSupabaseConfigured) {
         if (activeRole !== Role.CUSTOMER && isAdminSessionValid) {
           refreshOrders().catch(() => {});
+          if (activeRole === Role.SHOPKEEPER) {
+            refreshCustomers().catch(() => {});
+          }
         }
         refreshProducts().catch(() => {});
       }
@@ -1182,7 +1256,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [activeRole, isAdminSessionValid]);
+  }, [activeRole, isAdminSessionValid, refreshCustomers]);
 
   const checkAdminSession = useCallback(async (): Promise<boolean> => {
     try {
@@ -1254,6 +1328,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     isAdminSessionValidRef.current = false;
     setIsAdminSessionValid(false);
     setActiveRoleState(Role.CUSTOMER);
+    if (isSupabaseConfigured) {
+      setCustomers([]);
+      setCustomersError(null);
+    }
     try {
       await fetch('/api/auth/logout', {
         method: 'POST',
@@ -1278,6 +1356,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (role === Role.CUSTOMER) {
       isAdminSessionValidRef.current = false;
       setIsAdminSessionValid(false);
+      if (isSupabaseConfigured) {
+        setCustomers([]);
+        setCustomersError(null);
+      }
     }
     setActiveRoleState(role);
     // If switching role, find matching user or switch current user's role
@@ -2424,7 +2506,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (hasCustomerOrders) {
         return fromOrders;
       }
-      const matchedUser = users.find((u) => isSameCustomer({ userPhone: u.phone, userId: u.id }, target));
+      const directorySource = isSupabaseConfigured ? customers : users;
+      const matchedUser = directorySource.find((u) => isSameCustomer({ userPhone: u.phone, userId: u.id }, target));
       if (matchedUser) {
         if (matchedUser.outstandingBalance && matchedUser.outstandingBalance > 0) {
           return matchedUser.outstandingBalance;
@@ -2437,7 +2520,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
       return 0;
     },
-    [orders, currentUser.phone, currentUser.id, currentUser.outstandingBalance, users]
+    [orders, currentUser.phone, currentUser.id, currentUser.outstandingBalance, users, customers]
   );
 
   // Keep customer COD outstanding debt tracked in outstandingBalance, completely separate from walletBalance
@@ -2987,6 +3070,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         if (targetPhoneClean || resolvedOrder?.userId) {
           setUsers((prev) =>
+            prev.map((u) => {
+              const uClean = u.phone ? u.phone.replace(/\D/g, '').slice(-10) : '';
+              if (
+                (resolvedOrder?.userId && u.id === resolvedOrder.userId) ||
+                (targetPhoneClean && uClean === targetPhoneClean)
+              ) {
+                return { ...u, walletBalance: refundInfo.newWalletBalance };
+              }
+              return u;
+            })
+          );
+          setCustomers((prev) =>
             prev.map((u) => {
               const uClean = u.phone ? u.phone.replace(/\D/g, '').slice(-10) : '';
               if (
@@ -3647,6 +3742,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // Update customer in users list and currentUser if matching
     const newDebt = allocationResult.remainingOutstanding;
     setUsers((prev) =>
+      prev.map((u) => {
+        if (isSameCustomer({ userPhone: u.phone, userId: u.id }, targetCustomer)) {
+          return {
+            ...u,
+            walletBalance: u.walletBalance < 0 ? 0 : u.walletBalance,
+            outstandingBalance: newDebt,
+          };
+        }
+        return u;
+      })
+    );
+    setCustomers((prev) =>
       prev.map((u) => {
         if (isSameCustomer({ userPhone: u.phone, userId: u.id }, targetCustomer)) {
           return {
@@ -4762,6 +4869,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         currentUser,
         setCurrentUser,
         users,
+        customers,
+        customersLoading,
+        customersError,
         activeRole,
         setActiveRole,
         customerFlowStep,
@@ -4822,6 +4932,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         logout,
         isSupabaseConfigured,
         refreshOrders,
+        refreshCustomers,
         refreshCustomerWallet,
         refreshProducts,
         isAdminSessionValid,

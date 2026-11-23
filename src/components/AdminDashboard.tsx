@@ -133,9 +133,13 @@ export const AdminDashboard: React.FC = () => {
     settings,
     setActiveRole,
     users,
+    customers,
+    customersLoading,
+    customersError,
     isSupabaseConfigured,
     refreshOrders,
     refreshProducts,
+    refreshCustomers,
     recordCodCollection,
     adminNotifications,
     markNotificationAsRead,
@@ -155,6 +159,7 @@ export const AdminDashboard: React.FC = () => {
     if (isSupabaseConfigured) {
       refreshOrders().catch(() => {});
       refreshProducts().catch(() => {});
+      refreshCustomers().catch(() => {});
     }
   }, []);
 
@@ -568,6 +573,11 @@ export const AdminDashboard: React.FC = () => {
   };
 
   const [activeTab, setActiveTab] = useState<'ORDERS' | 'INVENTORY' | 'CATEGORIES' | 'SETTINGS' | 'CUSTOMERS'>('ORDERS');
+  useEffect(() => {
+    if (activeTab === 'CUSTOMERS' && isSupabaseConfigured) {
+      refreshCustomers().catch(() => {});
+    }
+  }, [activeTab, isSupabaseConfigured, refreshCustomers]);
   const [orderFilter, setOrderFilter] = useState<string>('ALL');
   const [inventorySearch, setInventorySearch] = useState<string>('');
   const [inventoryStockFilter, setInventoryStockFilter] = useState<'ALL' | 'LOW_STOCK' | 'OUT_OF_STOCK' | 'IN_STOCK'>('ALL');
@@ -1008,7 +1018,9 @@ export const AdminDashboard: React.FC = () => {
 
   const deliveredCount = orders.filter((o) => o.status === OrderStatus.DELIVERED).length;
 
-  const customerUsers = users.filter((u) => u.role === Role.CUSTOMER);
+  const customerUsers = isSupabaseConfigured
+    ? customers.filter((u) => u.role === Role.CUSTOMER)
+    : users.filter((u) => u.role === Role.CUSTOMER);
 
   const getProductThreshold = (p: Product) => p.lowStockThreshold ?? settings.lowStockThreshold ?? 10;
   const getProductStock = (p: Product) => (p.variants || []).reduce((sum, v) => sum + (Number(v.stockQuantity) || 0), 0);
@@ -1391,11 +1403,11 @@ export const AdminDashboard: React.FC = () => {
               <button
                 onClick={async () => {
                   setIsRefreshing(true);
-                  await Promise.all([refreshOrders(), refreshProducts()]);
+                  await Promise.all([refreshOrders(), refreshProducts(), refreshCustomers()]);
                   setTimeout(() => setIsRefreshing(false), 500);
                 }}
                 className="px-2.5 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white transition flex items-center gap-1 text-[11px]"
-                title="Synchronize Orders & Inventory with Cloud"
+                title="Synchronize Orders, Inventory & Customers with Cloud"
               >
                 <RefreshCw size={13} className={isRefreshing ? 'animate-spin text-[#D4AF37]' : ''} />
                 <span className="hidden sm:inline">Sync</span>
@@ -2590,7 +2602,37 @@ export const AdminDashboard: React.FC = () => {
               </div>
             </div>
 
-            {filteredCustomers.length === 0 ? (
+            {customersError ? (
+              <div className="p-6">
+                <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-start gap-2.5 text-red-800 text-xs">
+                    <AlertCircle size={16} className="shrink-0 text-red-600 mt-0.5" />
+                    <div>
+                      <div className="font-bold">Failed to load customers from database</div>
+                      <div className="text-red-700 mt-0.5">{customersError}</div>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => refreshCustomers()}
+                    disabled={customersLoading}
+                    className="px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-700 text-white text-xs font-bold flex items-center gap-1.5 shrink-0 self-start sm:self-auto disabled:opacity-50"
+                  >
+                    <RefreshCw size={12} className={customersLoading ? 'animate-spin' : ''} />
+                    <span>Retry</span>
+                  </button>
+                </div>
+              </div>
+            ) : customersLoading && customerUsers.length === 0 ? (
+              <div className="p-8 text-center text-gray-500 text-xs flex flex-col items-center justify-center gap-2">
+                <Loader2 size={20} className="animate-spin text-[#0F2C59]" />
+                <span>Loading verified customers from database...</span>
+              </div>
+            ) : customerUsers.length === 0 ? (
+              <div className="p-8 text-center text-gray-500 text-xs">
+                No registered customer accounts found in database.
+              </div>
+            ) : filteredCustomers.length === 0 ? (
               <div className="p-8 text-center text-gray-500 text-xs">
                 No customer accounts match your search.
               </div>
@@ -2607,40 +2649,63 @@ export const AdminDashboard: React.FC = () => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-200">
-                    {filteredCustomers.map((c) => (
-                      <tr key={c.id} className="hover:bg-blue-50/30 transition">
-                        <td className="p-3">
-                          <div className="font-bold text-gray-900">{c.name}</div>
-                          <div className="font-mono text-gray-600 text-[11px] flex items-center gap-1 mt-0.5">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-                            <span>+91 {c.phone}</span>
-                          </div>
-                        </td>
-                        <td className="p-3 text-gray-600 max-w-xs">
-                          {c.addresses && c.addresses.length > 0 ? (
-                            <div>
-                              <div className="font-medium text-gray-800 line-clamp-1">{c.addresses[0].fullAddress}</div>
-                              {c.addresses[0].landmark && (
-                                <div className="text-[10px] text-gray-500">Near {c.addresses[0].landmark}, {c.addresses[0].pincode}</div>
+                    {filteredCustomers.map((c) => {
+                      const isActiveAccount = !c.status || c.status === 'ACTIVE';
+                      return (
+                        <tr key={c.id} className="hover:bg-blue-50/30 transition">
+                          <td className="p-3">
+                            <div className="font-bold text-gray-900 flex items-center gap-1.5 flex-wrap">
+                              <span>{c.name}</span>
+                              {!isActiveAccount && (
+                                <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-100 text-amber-800 uppercase">
+                                  {c.status}
+                                </span>
                               )}
                             </div>
-                          ) : (
-                            <span className="text-gray-400 italic">No address on file</span>
-                          )}
-                        </td>
-                        <td className="p-3 text-center font-bold text-gray-800">
-                          <span className="px-2 py-0.5 rounded-full text-[10px] bg-gray-100 text-gray-700">
-                            {c.codOrderCount || 0}
-                          </span>
-                        </td>
-                        <td className="p-3 text-center font-bold text-emerald-700 font-mono">
-                          ₹{c.walletBalance || 0}
-                        </td>
-                        <td className="p-3 text-gray-500 text-[11px]">
-                          {c.createdAt ? new Date(c.createdAt).toLocaleDateString('en-IN') : 'N/A'}
-                        </td>
-                      </tr>
-                    ))}
+                            <div className="font-mono text-gray-600 text-[11px] flex items-center gap-1 mt-0.5">
+                              <span
+                                className={`w-1.5 h-1.5 rounded-full ${
+                                  isActiveAccount ? 'bg-emerald-500' : 'bg-amber-500'
+                                }`}
+                              ></span>
+                              <span>+91 {c.phone}</span>
+                            </div>
+                          </td>
+                          <td className="p-3 text-gray-600 max-w-xs">
+                            {c.addresses && c.addresses.length > 0 ? (
+                              <div>
+                                <div className="font-medium text-gray-800 line-clamp-1">{c.addresses[0].fullAddress}</div>
+                                {(c.addresses[0].landmark || c.addresses[0].pincode) && (
+                                  <div className="text-[10px] text-gray-500">
+                                    {c.addresses[0].landmark ? `Near ${c.addresses[0].landmark}` : ''}
+                                    {c.addresses[0].landmark && c.addresses[0].pincode ? ', ' : ''}
+                                    {c.addresses[0].pincode || ''}
+                                  </div>
+                                )}
+                              </div>
+                            ) : (
+                              <span className="text-gray-400 italic">No address on file</span>
+                            )}
+                          </td>
+                          <td className="p-3 text-center font-bold text-gray-800">
+                            <span className="px-2 py-0.5 rounded-full text-[10px] bg-gray-100 text-gray-700">
+                              {c.codOrderCount || 0}
+                            </span>
+                          </td>
+                          <td className="p-3 text-center font-bold text-emerald-700 font-mono">
+                            <div>₹{c.walletBalance || 0}</div>
+                            {Boolean(c.outstandingBalance && c.outstandingBalance > 0) && (
+                              <div className="text-[10px] font-bold text-rose-700 mt-0.5">
+                                Due: ₹{c.outstandingBalance}
+                              </div>
+                            )}
+                          </td>
+                          <td className="p-3 text-gray-500 text-[11px]">
+                            {c.createdAt ? new Date(c.createdAt).toLocaleDateString('en-IN') : 'N/A'}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
