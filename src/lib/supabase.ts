@@ -1967,58 +1967,158 @@ export async function saveProductRequestToSupabase(req: ProductRequest): Promise
   }
 }
 
+export interface FetchProductRequestsResult {
+  success: boolean;
+  requests?: ProductRequest[];
+  error?: string;
+  status?: number;
+}
+
+function mapServerProductRequestRow(row: any): ProductRequest {
+  return {
+    id: String(row.id || ''),
+    customer: {
+      id: row.customer_id || row.user_id || '',
+      name: row.customer_name || 'Customer',
+      phone: row.customer_phone || '',
+    },
+    customerId: row.customer_id || row.user_id || '',
+    customerName: row.customer_name || 'Customer',
+    customerPhone: row.customer_phone || '',
+    product: {
+      id: row.product_id || '',
+      name: row.product_name || '',
+      variantId: row.variant_id || '',
+      variantName: row.variant_name || row.variant_title || '',
+      packSize: row.pack_size || '',
+      price: row.price ? Number(row.price) : undefined,
+    },
+    productId: row.product_id || '',
+    productName: row.product_name || '',
+    variantId: row.variant_id || '',
+    variantName: row.variant_name || row.variant_title || '',
+    packSize: row.pack_size || '',
+    quantity: Number(row.quantity) || 1,
+    requestDate: row.request_date || row.created_at || new Date().toISOString(),
+    createdAt: row.created_at || new Date().toISOString(),
+  };
+}
+
+function sortProductRequestsDesc(list: ProductRequest[]): ProductRequest[] {
+  return [...list].sort(
+    (a, b) =>
+      new Date(b.requestDate || b.createdAt).getTime() -
+      new Date(a.requestDate || a.createdAt).getTime()
+  );
+}
+
+/**
+ * Reconciles product requests strictly from the authoritative /api/product-requests result.
+ * - Never merges with stale localStorage entries.
+ * - Synchronizes om_product_requests with the authoritative API response (clears it on []).
+ * - Fails closed on API errors / Unauthorized without falling back to localStorage.
+ */
+export function resolveAuthoritativeProductRequestsState(
+  result: FetchProductRequestsResult,
+  storage?: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> | null
+): {
+  requests: ProductRequest[];
+  error: string | null;
+  synchronized: boolean;
+} {
+  const targetStorage =
+    storage !== undefined
+      ? storage
+      : typeof window !== 'undefined'
+      ? window.localStorage
+      : null;
+
+  if (result.success && Array.isArray(result.requests)) {
+    const authoritative = sortProductRequestsDesc(result.requests);
+    try {
+      if (targetStorage) {
+        if (authoritative.length > 0) {
+          targetStorage.setItem('om_product_requests', JSON.stringify(authoritative));
+        } else {
+          targetStorage.removeItem('om_product_requests');
+        }
+      }
+    } catch {
+      // ignore storage quota errors
+    }
+    return {
+      requests: authoritative,
+      error: null,
+      synchronized: true,
+    };
+  }
+
+  return {
+    requests: [],
+    error: result.error || 'Failed to load product requests from server.',
+    synchronized: false,
+  };
+}
+
+/**
+ * Loads product requests strictly via the verified server endpoint (GET /api/product-requests).
+ * Never reads Supabase directly from the browser and never falls back to localStorage on failure.
+ */
+export async function fetchProductRequestsFromApi(): Promise<FetchProductRequestsResult> {
+  if (typeof window === 'undefined' || typeof fetch !== 'function') {
+    return {
+      success: false,
+      error: 'Browser network environment is unavailable.',
+    };
+  }
+
+  try {
+    const res = await fetch(`/api/product-requests?_t=${Date.now()}`, {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        Pragma: 'no-cache',
+      },
+      credentials: 'include',
+      cache: 'no-store',
+    });
+
+    const json = await res.json().catch(() => null);
+    if (!res.ok || !json?.success || !Array.isArray(json.requests)) {
+      return {
+        success: false,
+        status: res.status,
+        error:
+          json?.error ||
+          (res.status === 401
+            ? 'Unauthorized: Please sign in as Shopkeeper to view product requests.'
+            : `Failed to load product requests from server (HTTP ${res.status}).`),
+      };
+    }
+
+    const mapped = sortProductRequestsDesc(json.requests.map(mapServerProductRequestRow));
+    return {
+      success: true,
+      status: res.status,
+      requests: mapped,
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err?.message || 'Network error while loading product requests from server.',
+    };
+  }
+}
+
 /**
  * Loads recent product requests for the Shopkeeper management center.
  * Strictly queries the verified server API (/api/product-requests).
- * If the API is unauthorized, fails, or is unavailable, it does NOT attempt direct client
- * Supabase reads of sensitive customer requests, returning null safely.
+ * If the API is unauthorized, fails, or is unavailable, returns null safely without localStorage fallback.
  */
 export async function fetchProductRequestsFromSupabase(): Promise<ProductRequest[] | null> {
-  try {
-    const res = await fetch('/api/product-requests', {
-      method: 'GET',
-      credentials: 'include',
-    });
-
-    if (res.ok) {
-      const json = await res.json();
-      if (json && json.success && Array.isArray(json.requests)) {
-        return json.requests.map((row: any) => ({
-          id: String(row.id || ''),
-          customer: {
-            id: row.customer_id || row.user_id || '',
-            name: row.customer_name || 'Customer',
-            phone: row.customer_phone || '',
-          },
-          customerId: row.customer_id || row.user_id || '',
-          customerName: row.customer_name || 'Customer',
-          customerPhone: row.customer_phone || '',
-          product: {
-            id: row.product_id || '',
-            name: row.product_name || '',
-            variantId: row.variant_id || '',
-            variantName: row.variant_name || row.variant_title || '',
-            packSize: row.pack_size || '',
-            price: row.price ? Number(row.price) : undefined,
-          },
-          productId: row.product_id || '',
-          productName: row.product_name || '',
-          variantId: row.variant_id || '',
-          variantName: row.variant_name || row.variant_title || '',
-          packSize: row.pack_size || '',
-          quantity: Number(row.quantity) || 1,
-          requestDate: row.request_date || row.created_at || new Date().toISOString(),
-          createdAt: row.created_at || new Date().toISOString(),
-        }));
-      }
-    }
-
-    // If API responded with 401, 500, or unexpected format, safely return null
-    return null;
-  } catch (err) {
-    console.warn('Notice reading product_requests via server API:', err);
-    return null;
-  }
+  const result = await fetchProductRequestsFromApi();
+  return result.success && Array.isArray(result.requests) ? result.requests : null;
 }
 
 /**

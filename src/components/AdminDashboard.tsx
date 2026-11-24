@@ -145,6 +145,8 @@ export const AdminDashboard: React.FC = () => {
     markNotificationAsRead,
     markAllNotificationsAsRead,
     productRequests,
+    productRequestsLoading,
+    productRequestsError,
     refreshProductRequests,
     bulkAddProducts,
     addCategory,
@@ -2093,42 +2095,69 @@ export const AdminDashboard: React.FC = () => {
             )}
 
             {/* Customer Product Requests for Out-of-Stock Items */}
-            {productRequests && productRequests.length > 0 && (
-              <div className="bg-amber-50/80 border border-amber-300 rounded-2xl p-4 text-xs space-y-3 shadow-xs">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <span className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse" />
-                    <h3 className="font-extrabold text-sm text-amber-950">
-                      Customer Product Requests ({productRequests.length})
-                    </h3>
+            {productRequestsError ? (
+              <div className="bg-red-50 border border-red-200 rounded-2xl p-4 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
+                <div className="flex items-start gap-2.5 text-red-800">
+                  <AlertCircle size={16} className="shrink-0 text-red-600 mt-0.5" />
+                  <div>
+                    <div className="font-bold">Failed to load customer product requests from server</div>
+                    <div className="text-red-700 mt-0.5">{productRequestsError}</div>
                   </div>
-                  <span className="text-[11px] font-semibold text-amber-800">
-                    Out-of-stock items requested by customers
-                  </span>
                 </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
-                  {productRequests.slice(0, 6).map((req) => (
-                    <div
-                      key={req.id}
-                      className="bg-white p-3 rounded-xl border border-amber-200/90 shadow-2xs space-y-1"
-                    >
-                      <div className="font-bold text-gray-900 truncate">
-                        {req.productName}
-                      </div>
-                      <div className="text-[11px] text-gray-600 flex justify-between">
-                        <span>Pack: {req.packSize || req.variantName || 'Standard'}</span>
-                        <span className="font-bold text-blue-900 bg-blue-50 px-1.5 py-0.2 rounded border border-blue-200">
-                          Qty: {req.quantity}
-                        </span>
-                      </div>
-                      <div className="text-[10px] text-gray-500 flex justify-between pt-1 border-t border-gray-100">
-                        <span>{req.customerName || 'Customer'} {req.customerPhone ? `(${req.customerPhone})` : ''}</span>
-                        <span>{new Date(req.requestDate).toLocaleDateString('en-IN', { month: 'short', day: 'numeric' })}</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                <button
+                  type="button"
+                  onClick={() => refreshProductRequests()}
+                  disabled={productRequestsLoading}
+                  className="px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-700 text-white text-xs font-bold flex items-center gap-1.5 shrink-0 self-start sm:self-auto disabled:opacity-50 cursor-pointer"
+                >
+                  <RefreshCw size={12} className={productRequestsLoading ? 'animate-spin' : ''} />
+                  <span>Retry</span>
+                </button>
               </div>
+            ) : productRequestsLoading && productRequests.length === 0 ? (
+              <div className="bg-amber-50/50 border border-amber-200 rounded-2xl p-3.5 text-xs text-amber-900 flex items-center gap-2 shadow-xs">
+                <Loader2 size={14} className="animate-spin text-amber-700 shrink-0" />
+                <span className="font-semibold">Loading customer product requests from server...</span>
+              </div>
+            ) : (
+              productRequests &&
+              productRequests.length > 0 && (
+                <div className="bg-amber-50/80 border border-amber-300 rounded-2xl p-4 text-xs space-y-3 shadow-xs">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse" />
+                      <h3 className="font-extrabold text-sm text-amber-950">
+                        Customer Product Requests ({productRequests.length})
+                      </h3>
+                    </div>
+                    <span className="text-[11px] font-semibold text-amber-800">
+                      Out-of-stock items requested by customers
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                    {productRequests.slice(0, 6).map((req) => (
+                      <div
+                        key={req.id}
+                        className="bg-white p-3 rounded-xl border border-amber-200/90 shadow-2xs space-y-1"
+                      >
+                        <div className="font-bold text-gray-900 truncate">
+                          {req.productName}
+                        </div>
+                        <div className="text-[11px] text-gray-600 flex justify-between">
+                          <span>Pack: {req.packSize || req.variantName || 'Standard'}</span>
+                          <span className="font-bold text-blue-900 bg-blue-50 px-1.5 py-0.2 rounded border border-blue-200">
+                            Qty: {req.quantity}
+                          </span>
+                        </div>
+                        <div className="text-[10px] text-gray-500 flex justify-between pt-1 border-t border-gray-100">
+                          <span>{req.customerName || 'Customer'} {req.customerPhone ? `(${req.customerPhone})` : ''}</span>
+                          <span>{new Date(req.requestDate).toLocaleDateString('en-IN', { month: 'short', day: 'numeric' })}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )
             )}
 
             {/* Low-Stock Inventory Alert Banner */}

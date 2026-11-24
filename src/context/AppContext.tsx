@@ -59,7 +59,8 @@ import {
   updateProductStockInSupabase,
   saveEditedOrderToSupabase,
   saveProductRequestToSupabase,
-  fetchProductRequestsFromSupabase,
+  fetchProductRequestsFromApi,
+  resolveAuthoritativeProductRequestsState,
   subscribeToProductRequests,
   fetchCategoriesFromSupabase,
   saveCategoryToSupabase,
@@ -299,6 +300,8 @@ interface AppContextType {
   markNotificationAsRead: (id: string) => void;
   markAllNotificationsAsRead: () => void;
   productRequests: ProductRequest[];
+  productRequestsLoading: boolean;
+  productRequestsError: string | null;
   requestProduct: (data: {
     product: Product;
     variant?: ProductVariant | null;
@@ -676,6 +679,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
 
   const [productRequests, setProductRequests] = useState<ProductRequest[]>(() => {
+    if (isSupabaseConfigured) {
+      return [];
+    }
     try {
       const saved = localStorage.getItem('om_product_requests');
       return saved ? JSON.parse(saved) : [];
@@ -683,31 +689,46 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return [];
     }
   });
+  const [productRequestsLoading, setProductRequestsLoading] = useState<boolean>(false);
+  const [productRequestsError, setProductRequestsError] = useState<string | null>(null);
+  const productRequestsFetchPromiseRef = useRef<Promise<void> | null>(null);
 
   const refreshProductRequests = useCallback(async () => {
-    try {
-      const remote = await fetchProductRequestsFromSupabase();
-      if (remote && Array.isArray(remote)) {
-        setProductRequests((prev) => {
-          const map = new Map<string, ProductRequest>();
-          remote.forEach((r) => map.set(r.id, r));
-          prev.forEach((r) => {
-            if (!map.has(r.id)) {
-              map.set(r.id, r);
-            }
-          });
-          const merged = Array.from(map.values()).sort(
-            (a, b) => new Date(b.requestDate || b.createdAt).getTime() - new Date(a.requestDate || a.createdAt).getTime()
-          );
-          try {
-            localStorage.setItem('om_product_requests', JSON.stringify(merged));
-          } catch {}
-          return merged;
-        });
+    if (!isSupabaseConfigured) {
+      try {
+        const saved = localStorage.getItem('om_product_requests');
+        const parsed = saved ? JSON.parse(saved) : [];
+        setProductRequests(Array.isArray(parsed) ? parsed : []);
+      } catch {
+        setProductRequests([]);
       }
-    } catch (err) {
-      console.warn('Error refreshing product requests:', err);
+      setProductRequestsError(null);
+      return;
     }
+
+    if (productRequestsFetchPromiseRef.current) {
+      return productRequestsFetchPromiseRef.current;
+    }
+
+    const fetchPromise = (async () => {
+      setProductRequestsLoading(true);
+      setProductRequestsError(null);
+      try {
+        const result = await fetchProductRequestsFromApi();
+        const resolved = resolveAuthoritativeProductRequestsState(result);
+        setProductRequests(resolved.requests);
+        setProductRequestsError(resolved.error);
+      } catch (err: any) {
+        setProductRequests([]);
+        setProductRequestsError(err?.message || 'Failed to load product requests from server.');
+      } finally {
+        setProductRequestsLoading(false);
+        productRequestsFetchPromiseRef.current = null;
+      }
+    })();
+
+    productRequestsFetchPromiseRef.current = fetchPromise;
+    return fetchPromise;
   }, []);
 
   const requestProduct = useCallback(
@@ -760,52 +781,89 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         createdAt: now.toISOString(),
       };
 
-      setProductRequests((prev) => {
-        const updated = [newRequest, ...prev.filter((r) => r.id !== newRequest.id)];
-        try {
-          localStorage.setItem('om_product_requests', JSON.stringify(updated));
-          const cleanPhone = customerPhone.replace(/\D/g, '').slice(-10);
-          if (cleanPhone) {
-            localStorage.setItem(`om_product_requests_${cleanPhone}`, JSON.stringify(updated));
-          }
-        } catch {}
-        return updated;
-      });
-
-      // Persist to Supabase product_requests table via /api/product-requests POST
       if (isSupabaseConfigured) {
+        // Persist strictly to Supabase product_requests via /api/product-requests POST; never inject stale/unverified localStorage state
         saveProductRequestToSupabase(newRequest)
           .then((saved) => {
             if (!saved) {
-              console.warn('Product request saved locally, but server persistence did not confirm.');
+              console.warn('Product request server persistence did not confirm.');
+              return;
             }
+            if (isAdminSessionValidRef.current) {
+              refreshProductRequests().catch(() => {});
+            }
+            try {
+              if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+                const bc = new BroadcastChannel('om_product_request_channel');
+                bc.postMessage({ type: 'REFRESH_REQUESTS' });
+                setTimeout(() => {
+                  try {
+                    bc.close();
+                  } catch {}
+                }, 1000);
+              }
+            } catch {}
           })
           .catch((err) => {
             console.warn('Notice saving product request to server:', err);
           });
-      }
+      } else {
+        setProductRequests((prev) => {
+          const updated = [newRequest, ...prev.filter((r) => r.id !== newRequest.id)];
+          try {
+            localStorage.setItem('om_product_requests', JSON.stringify(updated));
+            const cleanPhone = customerPhone.replace(/\D/g, '').slice(-10);
+            if (cleanPhone) {
+              localStorage.setItem(`om_product_requests_${cleanPhone}`, JSON.stringify(updated));
+            }
+          } catch {}
+          return updated;
+        });
 
-      // Real-time broadcast to all browser tabs and windows
-      try {
-        if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
-          const bc = new BroadcastChannel('om_product_request_channel');
-          bc.postMessage({ type: 'NEW_REQUEST', request: newRequest });
-          setTimeout(() => {
-            try {
-              bc.close();
-            } catch {}
-          }, 1000);
-          window.dispatchEvent(new CustomEvent('om_product_requests_updated', { detail: newRequest }));
-        }
-      } catch {}
+        try {
+          if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+            const bc = new BroadcastChannel('om_product_request_channel');
+            bc.postMessage({ type: 'NEW_REQUEST', request: newRequest });
+            setTimeout(() => {
+              try {
+                bc.close();
+              } catch {}
+            }, 1000);
+            window.dispatchEvent(new CustomEvent('om_product_requests_updated', { detail: newRequest }));
+          }
+        } catch {}
+      }
 
       return newRequest;
     },
-    [currentUser.id, currentUser.name, currentUser.phone]
+    [currentUser.id, currentUser.name, currentUser.phone, refreshProductRequests]
   );
 
-  // Synchronize product requests across tabs, windows, and remote Supabase
+  // Synchronize product requests across tabs, windows, and authoritative server API
   useEffect(() => {
+    if (isSupabaseConfigured) {
+      let bc: BroadcastChannel | null = null;
+      try {
+        if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+          bc = new BroadcastChannel('om_product_request_channel');
+          bc.onmessage = (event) => {
+            if (
+              (event.data?.type === 'REFRESH_REQUESTS' || event.data?.type === 'NEW_REQUEST') &&
+              isAdminSessionValidRef.current
+            ) {
+              refreshProductRequests().catch(() => {});
+            }
+          };
+        }
+      } catch {}
+
+      return () => {
+        try {
+          bc?.close();
+        } catch {}
+      };
+    }
+
     const unsubscribeSupabase = subscribeToProductRequests((incoming) => {
       setProductRequests((prev) => {
         if (prev.some((r) => r.id === incoming.id)) return prev;
@@ -872,7 +930,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       window.removeEventListener('om_product_requests_updated', handleCustomUpdate);
       window.removeEventListener('storage', handleStorage);
     };
-  }, []);
+  }, [refreshProductRequests]);
 
   useEffect(() => {
     localStorage.setItem('om_wallet_transactions', JSON.stringify(walletTransactions));
@@ -1347,6 +1405,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (isSupabaseConfigured) {
       setCustomers([]);
       setCustomersError(null);
+      setProductRequests([]);
+      setProductRequestsError(null);
     }
     try {
       await fetch('/api/auth/logout', {
@@ -1375,6 +1435,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (isSupabaseConfigured) {
         setCustomers([]);
         setCustomersError(null);
+        setProductRequests([]);
+        setProductRequestsError(null);
       }
     }
     setActiveRoleState(role);
@@ -4962,6 +5024,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         markNotificationAsRead,
         markAllNotificationsAsRead,
         productRequests,
+        productRequestsLoading,
+        productRequestsError,
         requestProduct,
         refreshProductRequests,
       }}

@@ -8,6 +8,11 @@ import handler, {
   processCreateProductRequest,
   verifySameOriginOrRequestedHeader,
 } from '../api/product-requests.js';
+import {
+  fetchProductRequestsFromApi,
+  fetchProductRequestsFromSupabase,
+  resolveAuthoritativeProductRequestsState,
+} from '../src/lib/supabase.js';
 
 interface MockDbState {
   product_requests: any[];
@@ -324,6 +329,139 @@ async function run() {
       setupSql
     ),
     'supabase_setup.sql includes service_role policy for public.product_requests'
+  );
+
+  console.log('6. Testing Single Source of Truth: zero localStorage merge, [] cleanup, & fail-closed errors...');
+  const mockStorageMap = new Map<string, string>();
+  const mockStorage = {
+    getItem(k: string) {
+      return mockStorageMap.has(k) ? mockStorageMap.get(k)! : null;
+    },
+    setItem(k: string, v: string) {
+      mockStorageMap.set(k, v);
+    },
+    removeItem(k: string) {
+      mockStorageMap.delete(k);
+    },
+  };
+
+  const stale21Requests = Array.from({ length: 21 }, (_, idx) => ({
+    id: `preq-stale-${idx + 1}`,
+    customer: { id: `cust-${idx + 1}`, name: idx === 0 ? 'MC Jadhav' : `Test ${idx + 1}`, phone: '9800000001' },
+    customerId: `cust-${idx + 1}`,
+    customerName: idx === 0 ? 'MC Jadhav' : `Test ${idx + 1}`,
+    customerPhone: '9800000001',
+    product: { id: `prod-stale-${idx + 1}`, name: idx === 0 ? 'सह्याद्री इलायची चहा' : `Item ${idx + 1}` },
+    productId: `prod-stale-${idx + 1}`,
+    productName: idx === 0 ? 'सह्याद्री इलायची चहा' : `Item ${idx + 1}`,
+    quantity: 1,
+    requestDate: '2026-10-28T09:00:00.000Z',
+    createdAt: '2026-10-28T09:00:00.000Z',
+  }));
+
+  // 6a: Empty [] response from API must clear stale 21 localStorage items & yield []
+  mockStorage.setItem('om_product_requests', JSON.stringify(stale21Requests));
+  const emptyResolved = resolveAuthoritativeProductRequestsState(
+    { success: true, status: 200, requests: [] },
+    mockStorage
+  );
+  assert.equal(emptyResolved.requests.length, 0);
+  assert.equal(emptyResolved.error, null);
+  assert.equal(emptyResolved.synchronized, true);
+  assert.equal(mockStorage.getItem('om_product_requests'), null);
+
+  // 6b: Non-empty authoritative API response must replace (not merge with) 21 stale items & sync localStorage
+  mockStorage.setItem('om_product_requests', JSON.stringify(stale21Requests));
+  const newDbRequest = {
+    id: adminGet.payload.requests[0].id,
+    customer: {
+      id: adminGet.payload.requests[0].customer_id,
+      name: adminGet.payload.requests[0].customer_name,
+      phone: adminGet.payload.requests[0].customer_phone,
+    },
+    customerId: adminGet.payload.requests[0].customer_id,
+    customerName: adminGet.payload.requests[0].customer_name,
+    customerPhone: adminGet.payload.requests[0].customer_phone,
+    product: {
+      id: adminGet.payload.requests[0].product_id,
+      name: adminGet.payload.requests[0].product_name,
+    },
+    productId: adminGet.payload.requests[0].product_id,
+    productName: adminGet.payload.requests[0].product_name,
+    quantity: adminGet.payload.requests[0].quantity,
+    requestDate: adminGet.payload.requests[0].request_date,
+    createdAt: adminGet.payload.requests[0].created_at,
+  };
+  const liveResolved = resolveAuthoritativeProductRequestsState(
+    { success: true, status: 200, requests: [newDbRequest] },
+    mockStorage
+  );
+  assert.equal(liveResolved.requests.length, 1);
+  assert.equal(liveResolved.requests[0].id, 'preq-test-1001');
+  assert.equal(liveResolved.error, null);
+  const syncedStorage = JSON.parse(mockStorage.getItem('om_product_requests') || '[]');
+  assert.equal(syncedStorage.length, 1);
+  assert.equal(syncedStorage[0].id, 'preq-test-1001');
+
+  // 6c: Unauthorized / failed API response must NEVER fall back to stale 21 localStorage items
+  mockStorage.setItem('om_product_requests', JSON.stringify(stale21Requests));
+  const unauthResolved = resolveAuthoritativeProductRequestsState(
+    { success: false, status: 401, error: 'Unauthorized: Please sign in as Shopkeeper to view product requests.' },
+    mockStorage
+  );
+  assert.equal(unauthResolved.requests.length, 0);
+  assert.ok(unauthResolved.error && unauthResolved.error.includes('Unauthorized'));
+  assert.equal(unauthResolved.synchronized, false);
+
+  // 6d: Test fetchProductRequestsFromApi & fetchProductRequestsFromSupabase with mocked window/fetch
+  const origWindow = (globalThis as any).window;
+  const origFetch = (globalThis as any).fetch;
+  try {
+    (globalThis as any).window = { localStorage: mockStorage };
+
+    (globalThis as any).fetch = async () => ({
+      ok: false,
+      status: 401,
+      json: async () => ({ success: false, error: 'Unauthorized: Shopkeeper session required.' }),
+    });
+    const api401 = await fetchProductRequestsFromApi();
+    assert.equal(api401.success, false);
+    assert.equal(api401.status, 401);
+    assert.equal(await fetchProductRequestsFromSupabase(), null);
+
+    (globalThis as any).fetch = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ success: true, requests: [] }),
+    });
+    const apiEmpty = await fetchProductRequestsFromApi();
+    assert.equal(apiEmpty.success, true);
+    assert.deepEqual(apiEmpty.requests, []);
+
+    (globalThis as any).fetch = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ success: true, requests: adminGet.payload.requests }),
+    });
+    const apiLive = await fetchProductRequestsFromApi();
+    assert.equal(apiLive.success, true);
+    assert.equal(apiLive.requests?.length, 1);
+    assert.equal(apiLive.requests?.[0].id, 'preq-test-1001');
+  } finally {
+    (globalThis as any).window = origWindow;
+    (globalThis as any).fetch = origFetch;
+  }
+
+  // 6e: Verify AppContext enforces authoritative state with no stale localStorage merge
+  const appContextTs = fs.readFileSync(path.resolve('src/context/AppContext.tsx'), 'utf8');
+  assert.ok(
+    appContextTs.includes('resolveAuthoritativeProductRequestsState(result)'),
+    'AppContext must reconcile productRequests via resolveAuthoritativeProductRequestsState'
+  );
+  assert.equal(
+    /prev\.forEach\(\(r\)\s*=>\s*\{\s*if\s*\(!map\.has\(r\.id\)\)/.test(appContextTs),
+    false,
+    'AppContext must not merge stale prev productRequests back into remote API response'
   );
 
   console.log('ALL PRODUCT REQUEST END-TO-END CHECKS PASSED!');
