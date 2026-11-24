@@ -80,6 +80,7 @@ export interface VariantFormRow {
   baseSellingPrice: string;
   purchasePrice?: string;
   discount?: string;
+  barcode?: string;
   stockQuantity: string;
   maxOrderLimit: string;
   wholesaleMinQty: string;
@@ -112,6 +113,7 @@ const createBlankVariantRow = (customSize = '', customUnit: UnitType | '' = ''):
   baseSellingPrice: '',
   purchasePrice: '',
   discount: '',
+  barcode: '',
   stockQuantity: '',
   maxOrderLimit: '',
   wholesaleMinQty: '',
@@ -772,7 +774,17 @@ export const AdminDashboard: React.FC = () => {
   const [formValidationError, setFormValidationError] = useState<string | null>(null);
   const [isSubmittingProduct, setIsSubmittingProduct] = useState(false);
   const [isAddBarcodeScannerOpen, setIsAddBarcodeScannerOpen] = useState(false);
+  const [scanningVariantBarcodeIdx, setScanningVariantBarcodeIdx] = useState<number | null>(null);
   const [isInventorySearchScannerOpen, setIsInventorySearchScannerOpen] = useState(false);
+  const addProductFormErrorRef = useRef<HTMLDivElement>(null);
+  const isCreatingProductRef = useRef(false);
+
+  const showCreateProductError = (msg: string) => {
+    setFormValidationError(msg);
+    setTimeout(() => {
+      addProductFormErrorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }, 30);
+  };
 
   // Barcode-Based Product Lookup & Inventory Workflow states
   const [barcodeLookupResult, setBarcodeLookupResult] = useState<BarcodeLookupMatchResult | null>(null);
@@ -797,6 +809,8 @@ export const AdminDashboard: React.FC = () => {
     // Table always opens completely blank with 0 pre-filled values
     setVariantRows([createBlankVariantRow()]);
     setFormValidationError(null);
+    setScanningVariantBarcodeIdx(null);
+    isCreatingProductRef.current = false;
     setIsAddProductModalOpen(true);
   };
 
@@ -814,6 +828,8 @@ export const AdminDashboard: React.FC = () => {
     });
     setVariantRows([createBlankVariantRow()]);
     setFormValidationError(null);
+    setScanningVariantBarcodeIdx(null);
+    isCreatingProductRef.current = false;
     setBarcodeLookupResult(null);
     setBarcodeLookupError(null);
     setIsAddProductModalOpen(true);
@@ -873,6 +889,8 @@ export const AdminDashboard: React.FC = () => {
     });
     setVariantRows([createBlankVariantRow()]);
     setFormValidationError(null);
+    setScanningVariantBarcodeIdx(null);
+    isCreatingProductRef.current = false;
     setIsAddProductModalOpen(false);
   };
 
@@ -886,13 +904,14 @@ export const AdminDashboard: React.FC = () => {
     setVariantRows((prev) => [...prev, createBlankVariantRow(size, unit)]);
   };
 
-  // Option 3: Duplicate an existing variant row
+  // Option 3: Duplicate an existing variant row (clearing barcode so each variant keeps a unique barcode)
   const handleDuplicateVariantRow = (index: number) => {
     const target = variantRows[index];
     if (!target) return;
     const duplicated: VariantFormRow = {
       ...target,
       id: `var-new-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      barcode: '',
     };
     setVariantRows((prev) => {
       const next = [...prev];
@@ -919,6 +938,9 @@ export const AdminDashboard: React.FC = () => {
     field: keyof VariantFormRow,
     value: string
   ) => {
+    if (field === 'barcode' && formValidationError?.toLowerCase().includes('barcode')) {
+      setFormValidationError(null);
+    }
     setVariantRows((prev) => {
       const next = [...prev];
       const current = next[index];
@@ -981,15 +1003,16 @@ export const AdminDashboard: React.FC = () => {
         ...currentSlabs[slabIdx],
         [field]: val,
       };
-      if (slabIdx === 0) {
-        if (field === 'minQty') row.wholesaleMinQty = val;
-        if (field === 'maxQty') row.wholesaleMaxQty = val;
-        if (field === 'unitPrice') row.wholesalePrice = val;
-      }
-      updated[variantIdx] = {
+      const updatedRow: VariantFormRow = {
         ...row,
         slabs: currentSlabs,
       };
+      if (slabIdx === 0) {
+        if (field === 'minQty') updatedRow.wholesaleMinQty = val;
+        if (field === 'maxQty') updatedRow.wholesaleMaxQty = val;
+        if (field === 'unitPrice') updatedRow.wholesalePrice = val;
+      }
+      updated[variantIdx] = updatedRow;
       return updated;
     });
   };
@@ -1100,9 +1123,14 @@ export const AdminDashboard: React.FC = () => {
       : filteredProducts;
 
   const newBarcodeConflict = newProductData.barcode.trim()
-    ? products.find(
-        (p) => p.barcode && p.barcode.trim().toLowerCase() === newProductData.barcode.trim().toLowerCase()
-      )
+    ? products.find((p) => {
+        const key = newProductData.barcode.trim().toLowerCase();
+        return (
+          (p.barcode && p.barcode.trim().toLowerCase() === key) ||
+          (Array.isArray(p.variants) &&
+            p.variants.some((v) => v.barcode && v.barcode.trim().toLowerCase() === key))
+        );
+      })
     : null;
 
   const filteredCustomers = customerUsers.filter(
@@ -1113,11 +1141,12 @@ export const AdminDashboard: React.FC = () => {
 
   const handleCreateProduct = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isCreatingProductRef.current || isSubmittingProduct) return;
     setFormValidationError(null);
 
     const trimmedName = newProductData.name.trim();
     if (!trimmedName) {
-      setFormValidationError('Please enter product name.');
+      showCreateProductError('Please enter product name.');
       return;
     }
 
@@ -1127,14 +1156,18 @@ export const AdminDashboard: React.FC = () => {
     if (newProductData.barcode.trim()) {
       const barcodeValidation = normalizeAndValidateBarcode(newProductData.barcode);
       if (!barcodeValidation.valid) {
-        setFormValidationError(barcodeValidation.error || 'Invalid barcode format.');
+        showCreateProductError(barcodeValidation.error || 'Invalid master product barcode format.');
         return;
       }
+      const normalizedMasterKey = (barcodeValidation.barcode || '').toLowerCase();
       const conflict = products.find(
-        (p) => p.barcode && p.barcode.trim().toLowerCase() === barcodeValidation.barcode?.toLowerCase()
+        (p) =>
+          (p.barcode && p.barcode.trim().toLowerCase() === normalizedMasterKey) ||
+          (Array.isArray(p.variants) &&
+            p.variants.some((v) => v.barcode && v.barcode.trim().toLowerCase() === normalizedMasterKey))
       );
       if (conflict) {
-        setFormValidationError(
+        showCreateProductError(
           `Barcode "${barcodeValidation.barcode}" is already assigned to "${conflict.name}"${conflict.brand ? ` (${conflict.brand})` : ''}. Barcodes must be unique.`
         );
         return;
@@ -1143,9 +1176,15 @@ export const AdminDashboard: React.FC = () => {
     }
 
     if (variantRows.length === 0) {
-      setFormValidationError('Please add at least one Pack Variant.');
+      showCreateProductError('Please add at least one Pack Variant.');
       return;
     }
+
+    const seenBarcodesInProduct = new Set<string>();
+    if (validatedBarcode) {
+      seenBarcodesInProduct.add(validatedBarcode.toLowerCase());
+    }
+    const validatedVariantBarcodes: (string | null)[] = [];
 
     // Validate each variant row strictly without substituting any default values
     for (let i = 0; i < variantRows.length; i++) {
@@ -1153,17 +1192,17 @@ export const AdminDashboard: React.FC = () => {
       const rowNum = i + 1;
 
       if (!row.packSize || isNaN(Number(row.packSize)) || Number(row.packSize) <= 0) {
-        setFormValidationError(`Variant #${rowNum}: Please enter pack size.`);
+        showCreateProductError(`Variant #${rowNum}: Please enter a valid Pack Size (e.g. 250, 500, 1).`);
         return;
       }
 
       if (!row.unit) {
-        setFormValidationError(`Variant #${rowNum}: Please select unit.`);
+        showCreateProductError(`Variant #${rowNum}: Please select Unit.`);
         return;
       }
 
       if (!row.mrp || isNaN(Number(row.mrp)) || Number(row.mrp) <= 0) {
-        setFormValidationError(`Variant #${rowNum}: Please enter MRP.`);
+        showCreateProductError(`Variant #${rowNum}: Please enter MRP.`);
         return;
       }
 
@@ -1171,46 +1210,144 @@ export const AdminDashboard: React.FC = () => {
       const cleanSellingPrice = String(row.baseSellingPrice || '').replace(/,/g, '.').replace(/[^0-9.]/g, '');
       const numSellingPrice = parseFloat(cleanSellingPrice);
       if (!cleanSellingPrice || isNaN(numSellingPrice) || numSellingPrice <= 0) {
-        setFormValidationError(`Variant #${rowNum}: Please enter selling price (e.g. ₹9.50, ₹10.25).`);
+        showCreateProductError(`Variant #${rowNum}: Please enter selling price (e.g. ₹9.50, ₹10.25).`);
         return;
       }
 
       const numMrp = Number(row.mrp);
       if (numSellingPrice > numMrp) {
-        setFormValidationError(`Variant #${rowNum}: Base Selling Price (₹${numSellingPrice}) cannot exceed MRP (₹${numMrp}).`);
+        showCreateProductError(`Variant #${rowNum}: Base Selling Price (₹${numSellingPrice}) cannot exceed MRP (₹${numMrp}).`);
         return;
       }
 
-      // Wholesale validation if fields are provided
-      const hasWholesaleMin = Boolean(row.wholesaleMinQty && Number(row.wholesaleMinQty) > 0);
-      const hasWholesalePrice = Boolean(row.wholesalePrice && Number(row.wholesalePrice) > 0);
-
-      if (hasWholesalePrice && !hasWholesaleMin) {
-        setFormValidationError(`Variant #${rowNum}: Please enter Wholesale Minimum Quantity for bulk pricing.`);
+      if (row.stockQuantity && (isNaN(Number(row.stockQuantity)) || Number(row.stockQuantity) < 0)) {
+        showCreateProductError(`Variant #${rowNum}: Stock quantity cannot be negative.`);
         return;
       }
 
-      if (hasWholesaleMin && !hasWholesalePrice) {
-        setFormValidationError(`Variant #${rowNum}: Please enter Wholesale Price for bulk quantity.`);
-        return;
-      }
-
-      if (hasWholesaleMin && hasWholesalePrice) {
-        if (Number(row.wholesalePrice) > Number(row.baseSellingPrice)) {
-          setFormValidationError(`Variant #${rowNum}: Wholesale Price (₹${row.wholesalePrice}) cannot exceed Base Selling Price (₹${row.baseSellingPrice}).`);
+      // Variant barcode validation & uniqueness (within product + across existing catalog)
+      let variantBarcode: string | null = null;
+      if (row.barcode && row.barcode.trim()) {
+        const vBarcodeCheck = normalizeAndValidateBarcode(row.barcode);
+        if (!vBarcodeCheck.valid) {
+          showCreateProductError(`Variant #${rowNum}: ${vBarcodeCheck.error || 'Invalid barcode format.'}`);
           return;
         }
-        if (row.wholesaleMaxQty && Number(row.wholesaleMaxQty) <= Number(row.wholesaleMinQty)) {
-          setFormValidationError(`Variant #${rowNum}: Wholesale Maximum Quantity must be greater than Minimum Quantity.`);
+        variantBarcode = vBarcodeCheck.barcode;
+        if (variantBarcode) {
+          const normalizedKey = variantBarcode.toLowerCase();
+          if (validatedBarcode && normalizedKey === validatedBarcode.toLowerCase()) {
+            showCreateProductError(
+              `Variant #${rowNum}: Barcode "${variantBarcode}" cannot be the same as the master Product barcode.`
+            );
+            return;
+          }
+          if (seenBarcodesInProduct.has(normalizedKey)) {
+            showCreateProductError(
+              `Variant #${rowNum}: Duplicate barcode "${variantBarcode}" across variants. Each variant must have a unique barcode.`
+            );
+            return;
+          }
+          seenBarcodesInProduct.add(normalizedKey);
+
+          const catalogConflict = products.find(
+            (p) =>
+              (p.barcode && p.barcode.trim().toLowerCase() === normalizedKey) ||
+              (Array.isArray(p.variants) &&
+                p.variants.some((ov) => ov.barcode && ov.barcode.trim().toLowerCase() === normalizedKey))
+          );
+          if (catalogConflict) {
+            showCreateProductError(
+              `Variant #${rowNum}: Barcode "${variantBarcode}" is already assigned to "${catalogConflict.name}"${catalogConflict.brand ? ` (${catalogConflict.brand})` : ''}.`
+            );
+            return;
+          }
+        }
+      }
+      validatedVariantBarcodes.push(variantBarcode);
+
+      // Wholesale validation: validate multi-slabs if present, otherwise inline wholesale fields
+      const hasMultiSlabs = Array.isArray(row.slabs) && row.slabs.length > 0;
+      if (hasMultiSlabs) {
+        for (let sIdx = 0; sIdx < row.slabs!.length; sIdx++) {
+          const slab = row.slabs![sIdx];
+          const hasAnyField = Boolean(
+            (slab.minQty && slab.minQty.trim() !== '') ||
+              (slab.maxQty && slab.maxQty.trim() !== '') ||
+              (slab.unitPrice && slab.unitPrice.trim() !== '')
+          );
+          if (!hasAnyField) continue;
+
+          const sMin = Number(slab.minQty);
+          const sPrice = Number(slab.unitPrice);
+          const sMax = slab.maxQty && slab.maxQty.trim() !== '' ? Number(slab.maxQty) : 9999;
+
+          if (!slab.minQty || isNaN(sMin) || sMin < 2) {
+            showCreateProductError(`Variant #${rowNum} Slab #${sIdx + 1}: Wholesale Minimum Quantity must be at least 2.`);
+            return;
+          }
+          if (!slab.unitPrice || isNaN(sPrice) || sPrice <= 0) {
+            showCreateProductError(`Variant #${rowNum} Slab #${sIdx + 1}: Wholesale Price must be greater than 0.`);
+            return;
+          }
+          if (sPrice > numSellingPrice) {
+            showCreateProductError(
+              `Variant #${rowNum} Slab #${sIdx + 1}: Wholesale Price (₹${sPrice}) cannot exceed Base Selling Price (₹${numSellingPrice}).`
+            );
+            return;
+          }
+          if (isNaN(sMax) || sMax < sMin) {
+            showCreateProductError(
+              `Variant #${rowNum} Slab #${sIdx + 1}: Wholesale Maximum Quantity cannot be less than Minimum Quantity.`
+            );
+            return;
+          }
+        }
+      } else {
+        const hasWholesaleMin = Boolean(row.wholesaleMinQty && row.wholesaleMinQty.trim() !== '');
+        const hasWholesalePrice = Boolean(row.wholesalePrice && row.wholesalePrice.trim() !== '');
+
+        if (hasWholesalePrice && !hasWholesaleMin) {
+          showCreateProductError(`Variant #${rowNum}: Please enter Wholesale Minimum Quantity for bulk pricing.`);
           return;
+        }
+
+        if (hasWholesaleMin && !hasWholesalePrice) {
+          showCreateProductError(`Variant #${rowNum}: Please enter Wholesale Price for bulk quantity.`);
+          return;
+        }
+
+        if (hasWholesaleMin && hasWholesalePrice) {
+          const wMin = Number(row.wholesaleMinQty);
+          const wPrice = Number(row.wholesalePrice);
+          if (isNaN(wMin) || wMin < 2) {
+            showCreateProductError(`Variant #${rowNum}: Wholesale Minimum Quantity must be at least 2.`);
+            return;
+          }
+          if (isNaN(wPrice) || wPrice <= 0) {
+            showCreateProductError(`Variant #${rowNum}: Wholesale Price must be greater than 0.`);
+            return;
+          }
+          if (wPrice > numSellingPrice) {
+            showCreateProductError(
+              `Variant #${rowNum}: Wholesale Price (₹${wPrice}) cannot exceed Base Selling Price (₹${numSellingPrice}).`
+            );
+            return;
+          }
+          if (row.wholesaleMaxQty && row.wholesaleMaxQty.trim() !== '' && Number(row.wholesaleMaxQty) < wMin) {
+            showCreateProductError(
+              `Variant #${rowNum}: Wholesale Maximum Quantity cannot be less than Minimum Quantity.`
+            );
+            return;
+          }
         }
       }
     }
 
     // All valid! Construct product with variants
-    const productId = `prod-${Date.now()}`;
+    const timestamp = Date.now();
     const constructedVariants: ProductVariant[] = variantRows.map((row, idx) => {
-      const variantId = `var-${productId}-${idx}-${Date.now()}`;
+      const variantId = `var-${timestamp}-${idx}-${Math.random().toString(36).substring(2, 6)}`;
       const pSize = Number(row.packSize);
       const u = row.unit as UnitType;
       const pLabel = formatVariantPack({
@@ -1221,18 +1358,18 @@ export const AdminDashboard: React.FC = () => {
 
       const rowSlabs = Array.isArray(row.slabs) && row.slabs.length > 0
         ? row.slabs
-            .filter((s) => Number(s.minQty) > 0 && Number(s.unitPrice) > 0)
+            .filter((s) => Number(s.minQty) >= 2 && Number(s.unitPrice) > 0)
             .map((s, sIdx) => ({
-              id: `tp-${Date.now()}-${idx}-${sIdx}`,
+              id: `tp-${variantId}-${sIdx}-${timestamp}`,
               variantId,
               minQty: Number(s.minQty),
               maxQty: s.maxQty && Number(s.maxQty) >= Number(s.minQty) ? Number(s.maxQty) : 9999,
               unitPrice: Number(s.unitPrice),
             }))
-        : row.wholesaleMinQty && row.wholesalePrice && Number(row.wholesalePrice) > 0
+        : row.wholesaleMinQty && row.wholesalePrice && Number(row.wholesaleMinQty) >= 2 && Number(row.wholesalePrice) > 0
         ? [
             {
-              id: `tp-${Date.now()}-${idx}`,
+              id: `tp-${variantId}-0-${timestamp}`,
               variantId,
               minQty: Number(row.wholesaleMinQty),
               maxQty: row.wholesaleMaxQty ? Number(row.wholesaleMaxQty) : 9999,
@@ -1266,9 +1403,11 @@ export const AdminDashboard: React.FC = () => {
             ? Number(row.purchasePrice)
             : undefined,
         discount: rowDiscount > 0 ? rowDiscount : undefined,
+        barcode: validatedVariantBarcodes[idx] ?? null,
         stockQuantity: row.stockQuantity ? Math.max(0, Math.floor(Number(row.stockQuantity) || 0)) : 0,
         maxOrderLimit: row.maxOrderLimit ? Math.max(1, Math.floor(Number(row.maxOrderLimit) || 12)) : 12,
         tieredPrices,
+        displayOrder: idx + 1,
       };
     });
 
@@ -1292,17 +1431,19 @@ export const AdminDashboard: React.FC = () => {
       variants: constructedVariants,
     };
 
+    isCreatingProductRef.current = true;
     setIsSubmittingProduct(true);
     try {
       const result = await addProduct(product);
       if (!result.success) {
-        setFormValidationError(result.error || 'Failed to save product to central database.');
+        showCreateProductError(result.error || 'Failed to save product to central database.');
         return;
       }
       handleCloseAddProductModal();
     } catch (err: any) {
-      setFormValidationError(err?.message || 'An unexpected error occurred while saving.');
+      showCreateProductError(err?.message || 'An unexpected error occurred while saving.');
     } finally {
+      isCreatingProductRef.current = false;
       setIsSubmittingProduct(false);
     }
   };
@@ -2780,10 +2921,13 @@ export const AdminDashboard: React.FC = () => {
             </div>
 
             {/* Modal Scrollable Form Body */}
-            <form onSubmit={handleCreateProduct} className="p-4 sm:p-6 overflow-y-auto space-y-6 flex-1 text-xs">
+            <form onSubmit={handleCreateProduct} noValidate className="p-4 sm:p-6 overflow-y-auto space-y-6 flex-1 text-xs">
               {/* Validation Error Banner */}
               {formValidationError && (
-                <div className="p-3.5 bg-red-50 border-2 border-red-300 text-red-900 rounded-xl flex items-center gap-2.5 font-bold shadow-sm">
+                <div
+                  ref={addProductFormErrorRef}
+                  className="p-3.5 bg-red-50 border-2 border-red-300 text-red-900 rounded-xl flex items-center gap-2.5 font-bold shadow-sm"
+                >
                   <AlertCircle size={18} className="text-red-600 shrink-0" />
                   <span>{formValidationError}</span>
                 </div>
@@ -3036,7 +3180,7 @@ export const AdminDashboard: React.FC = () => {
                 {/* The Variants Table */}
                 <div className="border border-gray-200 rounded-xl overflow-hidden shadow-xs bg-white w-full max-w-full min-w-0">
                   <div className="overflow-x-auto w-full max-w-full">
-                    <table className="w-full text-left border-collapse min-w-[760px] sm:min-w-[920px]">
+                    <table className="w-full text-left border-collapse min-w-[920px] sm:min-w-[1080px]">
                       <thead>
                         <tr className="bg-[#0F2C59] text-white text-[10.5px] uppercase tracking-wider">
                           <th className="p-2.5 text-center w-8">#</th>
@@ -3045,6 +3189,7 @@ export const AdminDashboard: React.FC = () => {
                           <th className="p-2.5 w-24">MRP (₹) *</th>
                           <th className="p-2.5 w-28">Selling Price (₹) *</th>
                           <th className="p-2.5 w-20">Stock Qty</th>
+                          <th className="p-2.5 w-36">Variant Barcode</th>
                           <th className="p-2.5 w-24 bg-[#0b2245]">Wholesale Min Qty</th>
                           <th className="p-2.5 w-24 bg-[#0b2245]">Wholesale Max Qty</th>
                           <th className="p-2.5 w-28 bg-[#0b2245]">Wholesale Price (₹)</th>
@@ -3053,7 +3198,28 @@ export const AdminDashboard: React.FC = () => {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-200">
-                        {variantRows.map((row, idx) => (
+                        {variantRows.map((row, idx) => {
+                          const trimmedVarBarcode = (row.barcode || '').trim();
+                          const varBarcodeKey = trimmedVarBarcode.toLowerCase();
+                          const masterBarcodeKey = newProductData.barcode.trim().toLowerCase();
+                          const hasDuplicateVariantBarcode = Boolean(
+                            varBarcodeKey &&
+                              ((masterBarcodeKey && varBarcodeKey === masterBarcodeKey) ||
+                                variantRows.some(
+                                  (other, oIdx) =>
+                                    oIdx !== idx &&
+                                    (other.barcode || '').trim().toLowerCase() === varBarcodeKey
+                                ) ||
+                                products.some(
+                                  (p) =>
+                                    (p.barcode && p.barcode.trim().toLowerCase() === varBarcodeKey) ||
+                                    (Array.isArray(p.variants) &&
+                                      p.variants.some(
+                                        (ov) => ov.barcode && ov.barcode.trim().toLowerCase() === varBarcodeKey
+                                      ))
+                                ))
+                          );
+                          return (
                           <React.Fragment key={row.id}>
                           <tr className="hover:bg-blue-50/30 transition">
                             {/* Row Index */}
@@ -3132,6 +3298,37 @@ export const AdminDashboard: React.FC = () => {
                                 }
                                 className="w-full p-1.5 border border-gray-300 rounded-lg text-xs text-gray-900 outline-none focus:border-[#0F2C59]"
                               />
+                            </td>
+
+                            {/* Variant Barcode */}
+                            <td className="p-2">
+                              <div className="relative">
+                                <input
+                                  type="text"
+                                  id={`new-variant-barcode-input-${idx}`}
+                                  placeholder="Unique barcode"
+                                  value={row.barcode || ''}
+                                  onChange={(e) =>
+                                    handleUpdateVariantRow(idx, 'barcode', e.target.value)
+                                  }
+                                  className={`w-full p-1.5 pr-7 border rounded-lg text-xs font-mono outline-none ${
+                                    hasDuplicateVariantBarcode
+                                      ? 'border-amber-400 bg-amber-50/60 text-amber-950 focus:border-amber-500'
+                                      : 'border-gray-300 text-gray-900 bg-white focus:border-[#0F2C59]'
+                                  }`}
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setScanningVariantBarcodeIdx(idx);
+                                    setIsAddBarcodeScannerOpen(true);
+                                  }}
+                                  className="absolute right-1.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-[#FF6B00] transition-colors p-0.5"
+                                  title={`Scan barcode for Variant #${idx + 1}`}
+                                >
+                                  <Scan className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
                             </td>
 
                             {/* Wholesale Min Qty */}
@@ -3218,7 +3415,7 @@ export const AdminDashboard: React.FC = () => {
 
                           {/* Wholesale Bulk Discount Slab (Optional) for EACH product variant */}
                           <tr key={`${row.id}-slabs`} className="bg-amber-50/15 border-b border-gray-200">
-                            <td colSpan={11} className="p-2.5">
+                            <td colSpan={12} className="p-2.5">
                               <div className="bg-white rounded-xl border border-amber-200/80 p-2.5 space-y-2">
                                 <div className="flex items-center justify-between">
                                   <div className="flex items-center gap-1.5 font-bold text-gray-800 text-xs">
@@ -3317,7 +3514,8 @@ export const AdminDashboard: React.FC = () => {
                             </td>
                           </tr>
                           </React.Fragment>
-                        ))}
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
@@ -3337,6 +3535,14 @@ export const AdminDashboard: React.FC = () => {
                   </button>
                 </div>
               </div>
+
+              {/* Visible Footer Error Banner (ensures errors are always visible near Save button) */}
+              {formValidationError && (
+                <div className="p-3 bg-red-50 border-2 border-red-300 text-red-900 rounded-xl flex items-center gap-2.5 font-bold shadow-sm">
+                  <AlertCircle size={17} className="text-red-600 shrink-0" />
+                  <span>{formValidationError}</span>
+                </div>
+              )}
 
               {/* Modal Footer Controls */}
               <div className="flex flex-col sm:flex-row justify-between items-center gap-3 pt-4 border-t border-gray-200 shrink-0">
@@ -3386,19 +3592,35 @@ export const AdminDashboard: React.FC = () => {
         initialAddVariant={initialAddVariantForEdit}
       />
 
-      {/* Barcode Scanner for Add Product */}
+      {/* Barcode Scanner for Add Product (Master & Variants) */}
       <BarcodeScannerModal
         isOpen={isAddBarcodeScannerOpen}
-        onClose={() => setIsAddBarcodeScannerOpen(false)}
+        onClose={() => {
+          setIsAddBarcodeScannerOpen(false);
+          setScanningVariantBarcodeIdx(null);
+        }}
         onScan={(scannedBarcode) => {
-          setNewProductData((prev) => ({ ...prev, barcode: scannedBarcode }));
+          if (scanningVariantBarcodeIdx !== null) {
+            handleUpdateVariantRow(scanningVariantBarcodeIdx, 'barcode', scannedBarcode);
+            setScanningVariantBarcodeIdx(null);
+          } else {
+            setNewProductData((prev) => ({ ...prev, barcode: scannedBarcode }));
+          }
           if (formValidationError?.toLowerCase().includes('barcode')) {
             setFormValidationError(null);
           }
         }}
-        title="Scan Barcode for New Product"
+        title={
+          scanningVariantBarcodeIdx !== null
+            ? `Scan Barcode for Variant #${scanningVariantBarcodeIdx + 1}`
+            : 'Scan Barcode for New Product'
+        }
         subtitle="Align product package barcode within camera frame"
-        currentBarcode={newProductData.barcode}
+        currentBarcode={
+          scanningVariantBarcodeIdx !== null
+            ? variantRows[scanningVariantBarcodeIdx]?.barcode || ''
+            : newProductData.barcode
+        }
         existingProducts={products}
       />
 

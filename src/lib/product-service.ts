@@ -199,7 +199,7 @@ export function normalizeAndValidateTieredPrice(
     };
   }
 
-  const id = raw.id || `tp-${variantId}-${minQty}-${Date.now()}`;
+  const id = raw.id || `tp-${variantId}-${minQty}-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
 
   return {
     valid: true,
@@ -276,7 +276,7 @@ export function normalizeAndValidateVariant(
       ? Math.max(1, Number(raw.maxOrderLimit))
       : 12;
 
-  const variantId = raw.id || `var-${productId}-${index + 1}-${Date.now()}`;
+  const variantId = raw.id || `var-${productId}-${index + 1}-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
 
   // Pack Label
   const packLabel = formatVariantPack({
@@ -384,10 +384,32 @@ export function normalizeAndValidateProduct(raw: any): ProductValidationResult {
 
   const rawVariants = Array.isArray(raw.variants) ? raw.variants : [];
   const normalizedVariants: ProductVariant[] = [];
+  const seenBarcodes = new Set<string>();
+  if (barcode) {
+    seenBarcodes.add(barcode.toLowerCase());
+  }
+
   for (let i = 0; i < rawVariants.length; i++) {
     const vResult = normalizeAndValidateVariant(rawVariants[i], productId, i);
     if (!vResult.valid || !vResult.variant) {
       return { valid: false, error: vResult.error };
+    }
+    const vBarcode = vResult.variant.barcode;
+    if (vBarcode) {
+      const normalizedKey = vBarcode.toLowerCase();
+      if (barcode && normalizedKey === barcode.toLowerCase()) {
+        return {
+          valid: false,
+          error: `Variant #${i + 1}: Variant barcode "${vBarcode}" cannot be the same as the master product barcode.`,
+        };
+      }
+      if (seenBarcodes.has(normalizedKey)) {
+        return {
+          valid: false,
+          error: `Variant #${i + 1}: Duplicate barcode "${vBarcode}" within the same product. Each variant must have a unique barcode.`,
+        };
+      }
+      seenBarcodes.add(normalizedKey);
     }
     normalizedVariants.push(vResult.variant);
   }
@@ -457,6 +479,49 @@ export function normalizeAndValidateProduct(raw: any): ProductValidationResult {
  * - Deletes removed tiered prices from public.tiered_prices
  * - Upserts current tiered prices
  */
+function isMissingTableError(error: any, tableName?: string): boolean {
+  if (!error) return false;
+  const code = String(error.code || '').toUpperCase();
+  const msg = String(error.message || '').toLowerCase();
+  if (code === '42P01' || code === 'PGRST205') return true;
+  if (msg.includes('could not find the table') || (msg.includes('relation') && msg.includes('does not exist'))) {
+    if (!tableName) return true;
+    return msg.includes(tableName.toLowerCase());
+  }
+  return false;
+}
+
+function extractMissingColumn(error: any, allowedOptionalColumns: Set<string>): string | null {
+  if (!error) return null;
+  const code = String(error.code || '').toUpperCase();
+  const msg = String(error.message || '');
+  const isColumnNotFound =
+    code === 'PGRST204' ||
+    code === '42703' ||
+    /could not find the ['"]?([a-zA-Z0-9_]+)['"]? column/i.test(msg) ||
+    /column ['"]?([a-zA-Z0-9_]+)['"]? (?:of relation ['"][a-zA-Z0-9_]+['"] )?does not exist/i.test(msg);
+
+  if (!isColumnNotFound) return null;
+
+  const patterns = [
+    /could not find the ['"]([a-zA-Z0-9_]+)['"] column/i,
+    /column ['"]([a-zA-Z0-9_]+)['"]/i,
+    /\.([a-zA-Z0-9_]+)\s+does not exist/i,
+  ];
+  for (const pat of patterns) {
+    const m = msg.match(pat);
+    if (m && m[1] && allowedOptionalColumns.has(m[1])) {
+      return m[1];
+    }
+  }
+  for (const col of allowedOptionalColumns) {
+    if (msg.toLowerCase().includes(`'${col}'`) || msg.toLowerCase().includes(`"${col}"`)) {
+      return col;
+    }
+  }
+  return null;
+}
+
 export async function saveProductWithCascadeSync(
   supabaseClient: any,
   product: Product
@@ -465,7 +530,94 @@ export async function saveProductWithCascadeSync(
     return { success: false, error: 'Supabase client is not available.' };
   }
 
+  let wasExistingProduct = false;
+  const rollbackCreatedProduct = async () => {
+    if (wasExistingProduct) return;
+    try {
+      await supabaseClient.from('product_variants').delete().eq('product_id', product.id);
+    } catch {
+      // Ignore missing table or cascade fallback
+    }
+    try {
+      await supabaseClient.from('products').delete().eq('id', product.id);
+    } catch {
+      // Best-effort cleanup of partial master row
+    }
+  };
+
   try {
+    // 0. Determine whether this product already exists (for safe rollback on new creation failure)
+    try {
+      const { data: existingProdRow } = await supabaseClient
+        .from('products')
+        .select('id')
+        .eq('id', product.id)
+        .maybeSingle();
+      wasExistingProduct = Boolean(existingProdRow?.id);
+    } catch {
+      wasExistingProduct = false;
+    }
+
+    // 0b. Pre-write cross-table barcode uniqueness check (master + all variants)
+    const incomingVariants = product.variants || [];
+    const candidateBarcodes: string[] = [];
+    if (product.barcode && product.barcode.trim()) {
+      candidateBarcodes.push(product.barcode.trim());
+    }
+    for (const v of incomingVariants) {
+      if (v.barcode && String(v.barcode).trim()) {
+        candidateBarcodes.push(String(v.barcode).trim());
+      }
+    }
+
+    if (candidateBarcodes.length > 0) {
+      const lowerCandidates = new Set(candidateBarcodes.map((b) => b.toLowerCase()));
+
+      try {
+        const { data: conflictingProducts, error: prodConflictErr } = await supabaseClient
+          .from('products')
+          .select('id, name, barcode')
+          .neq('id', product.id)
+          .not('barcode', 'is', null);
+
+        if (!prodConflictErr && Array.isArray(conflictingProducts)) {
+          const hit = conflictingProducts.find(
+            (p: any) => p.barcode && lowerCandidates.has(String(p.barcode).trim().toLowerCase())
+          );
+          if (hit) {
+            return {
+              success: false,
+              error: `Barcode "${hit.barcode}" is already assigned to "${hit.name || 'another product'}". Each product and variant must have a unique barcode.`,
+            };
+          }
+        }
+      } catch {
+        // Ignore if barcode column isn't migrated yet
+      }
+
+      try {
+        const { data: conflictingVariants, error: varConflictErr } = await supabaseClient
+          .from('product_variants')
+          .select('id, product_id, barcode')
+          .neq('product_id', product.id)
+          .not('barcode', 'is', null);
+
+        if (!varConflictErr && Array.isArray(conflictingVariants)) {
+          const hit = conflictingVariants.find(
+            (v: any) => v.barcode && lowerCandidates.has(String(v.barcode).trim().toLowerCase())
+          );
+          if (hit) {
+            return {
+              success: false,
+              error: `Barcode "${hit.barcode}" is already assigned to another product variant. Each product and variant must have a unique barcode.`,
+            };
+          }
+        }
+      } catch {
+        // Ignore if product_variants table or barcode column isn't migrated yet
+      }
+    }
+
     // 1. Resolve category name for public.products (preserve existing category name or categoryId)
     let categoryName = (product as any).category && typeof (product as any).category === 'string'
       ? String((product as any).category).trim()
@@ -473,11 +625,11 @@ export async function saveProductWithCascadeSync(
     if (!categoryName) {
       categoryName = product.categoryId || '';
     }
-    const primaryVariant = product.variants?.[0];
+    const primaryVariant = incomingVariants[0];
     const basePrice = primaryVariant ? Number(primaryVariant.baseSellingPrice || 0) : Number(product.baseSellingPrice ?? product.price ?? 0);
     const mrp = primaryVariant ? Number(primaryVariant.mrp || 0) : Number(product.mrp ?? product.price ?? 0);
-    const totalStock = product.variants && product.variants.length > 0
-      ? product.variants.reduce((sum, v) => sum + (Number(v.stockQuantity) || 0), 0)
+    const totalStock = incomingVariants.length > 0
+      ? incomingVariants.reduce((sum, v) => sum + (Number(v.stockQuantity) || 0), 0)
       : Number(product.stockQuantity ?? product.stock ?? 0);
     const unitLabel = primaryVariant
       ? (primaryVariant.packLabel || `${primaryVariant.packSize || 1} ${primaryVariant.unit || 'KG'}`)
@@ -499,68 +651,45 @@ export async function saveProductWithCascadeSync(
       unit: unitLabel,
       min_order_qty: 1,
       image_url: product.imageUrl && product.imageUrl.trim() ? product.imageUrl.trim() : null,
-      wholesale_tier_discount: product.variants || [],
+      wholesale_tier_discount: incomingVariants,
       barcode: product.barcode && product.barcode.trim() ? product.barcode.trim() : null,
       is_discount_excluded: product.isDiscountExcluded ?? false,
       search_keywords: keywordsVal,
       badge: keywordsVal,
+      display_order: typeof product.displayOrder === 'number' ? product.displayOrder : 1,
       updated_at: new Date().toISOString(),
     };
+
+    const optionalProductCols = new Set([
+      'category',
+      'category_id',
+      'sub_category',
+      'brand',
+      'description',
+      'price',
+      'mrp',
+      'stock',
+      'unit',
+      'min_order_qty',
+      'image_url',
+      'wholesale_tier_discount',
+      'barcode',
+      'is_discount_excluded',
+      'search_keywords',
+      'badge',
+      'display_order',
+      'updated_at',
+    ]);
 
     let prodInsertResult = await supabaseClient
       .from('products')
       .upsert(productPayload, { onConflict: 'id' });
 
-    // Graceful fallback: If category_id column is not in table schema
-    if (
-      prodInsertResult.error &&
-      (prodInsertResult.error.message?.includes('category_id') ||
-        prodInsertResult.error.message?.toLowerCase().includes("could not find the 'category_id' column"))
-    ) {
-      delete productPayload.category_id;
-      prodInsertResult = await supabaseClient
-        .from('products')
-        .upsert(productPayload, { onConflict: 'id' });
-    }
-
-    // Graceful fallback: If display_order column has not yet been added to Supabase table
-    if (
-      prodInsertResult.error &&
-      (prodInsertResult.error.message?.includes('display_order') ||
-        prodInsertResult.error.message?.toLowerCase().includes('display_order'))
-    ) {
-      delete productPayload.display_order;
-      prodInsertResult = await supabaseClient
-        .from('products')
-        .upsert(productPayload, { onConflict: 'id' });
-    }
-
-    // Graceful fallback: If search_keywords column has not yet been added to Supabase public.products table
-    if (
-      prodInsertResult.error &&
-      (prodInsertResult.error.message?.includes('search_keywords') ||
-        prodInsertResult.error.message?.toLowerCase().includes("search_keywords"))
-    ) {
-      delete productPayload.search_keywords;
-      prodInsertResult = await supabaseClient
-        .from('products')
-        .upsert(productPayload, { onConflict: 'id' });
-    }
-
-    // Graceful fallback: If barcode or is_discount_excluded column has not yet been migrated in Supabase table
-    if (prodInsertResult.error && prodInsertResult.error.message?.includes('barcode')) {
-      delete productPayload.barcode;
-      prodInsertResult = await supabaseClient
-        .from('products')
-        .upsert(productPayload, { onConflict: 'id' });
-    }
-
-    if (
-      prodInsertResult.error &&
-      (prodInsertResult.error.message?.includes('is_discount_excluded') ||
-        prodInsertResult.error.message?.toLowerCase().includes("could not find the 'is_discount_excluded' column"))
-    ) {
-      delete productPayload.is_discount_excluded;
+    for (let attempt = 0; attempt < optionalProductCols.size && prodInsertResult.error; attempt++) {
+      const missingCol = extractMissingColumn(prodInsertResult.error, optionalProductCols);
+      if (!missingCol || !(missingCol in productPayload)) break;
+      delete productPayload[missingCol];
+      optionalProductCols.delete(missingCol);
       prodInsertResult = await supabaseClient
         .from('products')
         .upsert(productPayload, { onConflict: 'id' });
@@ -569,12 +698,17 @@ export async function saveProductWithCascadeSync(
     if (prodInsertResult.error) {
       if (
         prodInsertResult.error.code === '23505' ||
-        prodInsertResult.error.message?.toLowerCase().includes('barcode') ||
         prodInsertResult.error.message?.toLowerCase().includes('idx_products_barcode_unique')
       ) {
         return {
           success: false,
           error: `Barcode "${product.barcode}" is already assigned to another product. Each product must have a unique barcode.`,
+        };
+      }
+      if (prodInsertResult.error.code === '23503') {
+        return {
+          success: false,
+          error: 'Selected category does not exist in the database. Please refresh categories or choose another category.',
         };
       }
       return {
@@ -583,116 +717,163 @@ export async function saveProductWithCascadeSync(
       };
     }
 
-    const incomingVariants = product.variants || [];
+    // 3. Sync relational product_variants table (if table exists in database)
+    const { data: existingVariants, error: fetchVarErr } = await supabaseClient
+      .from('product_variants')
+      .select('id')
+      .eq('product_id', product.id);
 
-    // 3. Optional: If separate relational product_variants table exists, sync it
-    try {
-      const { data: existingVariants, error: fetchVarErr } = await supabaseClient
+    if (fetchVarErr) {
+      if (isMissingTableError(fetchVarErr, 'product_variants')) {
+        // product_variants table not available; products.wholesale_tier_discount JSONB is primary store
+        return { success: true, product };
+      }
+      await rollbackCreatedProduct();
+      return {
+        success: false,
+        error: `Database error preparing product variants: ${fetchVarErr.message || 'Failed to query product_variants'}`,
+      };
+    }
+
+    const incomingVarIdSet = new Set(incomingVariants.map((v) => v.id));
+    const removedVarIds = (existingVariants || [])
+      .map((v: any) => v.id)
+      .filter((id: string) => !incomingVarIdSet.has(id));
+
+    if (removedVarIds.length > 0) {
+      const { error: delVarErr } = await supabaseClient
         .from('product_variants')
-        .select('id')
-        .eq('product_id', product.id);
+        .delete()
+        .in('id', removedVarIds);
 
-      if (!fetchVarErr && existingVariants) {
-        const incomingVarIdSet = new Set(incomingVariants.map((v) => v.id));
-        const removedVarIds = existingVariants
-          .map((v: any) => v.id)
-          .filter((id: string) => !incomingVarIdSet.has(id));
+      if (delVarErr) {
+        await rollbackCreatedProduct();
+        return {
+          success: false,
+          error: `Database error updating product variants: ${delVarErr.message || 'Failed to remove old variants'}`,
+        };
+      }
+    }
 
-        if (removedVarIds.length > 0) {
-          await supabaseClient
-            .from('product_variants')
-            .delete()
-            .in('id', removedVarIds);
+    if (incomingVariants.length > 0) {
+      const variantsPayload: Record<string, any>[] = incomingVariants.map((v, idx) => ({
+        id: v.id,
+        product_id: product.id,
+        unit: v.unit,
+        pack_size: Number(v.packSize),
+        pack_label: v.packLabel || `${v.packSize} ${v.unit}`,
+        mrp: Number(v.mrp),
+        base_selling_price: Number(v.baseSellingPrice),
+        purchase_price: v.purchasePrice !== undefined && v.purchasePrice !== null ? Number(v.purchasePrice) : null,
+        discount: v.discount !== undefined && v.discount !== null ? Number(v.discount) : null,
+        barcode: v.barcode && String(v.barcode).trim() ? String(v.barcode).trim() : null,
+        image_url: v.imageUrl && String(v.imageUrl).trim() ? String(v.imageUrl).trim() : null,
+        stock_quantity: v.stockQuantity !== undefined && v.stockQuantity !== null ? Number(v.stockQuantity) : 0,
+        max_order_limit: v.maxOrderLimit !== undefined && v.maxOrderLimit !== null ? Number(v.maxOrderLimit) : 12,
+        low_stock_threshold: v.lowStockThreshold !== undefined && v.lowStockThreshold !== null ? Number(v.lowStockThreshold) : null,
+        display_order: typeof v.displayOrder === 'number' ? v.displayOrder : idx + 1,
+        updated_at: new Date().toISOString(),
+      }));
+
+      const optionalVariantCols = new Set([
+        'pack_size',
+        'pack_label',
+        'purchase_price',
+        'discount',
+        'barcode',
+        'image_url',
+        'low_stock_threshold',
+        'display_order',
+        'updated_at',
+      ]);
+
+      let currentVariantsPayload = variantsPayload;
+      let varInsert = await supabaseClient
+        .from('product_variants')
+        .upsert(currentVariantsPayload, { onConflict: 'id' });
+
+      for (let attempt = 0; attempt < optionalVariantCols.size && varInsert.error; attempt++) {
+        const missingCol = extractMissingColumn(varInsert.error, optionalVariantCols);
+        if (!missingCol) break;
+        optionalVariantCols.delete(missingCol);
+        currentVariantsPayload = currentVariantsPayload.map((row) => {
+          const nextRow = { ...row };
+          delete nextRow[missingCol];
+          return nextRow;
+        });
+        varInsert = await supabaseClient
+          .from('product_variants')
+          .upsert(currentVariantsPayload, { onConflict: 'id' });
+      }
+
+      if (varInsert.error) {
+        await rollbackCreatedProduct();
+        if (varInsert.error.code === '23505') {
+          return {
+            success: false,
+            error: 'Duplicate variant barcode detected. Each variant must have a unique barcode.',
+          };
+        }
+        return {
+          success: false,
+          error: `Database error saving product variants: ${varInsert.error.message || 'Check variant fields and database constraints'}`,
+        };
+      }
+    }
+
+    // 4. Sync relational tiered_prices table for incoming & removed variants (if table exists)
+    const incomingVarIds = incomingVariants.map((v) => v.id);
+    const allAffectedVarIds = [...removedVarIds, ...incomingVarIds];
+    if (allAffectedVarIds.length > 0) {
+      const { error: delTpErr } = await supabaseClient
+        .from('tiered_prices')
+        .delete()
+        .in('variant_id', allAffectedVarIds);
+
+      if (delTpErr && !isMissingTableError(delTpErr, 'tiered_prices')) {
+        await rollbackCreatedProduct();
+        return {
+          success: false,
+          error: `Database error updating wholesale price slabs: ${delTpErr.message || 'Failed to sync tiered_prices'}`,
+        };
+      }
+
+      if (!delTpErr) {
+        const allTieredRows: any[] = [];
+        for (const v of incomingVariants) {
+          if (Array.isArray(v.tieredPrices) && v.tieredPrices.length > 0) {
+            for (let tpIdx = 0; tpIdx < v.tieredPrices.length; tpIdx++) {
+              const tp = v.tieredPrices[tpIdx];
+              allTieredRows.push({
+                id: tp.id || `tp-${v.id}-${tp.minQty}-${tpIdx}-${Date.now()}`,
+                variant_id: v.id,
+                min_qty: Number(tp.minQty),
+                max_qty: tp.maxQty !== undefined && tp.maxQty !== null ? Number(tp.maxQty) : 9999,
+                unit_price: Number(tp.unitPrice),
+              });
+            }
+          }
         }
 
-        if (incomingVariants.length > 0) {
-          const variantsPayload = incomingVariants.map((v) => ({
-            id: v.id,
-            product_id: product.id,
-            unit: v.unit,
-            pack_size: Number(v.packSize),
-            pack_label: v.packLabel || `${v.packSize} ${v.unit}`,
-            mrp: Number(v.mrp),
-            base_selling_price: Number(v.baseSellingPrice),
-            purchase_price: v.purchasePrice !== undefined && v.purchasePrice !== null ? Number(v.purchasePrice) : null,
-            barcode: v.barcode && String(v.barcode).trim() ? String(v.barcode).trim() : null,
-            image_url: v.imageUrl && String(v.imageUrl).trim() ? String(v.imageUrl).trim() : null,
-            stock_quantity: v.stockQuantity !== undefined && v.stockQuantity !== null ? Number(v.stockQuantity) : 0,
-            max_order_limit: v.maxOrderLimit !== undefined && v.maxOrderLimit !== null ? Number(v.maxOrderLimit) : 12,
-            updated_at: new Date().toISOString(),
-          }));
+        if (allTieredRows.length > 0) {
+          const { error: tpInsertErr } = await supabaseClient
+            .from('tiered_prices')
+            .upsert(allTieredRows, { onConflict: 'id' });
 
-          let varInsert = await supabaseClient
-            .from('product_variants')
-            .upsert(variantsPayload, { onConflict: 'id' });
-
-          if (varInsert.error) {
-            if (varInsert.error.code === '23505') {
-              return {
-                success: false,
-                error: 'Duplicate variant barcode detected. Each variant must have a unique barcode.',
-              };
-            }
-            // Strip any optional columns not yet added to PostgreSQL table
-            const stripped = variantsPayload.map((row) => {
-              const r: Record<string, any> = { ...row };
-              if (varInsert.error?.message?.includes('barcode')) delete r.barcode;
-              if (varInsert.error?.message?.includes('image_url')) delete r.image_url;
-              if (varInsert.error?.message?.includes('purchase_price')) delete r.purchase_price;
-              if (varInsert.error?.message?.includes('pack_size')) delete r.pack_size;
-              return r;
-            });
-            const retryInsert = await supabaseClient.from('product_variants').upsert(stripped, { onConflict: 'id' });
-            if (retryInsert.error && retryInsert.error.code === '23505') {
-              return {
-                success: false,
-                error: 'Duplicate variant barcode detected. Each variant must have a unique barcode.',
-              };
-            }
+          if (tpInsertErr && !isMissingTableError(tpInsertErr, 'tiered_prices')) {
+            await rollbackCreatedProduct();
+            return {
+              success: false,
+              error: `Database error saving wholesale price slabs: ${tpInsertErr.message || 'Failed to save tiered_prices'}`,
+            };
           }
-        }
-
-        // 4. Optional: Sync relational tiered_prices table for incoming & removed variants
-        try {
-          const incomingVarIds = incomingVariants.map((v) => v.id);
-          const allAffectedVarIds = [...removedVarIds, ...incomingVarIds];
-          if (allAffectedVarIds.length > 0) {
-            await supabaseClient
-              .from('tiered_prices')
-              .delete()
-              .in('variant_id', allAffectedVarIds);
-          }
-
-          const allTieredRows: any[] = [];
-          for (const v of incomingVariants) {
-            if (Array.isArray(v.tieredPrices) && v.tieredPrices.length > 0) {
-              for (const tp of v.tieredPrices) {
-                allTieredRows.push({
-                  id: tp.id || `tp-${v.id}-${tp.minQty}-${Date.now()}`,
-                  variant_id: v.id,
-                  min_qty: Number(tp.minQty),
-                  max_qty: tp.maxQty !== undefined && tp.maxQty !== null ? Number(tp.maxQty) : 9999,
-                  unit_price: Number(tp.unitPrice),
-                });
-              }
-            }
-          }
-
-          if (allTieredRows.length > 0) {
-            await supabaseClient
-              .from('tiered_prices')
-              .upsert(allTieredRows, { onConflict: 'id' });
-          }
-        } catch {
-          // tiered_prices table not available; wholesale_tier_discount JSONB preserves slabs
         }
       }
-    } catch {
-      // product_variants table not available, products.wholesale_tier_discount is primary store
     }
 
     return { success: true, product };
   } catch (err: any) {
+    await rollbackCreatedProduct();
     return {
       success: false,
       error: `Unexpected error saving product: ${err?.message || 'Database error'}`,

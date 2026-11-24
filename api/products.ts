@@ -469,25 +469,35 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
       }
 
       const product = validation.product;
-
-      // Also persist to products.json
       const currentProducts = loadProductsFromFile();
       const existingIdx = currentProducts.findIndex((p: any) => p.id === product.id);
-      if (existingIdx >= 0) {
-        currentProducts[existingIdx] = product;
-      } else {
+      if (existingIdx < 0 && product.displayOrder === undefined) {
         product.displayOrder = currentProducts.length + 1;
-        currentProducts.push(product);
       }
-      saveProductsToFile(currentProducts);
 
-      // If Supabase is configured, persist with cascade sync
+      // Persist to Supabase with cascade sync BEFORE writing fallback file
       if (supabase) {
         const dbResult = await saveProductWithCascadeSync(supabase, product);
         if (!dbResult.success) {
-          return sendJson(res, 500, { error: dbResult.error || 'Failed to save product to database' });
+          const msg = dbResult.error || 'Failed to save product to database';
+          const lowerMsg = msg.toLowerCase();
+          const status =
+            lowerMsg.includes('duplicate') || lowerMsg.includes('already assigned')
+              ? 409
+              : lowerMsg.includes('category') || lowerMsg.includes('invalid')
+              ? 400
+              : 500;
+          return sendJson(res, status, { error: msg });
         }
       }
+
+      // Persist to products.json only after database confirmation
+      if (existingIdx >= 0) {
+        currentProducts[existingIdx] = product;
+      } else {
+        currentProducts.push(product);
+      }
+      saveProductsToFile(currentProducts);
 
       return sendJson(res, 201, { success: true, product });
     } catch (err: any) {
@@ -505,29 +515,40 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
       }
 
       const product = validation.product;
-
-      // Update in products.json
       const currentProducts = loadProductsFromFile();
       const existingIdx = currentProducts.findIndex((p: any) => p.id === product.id);
       if (existingIdx >= 0) {
-        currentProducts[existingIdx] = {
-          ...currentProducts[existingIdx],
-          ...product,
-          displayOrder: currentProducts[existingIdx].displayOrder ?? product.displayOrder ?? (existingIdx + 1),
-        };
-        saveProductsToFile(currentProducts);
-      } else {
+        product.displayOrder =
+          currentProducts[existingIdx].displayOrder ?? product.displayOrder ?? existingIdx + 1;
+      } else if (product.displayOrder === undefined) {
         product.displayOrder = currentProducts.length + 1;
-        currentProducts.push(product);
-        saveProductsToFile(currentProducts);
       }
 
       if (supabase) {
         const dbResult = await saveProductWithCascadeSync(supabase, product);
         if (!dbResult.success) {
-          return sendJson(res, 500, { error: dbResult.error || 'Failed to update product in database' });
+          const msg = dbResult.error || 'Failed to update product in database';
+          const lowerMsg = msg.toLowerCase();
+          const status =
+            lowerMsg.includes('duplicate') || lowerMsg.includes('already assigned')
+              ? 409
+              : lowerMsg.includes('category') || lowerMsg.includes('invalid')
+              ? 400
+              : 500;
+          return sendJson(res, status, { error: msg });
         }
       }
+
+      // Update in products.json only after database confirmation
+      if (existingIdx >= 0) {
+        currentProducts[existingIdx] = {
+          ...currentProducts[existingIdx],
+          ...product,
+        };
+      } else {
+        currentProducts.push(product);
+      }
+      saveProductsToFile(currentProducts);
 
       return sendJson(res, 200, { success: true, product });
     } catch (err: any) {

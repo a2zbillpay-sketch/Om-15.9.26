@@ -1493,7 +1493,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, error: 'Product name is required.' };
     }
 
-    const id = `prod-${Date.now()}`;
+    const id = `prod-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
     const product: Product = {
       ...newProd,
       brand: newProd.brand ? newProd.brand.trim() : '',
@@ -1502,7 +1502,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       variants: Array.isArray(newProd.variants)
         ? newProd.variants.map((v, idx) => ({
             ...v,
-            id: v.id || `var-${id}-${idx + 1}`,
+            id: v.id || `var-${id}-${idx + 1}-${Math.random().toString(36).substring(2, 6)}`,
             productId: id,
           }))
         : [],
@@ -1518,47 +1518,51 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
 
       if (resp.ok) {
-        const data = await resp.json();
+        const data = await resp.json().catch(() => ({}));
         const savedProduct = data.product || product;
         setProducts((prev) => {
-          const next = [savedProduct, ...prev];
+          const next = [savedProduct, ...prev.filter((p) => p.id !== savedProduct.id)];
           productsRef.current = next;
           try {
             localStorage.setItem('om_products', JSON.stringify(next));
           } catch {}
           return next;
         });
+        if (isSupabaseConfigured) {
+          await refreshProducts();
+        }
         return { success: true };
-      } else if (resp.status === 401 && isSupabaseConfigured) {
+      }
+
+      if (resp.status === 401) {
         return {
           success: false,
           error: 'Shopkeeper authorization required to add products. Please log in as Shopkeeper.',
         };
-      } else {
-        const errorData = await resp.json().catch(() => ({}));
-        if (errorData.error && (resp.status === 400 || resp.status === 401 || isSupabaseConfigured)) {
-          return { success: false, error: errorData.error };
-        }
       }
-    } catch {
-      // Offline or network error fallback
-    }
 
-    // Direct Supabase fallback if offline/client-direct
-    if (isSupabaseConfigured) {
-      const saveResult = await saveProductToSupabase(product);
-      if (!saveResult.success) {
-        // Do NOT update React state or localStorage on failure
+      const errorData = await resp.json().catch(() => ({}));
+      return {
+        success: false,
+        error:
+          errorData?.error ||
+          errorData?.message ||
+          `Failed to save product to database (HTTP ${resp.status}).`,
+      };
+    } catch (err: any) {
+      if (isSupabaseConfigured) {
         return {
           success: false,
-          error: saveResult.error || 'Failed to save product to central database.',
+          error: err?.message
+            ? `Network error while saving product: ${err.message}`
+            : 'Network error while saving product. Please check your connection and try again.',
         };
       }
     }
 
-    // 3. Update React product state (which subsequently updates localStorage cache)
+    // Local-only fallback when Supabase is not configured and API server is unavailable
     setProducts((prev) => {
-      const next = [product, ...prev];
+      const next = [product, ...prev.filter((p) => p.id !== product.id)];
       productsRef.current = next;
       try {
         localStorage.setItem('om_products', JSON.stringify(next));

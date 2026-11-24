@@ -129,13 +129,15 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
 
     const validatedBarcode = validation.barcode;
 
-    // 2. Duplicate check against existing products
+    // 2. Duplicate check against existing products and variants
     if (!allowDuplicates && existingProducts.length > 0) {
+      const normalizedTarget = validatedBarcode.toLowerCase();
       const conflict = existingProducts.find(
         (p) =>
           p.id !== excludeProductId &&
-          p.barcode &&
-          p.barcode.trim().toLowerCase() === validatedBarcode.toLowerCase()
+          ((p.barcode && p.barcode.trim().toLowerCase() === normalizedTarget) ||
+            (Array.isArray(p.variants) &&
+              p.variants.some((v) => v.barcode && v.barcode.trim().toLowerCase() === normalizedTarget)))
       );
       if (conflict) {
         setErrorMessage(
