@@ -1909,14 +1909,14 @@ export function subscribeToSupabaseSettings(
 }
 
 /**
- * Persists an out-of-stock product request to Supabase.
- * Gracefully handles table availability, foreign key safety, and column compatibility.
+ * Persists an out-of-stock product request via the authenticated server endpoint (/api/product-requests POST).
+ * Keeps service_role strictly on the server and never relies on direct browser anon inserts.
  */
 export async function saveProductRequestToSupabase(req: ProductRequest): Promise<boolean> {
-  if (!supabase) return false;
+  if (typeof window === 'undefined' || typeof fetch !== 'function') return false;
 
   try {
-    const cleanPhone = (req.customerPhone || '').replace(/\D/g, '').slice(-10);
+    const cleanPhone = normalizeIndianMobile(req.customerPhone);
     if (!cleanPhone || cleanPhone.length < 10) return false;
 
     const requestId =
@@ -1924,30 +1924,45 @@ export async function saveProductRequestToSupabase(req: ProductRequest): Promise
         ? req.id.trim()
         : `preq-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
 
-    const payload: Record<string, any> = {
+    const payload = {
       id: requestId,
-      customer_id: (req.customerId && req.customerId.trim()) || `usr_${cleanPhone}`,
-      customer_name: (req.customerName || req.customer?.name || 'Customer').trim(),
-      customer_phone: cleanPhone,
-      product_id: (req.productId && req.productId.trim()) || req.product?.id || 'unknown',
-      product_name: (req.productName || req.product?.name || 'Requested Item').trim(),
-      variant_id: req.variantId ? String(req.variantId).trim() : null,
-      variant_name: req.variantName || req.product?.variantName || null,
-      pack_size: req.packSize || req.product?.packSize || null,
-      quantity: Math.max(1, Number(req.quantity) || 1),
-      request_date: req.requestDate || req.createdAt || new Date().toISOString(),
-      created_at: req.createdAt || new Date().toISOString(),
+      customerId: (req.customerId && req.customerId.trim()) || `usr_${cleanPhone}`,
+      customerName: (req.customerName || req.customer?.name || 'Customer').trim(),
+      customerPhone: cleanPhone,
+      productId: (req.productId && req.productId.trim()) || req.product?.id || '',
+      productName: (req.productName || req.product?.name || '').trim(),
+      variantId: req.variantId ? String(req.variantId).trim() : null,
+      variantName: req.variantName || req.product?.variantName || null,
+      packSize: req.packSize || req.product?.packSize || null,
+      quantity: Math.max(1, Math.floor(Number(req.quantity) || 1)),
+      requestDate: req.requestDate || req.createdAt || new Date().toISOString(),
+      createdAt: req.createdAt || new Date().toISOString(),
     };
 
-    const { error } = await supabase.from('product_requests').insert(payload);
+    const res = await fetch('/api/product-requests', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        'X-Requested-With': 'XMLHttpRequest',
+      },
+      credentials: 'include',
+      body: JSON.stringify(payload),
+    });
 
-    if (error) {
-      console.warn('Notice saving product_requests to Supabase:', error.message);
+    if (!res.ok) {
+      const errData = await res.json().catch(() => null);
+      console.warn(
+        'Notice saving product request via /api/product-requests:',
+        errData?.error || `HTTP ${res.status}`
+      );
       return false;
     }
-    return true;
+
+    const json = await res.json().catch(() => null);
+    return Boolean(json?.success);
   } catch (err: any) {
-    console.warn('Exception saving product_requests to Supabase:', err?.message || err);
+    console.warn('Exception saving product request via /api/product-requests:', err?.message || err);
     return false;
   }
 }

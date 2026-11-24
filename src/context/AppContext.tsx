@@ -301,7 +301,7 @@ interface AppContextType {
   productRequests: ProductRequest[];
   requestProduct: (data: {
     product: Product;
-    variant: ProductVariant;
+    variant?: ProductVariant | null;
     quantity: number;
     customerOverride?: { name?: string; phone?: string; id?: string };
   }) => ProductRequest;
@@ -713,7 +713,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const requestProduct = useCallback(
     (data: {
       product: Product;
-      variant: ProductVariant;
+      variant?: ProductVariant | null;
       quantity: number;
       customerOverride?: { name?: string; phone?: string; id?: string };
     }): ProductRequest => {
@@ -721,6 +721,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const customerId = data.customerOverride?.id || currentUser.id || `cust-${now.getTime()}`;
       const customerName = data.customerOverride?.name || currentUser.name || 'Customer';
       const customerPhone = data.customerOverride?.phone || currentUser.phone || '';
+      const resolvedVariantName = data.variant
+        ? data.variant.packLabel || formatVariantPack(data.variant)
+        : data.product.packLabel || '';
+      const resolvedPackSize = data.variant
+        ? formatVariantPack(data.variant)
+        : data.product.packLabel || (data.product.unit ? String(data.product.unit) : '');
 
       const newRequest: ProductRequest = {
         id: `preq-${now.getTime()}-${Math.floor(Math.random() * 1000)}`,
@@ -736,17 +742,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           id: data.product.id,
           name: data.product.name,
           brand: data.product.brand,
-          variantId: data.variant.id,
-          variantName: data.variant.packLabel || formatVariantPack(data.variant),
-          packSize: formatVariantPack(data.variant),
-          unit: data.variant.unit,
-          price: data.variant.baseSellingPrice,
+          variantId: data.variant?.id || '',
+          variantName: resolvedVariantName,
+          packSize: resolvedPackSize,
+          unit: data.variant?.unit || data.product.unit,
+          price: data.variant
+            ? data.variant.baseSellingPrice
+            : Number(data.product.baseSellingPrice ?? data.product.price ?? 0),
         },
         productId: data.product.id,
         productName: data.product.name,
-        variantId: data.variant.id,
-        variantName: data.variant.packLabel || formatVariantPack(data.variant),
-        packSize: formatVariantPack(data.variant),
+        variantId: data.variant?.id || '',
+        variantName: resolvedVariantName,
+        packSize: resolvedPackSize,
         quantity: Math.max(1, data.quantity || 1),
         requestDate: now.toISOString(),
         createdAt: now.toISOString(),
@@ -764,10 +772,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return updated;
       });
 
-      // Persist to Supabase product_requests table
-      saveProductRequestToSupabase(newRequest).catch((err) => {
-        console.warn('Notice saving product request to Supabase:', err);
-      });
+      // Persist to Supabase product_requests table via /api/product-requests POST
+      if (isSupabaseConfigured) {
+        saveProductRequestToSupabase(newRequest)
+          .then((saved) => {
+            if (!saved) {
+              console.warn('Product request saved locally, but server persistence did not confirm.');
+            }
+          })
+          .catch((err) => {
+            console.warn('Notice saving product request to server:', err);
+          });
+      }
 
       // Real-time broadcast to all browser tabs and windows
       try {

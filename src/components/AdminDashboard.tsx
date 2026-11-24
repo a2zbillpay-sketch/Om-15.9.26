@@ -145,6 +145,7 @@ export const AdminDashboard: React.FC = () => {
     markNotificationAsRead,
     markAllNotificationsAsRead,
     productRequests,
+    refreshProductRequests,
     bulkAddProducts,
     addCategory,
     activeRole,
@@ -160,6 +161,7 @@ export const AdminDashboard: React.FC = () => {
       refreshOrders().catch(() => {});
       refreshProducts().catch(() => {});
       refreshCustomers().catch(() => {});
+      refreshProductRequests().catch(() => {});
     }
   }, []);
 
@@ -1403,7 +1405,12 @@ export const AdminDashboard: React.FC = () => {
               <button
                 onClick={async () => {
                   setIsRefreshing(true);
-                  await Promise.all([refreshOrders(), refreshProducts(), refreshCustomers()]);
+                  await Promise.all([
+                    refreshOrders(),
+                    refreshProducts(),
+                    refreshCustomers(),
+                    refreshProductRequests(),
+                  ]);
                   setTimeout(() => setIsRefreshing(false), 500);
                 }}
                 className="px-2.5 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white transition flex items-center gap-1 text-[11px]"
